@@ -18,8 +18,8 @@ GMAIL_USER     = os.environ["GMAIL_USER"]
 GMAIL_APP_PASS = os.environ["GMAIL_APP_PASS"]
 RECIPIENTS     = os.environ["RECIPIENTS"]
 
-MODEL_NORMAL   = "gemini-2.5-flash"   # 免費配額足夠，支援 grounding
-MODEL_POWERFUL = "gemini-2.5-pro"     # 複雜任務備用
+MODEL_NORMAL   = "gemini-3.1-flash-lite"  # 預設：輕量版，速度快、省配額
+MODEL_POWERFUL = "gemini-3.5-flash"       # 強化版：接近 Pro 等級智能
 
 # ── 動態日期 ──────────────────────────────────────────
 today      = datetime.date.today()
@@ -102,7 +102,23 @@ def generate_report(use_powerful_model: bool = False) -> str:
             temperature=0.2,
         ),
     )
-    return response.text
+
+    # 新版 SDK 使用 google_search grounding 時，response.text 可能為 None
+    # 需從 candidates[0].content.parts 逐一提取文字部分
+    if response.text is not None:
+        return response.text
+
+    parts = (
+        response.candidates[0].content.parts
+        if response.candidates and response.candidates[0].content.parts
+        else []
+    )
+    text_parts = [p.text for p in parts if hasattr(p, "text") and p.text]
+    if text_parts:
+        return "\n".join(text_parts)
+
+    finish = response.candidates[0].finish_reason if response.candidates else "unknown"
+    raise ValueError(f"Gemini 回應未包含任何文字內容。finish_reason={finish}")
 
 
 def markdown_to_html(md_text: str) -> str:
