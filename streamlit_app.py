@@ -134,21 +134,33 @@ if generate_btn or send_btn:
     if not api_key:
         st.error("❌ 請先在上方輸入 Gemini API Key")
     else:
-        with st.spinner(f"🔍 正在使用 {model_choice} 搜尋國際捷運資訊（約需 30–90 秒）..."):
+        with st.spinner(f"🔍 正在用 DuckDuckGo 搜尋 + {model_choice} 撰寫報告（約需 30–90 秒）..."):
             try:
-                from main import build_prompt, markdown_to_html, save_report, send_email
+                from main import fetch_news, build_prompt, markdown_to_html, save_report, send_email
                 import smtplib
 
+                # Step 1：DuckDuckGo 抓新聞（免費，不消耗 Gemini 配額）
+                news_context = fetch_news()
+
+                # Step 2：Gemini 撰寫報告（不使用 grounding tool）
                 client = genai.Client(api_key=api_key)
                 response = client.models.generate_content(
                     model=model_choice,
-                    contents=build_prompt(),
-                    config=types.GenerateContentConfig(
-                        tools=[types.Tool(google_search=types.GoogleSearch())],
-                        temperature=0.2,
-                    ),
+                    contents=build_prompt(news_context),
+                    config=types.GenerateContentConfig(temperature=0.2),
                 )
-                report_text = response.text
+                if response.text is not None:
+                    report_text = response.text
+                else:
+                    parts = (
+                        response.candidates[0].content.parts
+                        if response.candidates and response.candidates[0].content.parts
+                        else []
+                    )
+                    text_parts = [p.text for p in parts if hasattr(p, "text") and p.text]
+                    if not text_parts:
+                        raise ValueError("Gemini 回應未包含任何文字內容")
+                    report_text = "\n".join(text_parts)
 
                 # 儲存報告
                 save_report(report_text)
