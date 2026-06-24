@@ -15,7 +15,7 @@ from google.genai import types
 # ══════════════════════════════════════════════════════
 #  🔑 金鑰設定區（直接填入即可）
 # ══════════════════════════════════════════════════════
-GEMINI_API_KEY  = "AQ.Ab8RN6KDS5hVH8jpNy598bOwXsID6FFY8gb7z6DUF1tHLamPYw"   # AIza...
+GEMINI_API_KEY  = "AQ.Ab8RN6KIkh74quioU-BWiKoStJ1rTZWw029nHt43Wni7uDZ3SQ"   # AIza...
 GMAIL_USER      = "boweiwang820712@gmail.com"        # yourname@gmail.com
 GMAIL_APP_PASS  = "mbfs cbak tlxu lmnz"           # xxxx xxxx xxxx xxxx
 DEFAULT_RECIPIENTS = [
