@@ -41,11 +41,27 @@ jobs:
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           RECIPIENTS:     ${{ secrets.RECIPIENTS }}
         run: |
+          CMD="python main.py"
           if [ "${{ github.event.inputs.use_powerful_model }}" = "true" ]; then
-            python main.py --powerful
-          else
-            python main.py
+            CMD="python main.py --powerful"
           fi
+
+          # 遇到 429（配額暫時超限）時自動重試，最多 3 次，每次等待加倍
+          MAX_RETRY=3
+          WAIT=60
+          for i in $(seq 1 $MAX_RETRY); do
+            echo "▶ 第 $i 次嘗試..."
+            $CMD && break
+            EXIT_CODE=$?
+            if [ $i -lt $MAX_RETRY ]; then
+              echo "⚠️ 失敗（exit $EXIT_CODE），等待 ${WAIT} 秒後重試..."
+              sleep $WAIT
+              WAIT=$((WAIT * 2))
+            else
+              echo "❌ 已重試 $MAX_RETRY 次，仍然失敗"
+              exit $EXIT_CODE
+            fi
+          done
 
       - name: 💾 上傳報告為 Artifact
         uses: actions/upload-artifact@v4
