@@ -1,7 +1,7 @@
 """
-國際捷運技術週報 — Streamlit 競賽展示介面
+國際捷運技術週報 — Streamlit 展示介面
 功能：
-  1. 立即產生本週報告（展示用）
+  1. 立即產生本週報告
   2. 顯示最新報告內容
   3. 寄送測試信件
 """
@@ -12,6 +12,17 @@ import streamlit as st
 from google import genai
 from google.genai import types
 
+# ══════════════════════════════════════════════════════
+#  🔑 金鑰設定區（直接填入即可）
+# ══════════════════════════════════════════════════════
+GEMINI_API_KEY  = "AQ.Ab8RN6KJ1MvIx9xI41v1ljFWryHHiSCzUKYawd5y7qhyOhs4mQ"   # AIza...
+GMAIL_USER      = "boweiwang820712@gmail.com"        # yourname@gmail.com
+GMAIL_APP_PASS  = "mbfs cbak tlxu lmnz"           # xxxx xxxx xxxx xxxx
+DEFAULT_RECIPIENTS = [
+    # "pe9875@gov.taipei",   # 預設收件人（可多行）
+]
+# ══════════════════════════════════════════════════════
+
 # ── 頁面設定 ──────────────────────────────────────────
 st.set_page_config(
     page_title="國際捷運技術週報 AI 系統",
@@ -20,21 +31,38 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── CSS 樣式 ──────────────────────────────────────────
+# ── CSS 樣式（修正側邊欄白字問題）──────────────────────
 st.markdown("""
 <style>
+  /* 側邊欄底色 */
   [data-testid="stSidebar"] { background-color: #1a3a5c; }
-  [data-testid="stSidebar"] * { color: white !important; }
-  [data-testid="stSidebar"] .stSelectbox label { color: white !important; }
+
+  /* 側邊欄所有文字強制白色 */
+  [data-testid="stSidebar"],
+  [data-testid="stSidebar"] label,
+  [data-testid="stSidebar"] p,
+  [data-testid="stSidebar"] span,
+  [data-testid="stSidebar"] div,
+  [data-testid="stSidebar"] .stMarkdown { color: white !important; }
+
+  /* input / textarea 文字黑色（才看得到輸入內容）*/
+  [data-testid="stSidebar"] input,
+  [data-testid="stSidebar"] textarea {
+    color: #111 !important;
+    background-color: #f5f5f5 !important;
+  }
+
+  /* selectbox 選項文字黑色 */
+  [data-testid="stSidebar"] .stSelectbox > div > div {
+    color: #111 !important;
+    background-color: #f5f5f5 !important;
+  }
+
   .main-title {
     font-size: 2rem; font-weight: 700; color: #1a3a5c;
     border-bottom: 3px solid #1a3a5c; padding-bottom: 8px; margin-bottom: 4px;
   }
   .subtitle { color: #666; font-size: 0.95rem; margin-bottom: 24px; }
-  .info-box {
-    background: #f0f8f4; border-left: 4px solid #1a6e4a;
-    padding: 12px 16px; border-radius: 0 6px 6px 0; margin: 12px 0;
-  }
   .warn-box {
     background: #fff8e6; border-left: 4px solid #f59e0b;
     padding: 12px 16px; border-radius: 0 6px 6px 0; margin: 12px 0;
@@ -59,14 +87,16 @@ with st.sidebar:
         ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
         index=0,
         help=(
-            "gemini-3.1-flash-lite：Gemini 3 最新輕量版，速度快、省配額，適合大量章節改寫。\n"
-            "gemini-3.5-flash：接近 Pro 等級智能，細節與表格保留更完整，建議用於關鍵章節。"
+            "gemini-3.1-flash-lite：Gemini 3 最新輕量版，速度快、省配額。\n"
+            "gemini-3.5-flash：接近 Pro 等級智能，細節與表格保留更完整。"
         ),
     )
 
     st.markdown("### 📬 收件設定")
+    default_text = "\n".join(DEFAULT_RECIPIENTS)
     recipient_input = st.text_area(
         "收件信箱（每行一個）",
+        value=default_text,
         placeholder="pe9875@gov.taipei\n10983@gov.taipei",
         height=90,
     )
@@ -81,7 +111,7 @@ with st.sidebar:
     """)
 
     st.markdown("---")
-    st.caption("🏛️ 臺北大眾捷運股份有限公司\nAI 競賽展示系統 v1.0")
+    st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統 v1.0")
 
 # ── 主畫面 ──────────────────────────────────────────
 st.markdown('<div class="main-title">🚇 國際捷運技術週報 AI 自動產生系統</div>', unsafe_allow_html=True)
@@ -94,7 +124,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 統計卡片
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.markdown('<div class="stat-card"><div class="stat-num">3</div><div class="stat-label">監控領域</div></div>', unsafe_allow_html=True)
@@ -107,20 +136,6 @@ with col4:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── API Key 輸入 ──────────────────────────────────────
-with st.expander("🔑 API 設定（展示模式）", expanded=False):
-    api_key_input = st.text_input(
-        "Gemini API Key",
-        type="password",
-        placeholder="貼上你的 Gemini API Key（AIza...）",
-        help="僅用於此次展示，不會儲存。正式排程請設定於 GitHub Secrets。",
-    )
-    gmail_user_input = st.text_input("Gmail 帳號", placeholder="your@gmail.com")
-    gmail_pass_input = st.text_input("Gmail 應用程式密碼", type="password", placeholder="xxxx xxxx xxxx xxxx")
-
-# 取得 API Key（優先用輸入，其次環境變數）
-api_key = api_key_input or os.environ.get("GEMINI_API_KEY", "")
-
 # ── 立即產生報告 ──────────────────────────────────────
 st.markdown("### 🚀 立即產生報告")
 
@@ -131,19 +146,18 @@ with col_btn2:
     send_btn = st.button("📧 產生並寄送", use_container_width=True)
 
 if generate_btn or send_btn:
-    if not api_key:
-        st.error("❌ 請先在上方輸入 Gemini API Key")
+    if not GEMINI_API_KEY or GEMINI_API_KEY.startswith("在這裡"):
+        st.error("❌ 請在程式碼頂端的金鑰設定區填入 Gemini API Key")
     else:
         with st.spinner(f"🔍 正在用 DuckDuckGo 搜尋 + {model_choice} 撰寫報告（約需 30–90 秒）..."):
             try:
                 from main import fetch_news, build_prompt, markdown_to_html, save_report, send_email
-                import smtplib
 
-                # Step 1：DuckDuckGo 抓新聞（免費，不消耗 Gemini 配額）
+                # Step 1：DuckDuckGo 抓新聞
                 news_context = fetch_news()
 
-                # Step 2：Gemini 撰寫報告（不使用 grounding tool）
-                client = genai.Client(api_key=api_key)
+                # Step 2：Gemini 撰寫報告
+                client = genai.Client(api_key=GEMINI_API_KEY)
                 response = client.models.generate_content(
                     model=model_choice,
                     contents=build_prompt(news_context),
@@ -162,23 +176,20 @@ if generate_btn or send_btn:
                         raise ValueError("Gemini 回應未包含任何文字內容")
                     report_text = "\n".join(text_parts)
 
-                # 儲存報告
                 save_report(report_text)
                 st.session_state["latest_report"] = report_text
-                st.session_state["report_generated"] = True
-
                 st.success("✅ 報告產生完成！")
 
-                # 如果按的是寄送按鈕
                 if send_btn:
                     recipients = [r.strip() for r in recipient_input.splitlines() if r.strip()]
                     if not recipients:
                         st.warning("⚠️ 請在左側填入收件信箱")
-                    elif not gmail_user_input or not gmail_pass_input:
-                        st.warning("⚠️ 請填入 Gmail 帳號與應用程式密碼")
+                    elif not GMAIL_USER or GMAIL_USER.startswith("在這裡") or \
+                         not GMAIL_APP_PASS or GMAIL_APP_PASS.startswith("在這裡"):
+                        st.warning("⚠️ 請在程式碼頂端填入 Gmail 帳號與應用程式密碼")
                     else:
-                        os.environ["GMAIL_USER"]    = gmail_user_input
-                        os.environ["GMAIL_APP_PASS"] = gmail_pass_input
+                        os.environ["GMAIL_USER"]     = GMAIL_USER
+                        os.environ["GMAIL_APP_PASS"]  = GMAIL_APP_PASS
                         success = send_email(report_text, recipients)
                         if success:
                             st.success(f"📧 已成功寄送至：{', '.join(recipients)}")
@@ -187,13 +198,11 @@ if generate_btn or send_btn:
 
             except Exception as e:
                 st.error(f"❌ 發生錯誤：{e}")
-                st.info("💡 提示：請確認 API Key 正確，且帳號有啟用 Google Search grounding 權限")
 
 # ── 報告顯示區 ──────────────────────────────────────
 st.markdown("---")
 st.markdown("### 📄 最新報告內容")
 
-# 嘗試讀取已儲存的報告
 report_to_show = st.session_state.get("latest_report", "")
 
 if not report_to_show:
@@ -204,7 +213,6 @@ if not report_to_show:
         pass
 
 if report_to_show:
-    # 標籤頁：Markdown 預覽 / 原始文字
     tab1, tab2 = st.tabs(["📋 排版預覽", "📝 原始文字"])
     with tab1:
         st.markdown(report_to_show)
@@ -230,12 +238,10 @@ with st.expander("📐 系統架構說明"):
 GitHub Actions（每週一 08:00 台灣時間，雲端自動執行）
         ↓
     main.py
+        ├── DuckDuckGo News（免費抓取最新新聞）
+        │       └── 12 組關鍵字 × 5 筆結果 = 最多 60 筆資料
         ├── Gemini API（gemini-3.1-flash-lite / gemini-3.5-flash）
-        │       └── Google Search Grounding（內建搜尋工具）
-        │               ├── 搜尋國際捷運技術新知
-        │               ├── 搜尋重大事故與異常
-        │               └── 搜尋規範與政策更新
-        ├── 整理成繁體中文週報（Markdown 格式）
+        │       └── 分析新聞、整理成繁體中文週報
         └── Gmail SMTP → 寄送至公務信箱
 ```
     """)
@@ -245,15 +251,14 @@ GitHub Actions（每週一 08:00 台灣時間，雲端自動執行）
 **✅ 免費元件**
 - GitHub Actions（2,000 分鐘/月免費）
 - Gemini API（Flash 模型有免費額度）
-- Google Search Grounding（每月 5,000 次免費）
+- DuckDuckGo News（完全免費，無需 API Key）
 - Gmail SMTP（免費）
 - Streamlit Cloud（免費部署）
         """)
     with col_b:
         st.markdown("""
 **🔒 安全設計**
-- API Key 存於 GitHub Secrets，不會外洩
+- GitHub Actions 金鑰存於 GitHub Secrets
 - Gmail 使用應用程式密碼，非帳號密碼
 - 報告僅寄送至指定信箱
-- 原始碼開源，可自行審閱
         """)
