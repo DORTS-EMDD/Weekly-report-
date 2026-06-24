@@ -9,7 +9,8 @@
 import os
 import datetime
 import streamlit as st
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # ── 頁面設定 ──────────────────────────────────────────
 st.set_page_config(
@@ -138,12 +139,15 @@ if generate_btn or send_btn:
                 from main import build_prompt, markdown_to_html, save_report, send_email
                 import smtplib
 
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel(
-                    model_name=model_choice,
-                    tools="google_search_retrieval",
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model=model_choice,
+                    contents=build_prompt(),
+                    config=types.GenerateContentConfig(
+                        tools=[types.Tool(google_search=types.GoogleSearch())],
+                        temperature=0.2,
+                    ),
                 )
-                response = model.generate_content(build_prompt())
                 report_text = response.text
 
                 # 儲存報告
