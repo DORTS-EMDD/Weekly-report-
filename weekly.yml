@@ -1,0 +1,56 @@
+name: 每週捷運技術週報自動寄送
+
+on:
+  # 每週一 00:00 UTC = 台灣時間週一早上 08:00
+  schedule:
+    - cron: '0 0 * * 1'
+
+  # ✅ 手動觸發（競賽展示用，可在 GitHub Actions 頁面按按鈕）
+  workflow_dispatch:
+    inputs:
+      use_powerful_model:
+        description: '使用較強模型 gemini-3.5-flash（預設用 gemini-3.1-flash-lite）'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  generate-and-send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 📥 取得程式碼
+        uses: actions/checkout@v4
+
+      - name: 🐍 設定 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 安裝套件
+        run: pip install google-generativeai
+
+      - name: 🤖 產生報告並寄信
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          RECIPIENTS:     ${{ secrets.RECIPIENTS }}
+        run: |
+          if [ "${{ github.event.inputs.use_powerful_model }}" = "true" ]; then
+            python main.py --powerful
+          else
+            python main.py
+          fi
+
+      - name: 💾 上傳報告為 Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: weekly-report-${{ github.run_id }}
+          path: reports/
+          retention-days: 90
