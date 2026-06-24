@@ -16,10 +16,10 @@ from google.genai import types
 from duckduckgo_search import DDGS
 
 # ── 設定 ──────────────────────────────────────────────
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-GMAIL_USER     = os.environ["GMAIL_USER"]
-GMAIL_APP_PASS = os.environ["GMAIL_APP_PASS"]
-RECIPIENTS     = os.environ["RECIPIENTS"]
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GMAIL_USER     = os.environ.get("GMAIL_USER", "")
+GMAIL_APP_PASS = os.environ.get("GMAIL_APP_PASS", "")
+RECIPIENTS     = os.environ.get("RECIPIENTS", "")
 
 MODEL_NORMAL   = "gemini-3.1-flash-lite"  # 預設：輕量版，速度快、省配額
 MODEL_POWERFUL = "gemini-3.5-flash"       # 強化版：接近 Pro 等級智能
