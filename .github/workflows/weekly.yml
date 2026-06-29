@@ -16,6 +16,16 @@ on:
         options:
           - 'false'
           - 'true'
+      news_lookback_days:
+        description: '新聞搜尋天數（排程預設 30 天；技術新知也會納入近 30 天）'
+        required: false
+        default: '30'
+        type: choice
+        options:
+          - '7'
+          - '14'
+          - '21'
+          - '30'
 
 jobs:
   generate-and-send:
@@ -40,6 +50,7 @@ jobs:
           GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           RECIPIENTS:     ${{ secrets.RECIPIENTS }}
+          NEWS_LOOKBACK_DAYS: ${{ github.event.inputs.news_lookback_days || '30' }}
         run: |
           CMD="python main.py"
           if [ "${{ github.event.inputs.use_powerful_model }}" = "true" ]; then
