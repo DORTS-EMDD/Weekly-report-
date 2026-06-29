@@ -117,6 +117,42 @@ st.markdown("""
     color: #111111 !important;
     background-color: #e2e8f0 !important;
   }
+
+  /* ── Expander 標題文字（白底上顯示白字問題） ── */
+  [data-testid="stSidebar"] [data-testid="stExpander"] {
+    border: 1px solid rgba(255,255,255,0.25) !important;
+    border-radius: 6px !important;
+    background-color: rgba(255,255,255,0.08) !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stExpander"] summary,
+  [data-testid="stSidebar"] [data-testid="stExpander"] summary p,
+  [data-testid="stSidebar"] [data-testid="stExpander"] summary span,
+  [data-testid="stSidebar"] details summary,
+  [data-testid="stSidebar"] details summary * {
+    color: white !important;
+    background-color: transparent !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+    background-color: rgba(255,255,255,0.12) !important;
+  }
+
+  /* ── number_input +/- 按鈕配色 ── */
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"],
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"] {
+    background-color: #2c5f8a !important;
+    color: white !important;
+    border-color: rgba(255,255,255,0.3) !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"]:hover,
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"]:hover {
+    background-color: #3a7ab5 !important;
+    color: white !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"] svg,
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"] svg {
+    fill: white !important;
+    stroke: white !important;
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -194,7 +230,7 @@ with st.sidebar:
 
     selected_regions = []
 
-    with st.expander("選擇國家/地區", expanded=True):
+    with st.expander("選擇國家", expanded=True):
         for region in ADVANCED_REGIONS:
             checked = region in st.session_state["selected_regions_state"]
             if st.checkbox(region, value=checked, key=f"region_{region}"):
@@ -330,11 +366,17 @@ def _is_recent(pub_str: str, cutoff: datetime.datetime) -> bool:
         return True
 
 def fetch_rss_feeds(status_text=None) -> str:
-    """從六大國際鐵道 RSS 取得近 30 天文章（主要數據來源）。"""
-    cutoff = (
+    """從六大國際鐵道 RSS 取得文章（依使用者設定的新聞搜尋天數過濾）。"""
+    # 技術新知允許 2 倍天數，但至多 30 天；事故/爭議嚴格依 lookback_days
+    tech_cutoff = (
         datetime.datetime.now(datetime.timezone.utc)
-        - datetime.timedelta(days=30)
+        - datetime.timedelta(days=min(int(lookback_days) * 2, 30))
     )
+    strict_cutoff = (
+        datetime.datetime.now(datetime.timezone.utc)
+        - datetime.timedelta(days=int(lookback_days))
+    )
+    # RSS 抓取使用寬鬆版（tech_cutoff），Prompt 再做嚴格過濾
     all_blocks: list[str] = []
     headers = {"User-Agent": "Mozilla/5.0 (compatible; MetroWeeklyBot/4.1)"}
     ATOM = "http://www.w3.org/2005/Atom"
@@ -354,7 +396,7 @@ def fetch_rss_feeds(status_text=None) -> str:
                 link    = (item.findtext("link")  or "").strip()
                 desc    = (item.findtext("description") or "").strip()[:400]
                 pub_str = (item.findtext("pubDate") or "").strip()
-                if title and _is_recent(pub_str, cutoff):
+                if title and _is_recent(pub_str, tech_cutoff):
                     items_found.append((title, link, desc, _parse_pub_date(pub_str)))
 
             if not items_found:
@@ -367,7 +409,7 @@ def fetch_rss_feeds(status_text=None) -> str:
                         entry.findtext(f"{{{ATOM}}}published")
                         or entry.findtext(f"{{{ATOM}}}updated") or ""
                     ).strip()
-                    if title and _is_recent(pub_str, cutoff):
+                    if title and _is_recent(pub_str, tech_cutoff):
                         items_found.append((title, link, summ, _parse_pub_date(pub_str)))
 
             if items_found:
@@ -417,30 +459,27 @@ BASE_SEARCH_QUERIES = [
     f"metro rail construction delay cost overrun controversy {today:%B %Y}",
     f"metro subway long term closure replacement bus passenger complaints {today:%B %Y}",
     f"metro transit safety crime passenger complaints operations controversy {today:%B %Y}",
-    # 地區官方與重點城市
-    f"MTR Hong Kong incident service disruption press release {today:%B %Y}",
-    f"Singapore MRT LTA SMRT disruption incident announcement {today:%B %Y}",
-    f"Japan subway railway operator incident service suspension {today:%Y年%m月}",
-    f"Korea metro subway operator incident service disruption {today:%B %Y}",
-    f"London Underground Paris Metro Berlin U-Bahn incident disruption {today:%B %Y}",
-    f"New York subway Washington Metro Chicago CTA incident disruption {today:%B %Y}",
+    # ↑ 地區官方查詢已移至 build_search_queries()，依使用者選定國家動態生成
 ]
 FALLBACK_BACKENDS = ["auto", "bing", "yahoo"]
 
 
 def build_search_queries() -> tuple[list[str], set[int]]:
     queries = list(BASE_SEARCH_QUERIES)
-    news_indices = set(range(13, len(queries) + 1))
+    base_len = len(queries)
+    # 事故/爭議類 base queries（index 12 以後，0-based）的 index 標記
+    news_indices = set(range(12, base_len))
 
     for region in selected_regions:
         term = REGION_SEARCH_TERMS.get(region, region)
+        start = len(queries)
         queries.extend([
             f"{term} metro rail technology upgrade press release {today:%B %Y}",
             f"{term} metro subway incident disruption accident {today:%B %Y}",
             f"{term} metro transit fare strike construction delay controversy {today:%B %Y}",
         ])
-        start = len(queries) - 2
-        news_indices.update({start, start + 1, start + 2})
+        # 後兩條（incident / controversy）是時效性新聞
+        news_indices.update({start + 1, start + 2})
 
     return queries, news_indices
 
@@ -548,13 +587,16 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 
 ## ⚠️ 最高查核原則（零容忍，違反即捨棄該則）
 1. **只使用上方原始資料中出現的資訊**，禁止自行編造
-2. **日期判斷（依類別分級）**：
-   - 事故類、爭議類：「新聞發布日」與「事件發生日」皆須在 {date_range} 內
-   - 技術新知類：「新聞發布日」或「技術發表/測試日」在過去 30 天內即可納入
-3. **禁止舊聞充數**：超過 30 天的歷史案例一律捨棄
-4. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
-5. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
-6. **數量原則**：若原始資料足夠，至少輸出 8 則；若不足 8 則，說明是因來源或日期條件不足，而非自行補舊聞。
+2. **國家/地區限制（最高優先）**：本次報告**只能**納入以下國家/地區的新聞：
+   **{', '.join(selected_regions)}**
+   其他國家/地區的新聞，即使內容精彩，也必須**完全忽略、不得納入**。
+3. **日期判斷（依類別分級）**：
+   - 事故類、爭議類：「新聞發布日」與「事件發生日」皆須在 {date_range} 內（**嚴格執行，超出即捨棄**）
+   - 技術新知類：「新聞發布日」或「技術發表/測試日」須在過去 {min(int(lookback_days) * 2, 30)} 天內
+4. **禁止舊聞充數**：超過上述天數限制的歷史案例一律捨棄
+5. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
+6. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
+7. **數量原則**：若原始資料足夠，至少輸出 8 則；若不足 8 則，說明是因來源或日期條件不足，而非自行補舊聞。
 
 ## 三大核心主題領域
 
@@ -571,15 +613,13 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ### 領域 C：營運爭議
 - 勞資罷工、票價政策變動、系統轉換困難或延宕
 
-## 優先關注區域
-- 日本、韓國、新加坡、香港、澳洲
-- 英國、法國、德國、荷蘭、瑞士
-- 美國、加拿大
+## 本次報告限定國家/地區（僅此清單，嚴格執行）
+{chr(10).join('- ' + r for r in selected_regions)}
 
 ## 輸出格式（每則獨立區塊，目標 8–15 則）
 
 # {report_title}
-> 資料涵蓋期間：{date_range}（技術新知可納入近 30 天）
+> 資料涵蓋期間：{date_range}（技術新知可納入近 {min(int(lookback_days) * 2, 30)} 天）
 
 ---
 
