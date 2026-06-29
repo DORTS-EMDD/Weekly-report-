@@ -102,6 +102,21 @@ st.markdown("""
   .stat-num { font-size: 2rem; font-weight: 700; color: #1a3a5c; }
   .stat-label { color: #666; font-size: 0.85rem; }
   div[data-testid="stVerticalBlock"] > div:has(.main-title) { gap: .35rem; }
+  [data-testid="stSidebar"] .stButton button,
+  [data-testid="stSidebar"] .stButton button *,
+  [data-testid="stSidebar"] .stButton button p,
+  [data-testid="stSidebar"] .stButton button span {
+    color: #111111 !important;
+    background-color: #f5f5f5 !important;
+  }
+
+  [data-testid="stSidebar"] .stButton button:hover,
+  [data-testid="stSidebar"] .stButton button:hover *,
+  [data-testid="stSidebar"] .stButton button:hover p,
+  [data-testid="stSidebar"] .stButton button:hover span {
+    color: #111111 !important;
+    background-color: #e2e8f0 !important;
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -110,8 +125,8 @@ today = datetime.date.today()
 
 ADVANCED_REGIONS = [
     "日本", "韓國", "新加坡", "香港",
-    "美國", "加拿大", "英國", "法國",
-    "德國", "荷蘭", "瑞士", "澳洲",
+    "澳洲", "英國", "法國", "德國", "荷蘭",
+    "瑞士", "美國", "加拿大",
 ]
 
 REGION_SEARCH_TERMS = {
@@ -164,11 +179,18 @@ with st.sidebar:
         st.session_state["selected_regions_state"] = default_regions.copy()
 
     col_all, col_clear = st.columns(2)
+
     if col_all.button("全選", use_container_width=True):
         st.session_state["selected_regions_state"] = ADVANCED_REGIONS.copy()
+        for region in ADVANCED_REGIONS:
+            st.session_state[f"region_{region}"] = True
+        st.rerun()
 
     if col_clear.button("清除", use_container_width=True):
         st.session_state["selected_regions_state"] = []
+        for region in ADVANCED_REGIONS:
+            st.session_state[f"region_{region}"] = False
+        st.rerun()
 
     selected_regions = []
 
@@ -253,9 +275,9 @@ with st.expander("主題領域與重點地區"):
     with col_region:
         st.markdown("""
 **重點國家/地區**
-- 日本、韓國
-- 美國、歐洲（英國、德國、法國）
-- 新加坡、香港、澳洲
+- 日本、韓國、新加坡、香港、澳洲
+- 英國、法國、德國、荷蘭、瑞士
+- 美國、加拿大
         """)
 
 
@@ -550,7 +572,9 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 - 勞資罷工、票價政策變動、系統轉換困難或延宕
 
 ## 優先關注區域
-日本、韓國、美國、歐洲（英德法）、新加坡、香港、澳洲
+- 日本、韓國、新加坡、香港、澳洲
+- 英國、法國、德國、荷蘭、瑞士
+- 美國、加拿大
 
 ## 輸出格式（每則獨立區塊，目標 8–15 則）
 
