@@ -209,7 +209,7 @@ with st.sidebar:
     )
     st.markdown("### 🌏 重點國家/地區")
 
-    default_regions = ["日本", "韓國", "新加坡", "香港", "美國", "英國", "法國", "德國", "澳洲"]
+    default_regions = ["日本", "韓國", "新加坡", "香港"]
 
     if "selected_regions_state" not in st.session_state:
         st.session_state["selected_regions_state"] = default_regions.copy()
