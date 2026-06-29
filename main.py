@@ -34,6 +34,28 @@ GMAIL_APP_PASS = os.environ["GMAIL_APP_PASS"]
 RECIPIENTS     = os.environ["RECIPIENTS"]        # 逗號分隔
 NEWS_LOOKBACK_DAYS = int(os.environ.get("NEWS_LOOKBACK_DAYS", "7"))
 
+# GitHub 排程版預設聚焦制度透明、軌道技術成熟且對臺北捷運較有借鏡性的國家/地區。
+ADVANCED_REGIONS = [
+    "日本", "韓國", "新加坡", "香港",
+    "美國", "加拿大", "英國", "法國",
+    "德國", "荷蘭", "瑞士", "澳洲",
+]
+
+REGION_SEARCH_TERMS = {
+    "日本": "Japan Tokyo Osaka subway railway operator",
+    "韓國": "Korea Seoul metro subway operator",
+    "新加坡": "Singapore MRT LTA SMRT",
+    "香港": "Hong Kong MTR",
+    "美國": "United States New York subway Washington Metro Chicago CTA",
+    "加拿大": "Canada Toronto TTC Vancouver SkyTrain Montreal REM",
+    "英國": "United Kingdom London Underground Transport for London",
+    "法國": "France Paris Metro RATP Grand Paris Express",
+    "德國": "Germany Berlin U-Bahn Munich U-Bahn Hamburg U-Bahn",
+    "荷蘭": "Netherlands Amsterdam metro Rotterdam metro",
+    "瑞士": "Switzerland Zurich tram Lausanne metro",
+    "澳洲": "Australia Sydney Metro Melbourne Metro Brisbane rail",
+}
+
 # ── 模型設定 ──────────────────────────────────────────
 MODEL_NORMAL   = "gemini-3.1-flash-lite"   # 預設：輕量省配額
 MODEL_POWERFUL = "gemini-3.5-flash"        # 強化：細節更完整
@@ -117,7 +139,7 @@ def fetch_rss_feeds() -> str:
 
             if items_found:
                 lines = [f"【RSS來源：{source_name}（共 {len(items_found)} 篇）】"]
-                for t, l, d, dt in items_found[:12]:
+                for t, l, d, dt in items_found[:20]:
                     lines.append(
                         f"  日期：{dt}\n  標題：{t}\n  摘要：{d}\n  連結：{l}"
                     )
@@ -209,13 +231,21 @@ SEARCH_QUERIES = [
     f"New York subway Washington Metro Chicago CTA incident disruption {today:%B %Y}",
 ]
 
+for region in ADVANCED_REGIONS:
+    term = REGION_SEARCH_TERMS[region]
+    SEARCH_QUERIES.extend([
+        f"{term} metro rail technology upgrade press release {today:%B %Y}",
+        f"{term} metro subway incident disruption accident {today:%B %Y}",
+        f"{term} metro transit fare strike construction delay controversy {today:%B %Y}",
+    ])
+
 # 事故/爭議類查詢編號（1-based），使用 news() 搜尋更有效
 _NEWS_QUERY_INDICES = set(range(13, len(SEARCH_QUERIES) + 1))
 
 
 def run_duckduckgo_searches() -> str:
     """
-    執行 20 組 DuckDuckGo 搜尋（ddgs v9 多後端）。
+    執行基礎關鍵字與先進國家/地區補充搜尋（ddgs v9 多後端）。
     - 技術類：text()  + backend=auto
     - 事故/爭議類：news() + backend=auto
     - 限速時自動切換後備後端（bing / yahoo），最多重試 3 次
@@ -239,12 +269,12 @@ def run_duckduckgo_searches() -> str:
                     with DDGS() as ddgs:
                         if use_news:
                             results = ddgs.news(
-                                query, max_results=6,
+                                query, max_results=8,
                                 timelimit=news_timelimit, backend=backend
                             )
                         else:
                             results = ddgs.text(
-                                query, max_results=8,
+                                query, max_results=10,
                                 timelimit="m", backend=backend
                             )
 
@@ -349,7 +379,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 - 勞資罷工、票價政策變動、系統轉換困難或延宕
 
 ## 優先關注區域
-日本、韓國、美國、歐洲（英德法）、新加坡、香港、澳洲
+{", ".join(ADVANCED_REGIONS)}
 
 ## 輸出格式（每則獨立區塊，目標 8–15 則）
 

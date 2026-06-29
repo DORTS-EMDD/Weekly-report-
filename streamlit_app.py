@@ -108,6 +108,27 @@ st.markdown("""
 # ── 日期 ──────────────────────────────────────────────
 today = datetime.date.today()
 
+ADVANCED_REGIONS = [
+    "日本", "韓國", "新加坡", "香港",
+    "美國", "加拿大", "英國", "法國",
+    "德國", "荷蘭", "瑞士", "澳洲",
+]
+
+REGION_SEARCH_TERMS = {
+    "日本": "Japan Tokyo Osaka subway railway operator",
+    "韓國": "Korea Seoul metro subway operator",
+    "新加坡": "Singapore MRT LTA SMRT",
+    "香港": "Hong Kong MTR",
+    "美國": "United States New York subway Washington Metro Chicago CTA",
+    "加拿大": "Canada Toronto TTC Vancouver SkyTrain Montreal REM",
+    "英國": "United Kingdom London Underground Transport for London",
+    "法國": "France Paris Metro RATP Grand Paris Express",
+    "德國": "Germany Berlin U-Bahn Munich U-Bahn Hamburg U-Bahn",
+    "荷蘭": "Netherlands Amsterdam metro Rotterdam metro",
+    "瑞士": "Switzerland Zurich tram Lausanne metro",
+    "澳洲": "Australia Sydney Metro Melbourne Metro Brisbane rail",
+}
+
 # ── 金鑰狀態 ──────────────────────────────────────────
 api_key    = get_secret("GEMINI_API_KEY")
 gmail_user = get_secret("GMAIL_USER")
@@ -135,6 +156,12 @@ with st.sidebar:
         step=1,
         help="事故與營運爭議依此期間篩選；技術新知仍可納入近 30 天資料。",
     )
+    selected_regions = st.multiselect(
+        "重點國家/地區",
+        ADVANCED_REGIONS,
+        default=["日本", "韓國", "新加坡", "香港", "美國", "英國", "法國", "德國", "澳洲"],
+        help="先以捷運技術、營運透明度與可借鏡性較高的國家/地區為候選。",
+    )
 
     st.markdown("### 📬 收件設定")
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
@@ -151,14 +178,6 @@ with st.sidebar:
         "💡 **新增收件人**：直接在上方輸入框換行追加即可。"
     )
 
-    st.markdown("---")
-    st.markdown("### 🔑 金鑰狀態")
-    st.markdown(f"Gemini API Key：{'✅ 已設定' if api_key else '❌ 未設定'}")
-    st.markdown(f"Gmail 帳號：{'✅ 已設定' if gmail_user else '❌ 未設定'}")
-    st.markdown(f"Gmail 密碼：{'✅ 已設定' if gmail_pass else '❌ 未設定'}")
-    if not api_key:
-        st.warning("請至 Streamlit Cloud 的 Secrets 填入 Gemini 與 Gmail 設定。")
-
     st.markdown("### 📅 排程說明")
     st.markdown("""
 - ⏰ **每週一 08:00**（台灣時間）自動執行
@@ -166,6 +185,12 @@ with st.sidebar:
 - 💤 **不需要開電腦**
 - 📧 自動寄送至公務信箱
     """)
+    if not (api_key and gmail_user and gmail_pass):
+        st.warning("金鑰或 Gmail 設定尚未完整，排程寄送可能失敗。")
+    with st.expander("🔑 系統狀態", expanded=False):
+        st.markdown(f"Gemini API Key：{'✅ 已設定' if api_key else '❌ 未設定'}")
+        st.markdown(f"Gmail 帳號：{'✅ 已設定' if gmail_user else '❌ 未設定'}")
+        st.markdown(f"Gmail 密碼：{'✅ 已設定' if gmail_pass else '❌ 未設定'}")
     st.markdown("---")
     st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統 v4.1")
 
@@ -319,7 +344,7 @@ def fetch_rss_feeds(status_text=None) -> str:
 # ═══════════════════════════════════════════════════════
 #  搜尋關鍵字（ddgs 多後端，補充用）
 # ═══════════════════════════════════════════════════════
-SEARCH_QUERIES = [
+BASE_SEARCH_QUERIES = [
     # 技術新知：用「技術名詞 + metro/rail + announcement/trial」提高命中率
     f"metro railway CBTC GoA4 driverless signalling contract trial {today:%Y}",
     f"metro railway digital twin predictive maintenance AI condition monitoring {today:%Y}",
@@ -356,26 +381,43 @@ SEARCH_QUERIES = [
     f"London Underground Paris Metro Berlin U-Bahn incident disruption {today:%B %Y}",
     f"New York subway Washington Metro Chicago CTA incident disruption {today:%B %Y}",
 ]
-_NEWS_QUERY_INDICES = set(range(13, len(SEARCH_QUERIES) + 1))
 FALLBACK_BACKENDS = ["auto", "bing", "yahoo"]
+
+
+def build_search_queries() -> tuple[list[str], set[int]]:
+    queries = list(BASE_SEARCH_QUERIES)
+    news_indices = set(range(13, len(queries) + 1))
+
+    for region in selected_regions:
+        term = REGION_SEARCH_TERMS.get(region, region)
+        queries.extend([
+            f"{term} metro rail technology upgrade press release {today:%B %Y}",
+            f"{term} metro subway incident disruption accident {today:%B %Y}",
+            f"{term} metro transit fare strike construction delay controversy {today:%B %Y}",
+        ])
+        start = len(queries) - 2
+        news_indices.update({start, start + 1, start + 2})
+
+    return queries, news_indices
 
 
 def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
     """
-    執行 20 組關鍵字搜尋（ddgs v9 多後端）。
+    執行基礎關鍵字與使用者選定國家/地區的補充搜尋（ddgs v9 多後端）。
     限速時自動切換後備後端（bing / yahoo），最多重試3次。
     """
-    total = len(SEARCH_QUERIES)
+    search_queries, news_query_indices = build_search_queries()
+    total = len(search_queries)
     all_blocks: list[str] = []
     news_timelimit = "w" if int(lookback_days) <= 7 else "m"
 
-    for i, query in enumerate(SEARCH_QUERIES, 1):
+    for i, query in enumerate(search_queries, 1):
         if status_text:
             status_text.text(f"🔍 ddgs 搜尋 {i:02d}/{total}：{query[:50]}...")
         if progress_bar:
             progress_bar.progress(i / total)
 
-        use_news = i in _NEWS_QUERY_INDICES
+        use_news = i in news_query_indices
         result_block = None
 
         for backend in FALLBACK_BACKENDS:
@@ -384,12 +426,12 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
                     with DDGS() as ddgs:
                         if use_news:
                             results = ddgs.news(
-                                query, max_results=6,
+                                query, max_results=8,
                                 timelimit=news_timelimit, backend=backend
                             )
                         else:
                             results = ddgs.text(
-                                query, max_results=8,
+                                query, max_results=10,
                                 timelimit="m", backend=backend
                             )
                     if results:
@@ -444,6 +486,7 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
 # ── Prompt 建立 ───────────────────────────────────────
 def build_prompt(rss_results: str, ddg_results: str) -> str:
     weekday = ['一','二','三','四','五','六','日'][today.weekday()]
+    search_count = len(build_search_queries()[0])
     return f"""
 # 角色
 你是專業捷運機電技術分析師，服務對象為台北市政府捷運工程局處長及技術同仁。
@@ -507,7 +550,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ## 結尾（必填）
 ---
 📊 **本週統計**：共 N 則（技術新知 N 則 / 重大事故 N 則 / 營運爭議 N 則）
-🔍 **執行搜尋次數**：RSS {len(RSS_SOURCES)} 源 + ddgs {len(SEARCH_QUERIES)} 次關鍵字搜尋
+🔍 **執行搜尋次數**：RSS {len(RSS_SOURCES)} 源 + ddgs {search_count} 次關鍵字搜尋
 ⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
 """
 
