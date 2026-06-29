@@ -1,21 +1,26 @@
 """
-國際捷運技術週報 自動產生器 v4
-- SDK  : google-genai (新版)
-- 搜尋 : DuckDuckGo（免費、無配額限制）
-- 寄信 : Gmail SMTP
-- 排程 : GitHub Actions（時間請見 .github/workflows/weekly.yml）
+國際捷運技術週報 自動產生器 v4.1
+- SDK    : google-genai (新版)
+- 搜尋一 : RSS 訂閱源（主要；Railway Gazette / IRJ 等六大媒體，無限速）
+- 搜尋二 : ddgs（次要；DuckDuckGo + Bing + Yahoo 多後端，帶重試）
+- 寄信   : Gmail SMTP
+- 排程   : GitHub Actions（時間請見 .github/workflows/weekly.yml）
 """
 
 import os
 import re
 import sys
 import time
+import random
 import smtplib
 import datetime
+import urllib.request
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 from google import genai
 from google.genai import types
 
@@ -39,8 +44,129 @@ report_title = f"【{today.strftime('%Y/%m/%d')}】國際捷運技術新知、�
 
 
 # ─────────────────────────────────────────────────────
+# RSS 訂閱源（主要數據來源；無需 API 金鑰、不受限速）
+# ─────────────────────────────────────────────────────
+RSS_SOURCES = [
+    ("Railway Gazette International",
+     "https://www.railwaygazette.com/rss/latest"),
+    ("International Railway Journal",
+     "https://www.railjournal.com/feed/"),
+    ("Railway Technology News",
+     "https://www.railway-technology.com/news/feed/"),
+    ("Global Railway Review",
+     "https://www.globalrailwayreview.com/feed/"),
+    ("Intelligent Transport",
+     "https://www.intelligenttransport.com/feed/"),
+    ("UITP – Global Public Transport",
+     "https://www.uitp.org/rss.xml"),
+]
+
+def fetch_rss_feeds() -> str:
+    """從六大國際鐵道/交通期刊 RSS 取得近 30 天文章，不受任何配額限制。"""
+    cutoff = (
+        datetime.datetime.now(datetime.timezone.utc)
+        - datetime.timedelta(days=30)
+    )
+    all_blocks: list[str] = []
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MetroWeeklyBot/4.1)"}
+
+    for source_name, url in RSS_SOURCES:
+        print(f"[INFO] RSS 抓取：{source_name}")
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as f:
+                raw = f.read()
+            root = ET.fromstring(raw)
+
+            items_found: list[tuple[str, str, str, str]] = []
+            ATOM = "http://www.w3.org/2005/Atom"
+
+            # ── RSS 2.0 ──
+            for item in root.findall(".//item"):
+                title    = (item.findtext("title") or "").strip()
+                link     = (item.findtext("link")  or "").strip()
+                desc     = (item.findtext("description") or "").strip()[:400]
+                pub_str  = (item.findtext("pubDate") or "").strip()
+                if not title:
+                    continue
+                date_label = _parse_pub_date(pub_str)
+                if _is_recent(pub_str, cutoff):
+                    items_found.append((title, link, desc, date_label))
+
+            # ── Atom ──
+            if not items_found:
+                for entry in root.findall(f".//{{{ATOM}}}entry"):
+                    title  = (entry.findtext(f"{{{ATOM}}}title")   or "").strip()
+                    link_el = entry.find(f"{{{ATOM}}}link")
+                    link   = link_el.get("href", "") if link_el is not None else ""
+                    summ   = (entry.findtext(f"{{{ATOM}}}summary") or "").strip()[:400]
+                    pub_str = (
+                        entry.findtext(f"{{{ATOM}}}published")
+                        or entry.findtext(f"{{{ATOM}}}updated")
+                        or ""
+                    ).strip()
+                    if not title:
+                        continue
+                    date_label = _parse_pub_date(pub_str)
+                    if _is_recent(pub_str, cutoff):
+                        items_found.append((title, link, summ, date_label))
+
+            if items_found:
+                lines = [f"【RSS來源：{source_name}（共 {len(items_found)} 篇）】"]
+                for t, l, d, dt in items_found[:12]:
+                    lines.append(
+                        f"  日期：{dt}\n  標題：{t}\n  摘要：{d}\n  連結：{l}"
+                    )
+                all_blocks.append("\n".join(lines))
+                print(f"[INFO]   → 取得 {len(items_found)} 篇近30天文章")
+            else:
+                all_blocks.append(f"【RSS來源：{source_name}】（近30天無新文章）")
+                print(f"[INFO]   → 無近30天文章")
+
+        except Exception as exc:
+            all_blocks.append(f"【RSS來源：{source_name}】⚠️ 失敗：{exc}")
+            print(f"[WARN] RSS {source_name} 失敗：{exc}")
+
+    return "\n\n".join(all_blocks)
+
+
+def _parse_pub_date(pub_str: str) -> str:
+    """解析多種日期格式，回傳 YYYY-MM-DD 字串；解析失敗則原文回傳。"""
+    if not pub_str:
+        return "日期未知"
+    try:
+        dt = parsedate_to_datetime(pub_str)
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    try:
+        dt = datetime.datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return pub_str[:16]
+
+
+def _is_recent(pub_str: str, cutoff: datetime.datetime) -> bool:
+    """判斷文章是否在 cutoff 之後；解析失敗一律納入（不漏）。"""
+    if not pub_str:
+        return True
+    try:
+        dt = parsedate_to_datetime(pub_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt > cutoff
+    except Exception:
+        pass
+    try:
+        dt = datetime.datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+        return dt > cutoff
+    except Exception:
+        return True
+
+
+# ─────────────────────────────────────────────────────
 # 20 組精準查詢詞（技術新知 / 事故分析 / 營運爭議 / 地區官方）
-# timelimit="m" 近一個月廣撈，Gemini 再嚴格篩選 7 天內
+# ─────────────────────────────────────────────────────
 SEARCH_QUERIES = [
     # A. 技術新知：次世代信號與通訊
     f"CBTC GoA4 autonomous train signalling deployment {today.strftime('%Y')}",
@@ -56,7 +182,7 @@ SEARCH_QUERIES = [
     f"supercapacitor regenerative braking energy storage metro {today.strftime('%Y')}",
     f"hydrogen fuel cell train test pilot route {today.strftime('%Y')}",
     f"new rolling stock EMU electric train first run {today.strftime('%Y')}",
-    # D. 事故分析
+    # D. 事故分析（改用 news 搜尋，更精準抓近期新聞）
     f"metro subway train derailment accident {today.strftime('%B %Y')}",
     f"metro subway signal failure power outage disruption {today.strftime('%B %Y')}",
     f"railway train door mechanical fault delay {today.strftime('%B %Y')}",
@@ -70,53 +196,125 @@ SEARCH_QUERIES = [
     f"railway metro official press release news Japan Korea Europe {today.strftime('%B %Y')}",
 ]
 
+# 事故/爭議類查詢編號（1-based），使用 news() 搜尋更有效
+_NEWS_QUERY_INDICES = set(range(12, 21))  # 查詢 12~20
+
 
 def run_duckduckgo_searches() -> str:
-    """執行 20 組 DuckDuckGo 搜尋，timelimit=m 廣撈近一個月，Gemini 篩 7 天"""
+    """
+    執行 20 組 DuckDuckGo 搜尋（ddgs v9 多後端）。
+    - 技術類：text()  + backend=auto
+    - 事故/爭議類：news() + backend=auto
+    - 限速時自動切換後備後端（bing / yahoo），最多重試 3 次
+    - 每次查詢間隔 2~5 秒（隨機），降低觸發限速機率
+    """
     total = len(SEARCH_QUERIES)
-    all_blocks = []
-    with DDGS() as ddgs:
-        for i, query in enumerate(SEARCH_QUERIES, 1):
-            print(f"[INFO] 搜尋 {i:02d}/{total}：{query}")
-            try:
-                results = list(ddgs.text(query, max_results=8, timelimit="m"))
-                if results:
-                    block_lines = [f"【搜尋 {i}】{query}"]
-                    for r in results:
-                        block_lines.append(
-                            f"  標題：{r.get('title','')}\n"
-                            f"  摘要：{r.get('body','')}\n"
-                            f"  連結：{r.get('href','')}"
+    all_blocks: list[str] = []
+    FALLBACK_BACKENDS = ["auto", "bing", "yahoo"]
+
+    for i, query in enumerate(SEARCH_QUERIES, 1):
+        use_news = i in _NEWS_QUERY_INDICES
+        search_label = "新聞搜尋" if use_news else "文字搜尋"
+        print(f"[INFO] DDG {i:02d}/{total}（{search_label}）：{query}")
+
+        result_block = None
+
+        for backend in FALLBACK_BACKENDS:
+            for attempt in range(1, 3):        # 每個後端最多嘗試 2 次
+                try:
+                    with DDGS() as ddgs:
+                        if use_news:
+                            results = ddgs.news(
+                                query, max_results=6,
+                                timelimit="m", backend=backend
+                            )
+                        else:
+                            results = ddgs.text(
+                                query, max_results=8,
+                                timelimit="m", backend=backend
+                            )
+
+                    if results:
+                        lines = [f"【DDG {i}（{backend}）】{query}"]
+                        for r in results:
+                            body = (
+                                r.get("body")
+                                or r.get("excerpt")
+                                or r.get("description")
+                                or ""
+                            )[:300]
+                            href = r.get("href") or r.get("url") or ""
+                            lines.append(
+                                f"  標題：{r.get('title','')}\n"
+                                f"  日期：{r.get('date','')}\n"
+                                f"  摘要：{body}\n"
+                                f"  連結：{href}"
+                            )
+                        result_block = "\n".join(lines)
+                    else:
+                        result_block = (
+                            f"【DDG {i}（{backend}）】{query}\n"
+                            f"  （{backend} 無結果）"
                         )
-                    all_blocks.append("\n".join(block_lines))
-                else:
-                    all_blocks.append(f"【搜尋 {i}】{query}\n  （本次無結果）")
-                time.sleep(1.2)
-            except Exception as e:
-                all_blocks.append(f"【搜尋 {i}】{query}\n  ⚠️ 搜尋失敗：{e}")
+                    break   # 成功，跳出 attempt 迴圈
+
+                except Exception as exc:
+                    err = str(exc)
+                    is_rate = any(
+                        k in err for k in
+                        ("Ratelimit", "429", "403", "vqd", "No results")
+                    )
+                    wait = (2 ** attempt) * 3 + random.uniform(1, 4)
+                    print(
+                        f"[WARN] DDG {i} backend={backend} attempt={attempt} "
+                        f"→ {'限速' if is_rate else '錯誤'}，等待 {wait:.1f}s"
+                    )
+                    time.sleep(wait)
+                    if not is_rate:
+                        result_block = (
+                            f"【DDG {i}】{query}\n"
+                            f"  ⚠️ {type(exc).__name__}: {err[:120]}"
+                        )
+                        break   # 非限速錯誤，不切後端
+
+            if result_block and "無結果" not in result_block and "⚠️" not in result_block:
+                break   # 已取得有效結果，無需切後端
+
+        all_blocks.append(
+            result_block
+            or f"【DDG {i}】{query}\n  ⚠️ 三個後端均無法取得結果，已略過"
+        )
+
+        # 每次搜尋後隨機等待 2~5 秒（降低累積限速風險）
+        time.sleep(random.uniform(2.0, 5.0))
+
     return "\n\n".join(all_blocks)
 
 
 # ─────────────────────────────────────────────────────
-def build_prompt(search_results: str) -> str:
+def build_prompt(rss_results: str, ddg_results: str) -> str:
+    weekday_zh = ["一","二","三","四","五","六","日"][today.weekday()]
     return f"""
 # 角色
 你是專業捷運機電技術分析師，服務對象為台北市政府捷運工程局處長及技術同仁。
 
 # 任務
-以下是透過 DuckDuckGo 搜尋引擎（近一個月範圍）蒐集到的國際軌道交通原始資料。
-請嚴格依照三大領域與查核原則，整理出週報（目標涵蓋期間：{date_range}）。
+以下是透過「RSS 訂閱源」與「ddgs 多後端搜尋」蒐集到的國際軌道交通原始資料（涵蓋近 30 天）。
+請嚴格依照三大領域與查核原則，整理出週報（目標期間：{date_range}）。
 
-## 搜尋結果（原始資料，請分析整理，勿直接複製）
-{search_results}
+## ━━ 第一部分：RSS 訂閱源（Railway Gazette / IRJ 等六大媒體）━━
+{rss_results}
+
+## ━━ 第二部分：關鍵字搜尋結果（ddgs 多後端）━━
+{ddg_results}
 
 ## ⚠️ 最高查核原則（零容忍，違反即捨棄該則）
-1. **只使用搜尋結果中出現的資訊**，禁止自行編造
+1. **只使用上方原始資料中出現的資訊**，禁止自行編造
 2. **日期判斷（依類別分級）**：
    - 事故類、爭議類：「新聞發布日」與「事件發生日」皆須在 {date_range} 內
    - 技術新知類：「新聞發布日」或「技術發表/測試日」在過去 30 天內即可納入
-3. **禁止舊聞充數**：舊案調查報告、歷史事故回顧（超過 30 天）一律捨棄
-4. **無付費牆**：確保來源 URL 可公開存取，付費牆來源捨棄
+3. **禁止舊聞充數**：超過 30 天的歷史案例一律捨棄
+4. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
 5. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
 
 ## 三大核心監控領域
@@ -157,8 +355,8 @@ def build_prompt(search_results: str) -> str:
 ## 結尾（必填）
 ---
 📊 **本週統計**：共 N 則（A技術 N 則 / B事故 N 則 / C爭議 N 則）
-🔍 **執行搜尋次數**：本次共執行 {len(SEARCH_QUERIES)} 次（DuckDuckGo）
-⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{["一","二","三","四","五","六","日"][today.weekday()]}
+🔍 **執行搜尋次數**：RSS {len(RSS_SOURCES)} 源 + ddgs {len(SEARCH_QUERIES)} 次關鍵字搜尋
+⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday_zh}
 """
 
 
@@ -168,16 +366,22 @@ def generate_report(use_powerful: bool = False) -> str:
     print(f"[INFO] 模型：{model_name}")
     print(f"[INFO] 期間：{date_range}")
 
-    # Step 1：DuckDuckGo 搜尋
-    print("[INFO] 開始 DuckDuckGo 搜尋...")
-    search_results = run_duckduckgo_searches()
-    print(f"[INFO] 搜尋完成，字元數：{len(search_results)}")
+    # Step 1：RSS 訂閱源（主要，穩定）
+    print("\n[INFO] ── Step 1：RSS 訂閱源抓取 ──")
+    rss_results = fetch_rss_feeds()
+    print(f"[INFO] RSS 資料量：{len(rss_results):,} 字元")
 
-    # Step 2：Gemini 分析整理
+    # Step 2：ddgs 搜尋（補充，可能受限速）
+    print("\n[INFO] ── Step 2：ddgs 多後端搜尋 ──")
+    ddg_results = run_duckduckgo_searches()
+    print(f"[INFO] DDG 資料量：{len(ddg_results):,} 字元")
+
+    # Step 3：Gemini 分析整理
+    print("\n[INFO] ── Step 3：Gemini 分析整理 ──")
     client = genai.Client(api_key=GEMINI_API_KEY)
     response = client.models.generate_content(
         model=model_name,
-        contents=build_prompt(search_results),
+        contents=build_prompt(rss_results, ddg_results),
         config=types.GenerateContentConfig(temperature=0.2),
     )
 
@@ -226,7 +430,7 @@ def markdown_to_html(md: str) -> str:
 </style></head><body>
 <p>{h}</p>
 <div class="footer">
-  📧 此報告由 AI 自動產生 | Gemini + DuckDuckGo | 僅供參考，請交叉驗證原始來源
+  📧 此報告由 AI 自動產生 | Gemini + RSS + ddgs | 僅供參考，請交叉驗證原始來源
 </div></body></html>"""
 
 
@@ -262,12 +466,12 @@ def send_email(text: str, recipients: list) -> bool:
 # ─────────────────────────────────────────────────────
 def main():
     use_powerful = "--powerful" in sys.argv
-    print("=" * 50)
-    print("  國際捷運技術週報 自動產生器 v4")
+    print("=" * 55)
+    print("  國際捷運技術週報 自動產生器 v4.1")
     print(f"  日期：{today.strftime('%Y年%m月%d日')}")
     print(f"  模式：{'強化版' if use_powerful else '標準版'}")
-    print(f"  搜尋：DuckDuckGo（無配額限制）")
-    print("=" * 50)
+    print(f"  搜尋：RSS {len(RSS_SOURCES)} 源 + ddgs {len(SEARCH_QUERIES)} 次")
+    print("=" * 55)
 
     report = generate_report(use_powerful)
     save_report(report)
