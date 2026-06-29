@@ -185,12 +185,13 @@ with st.sidebar:
         step=1,
         help="事故與營運爭議依此期間篩選；技術新知仍可納入近 30 天資料。",
     )
-    selected_regions = st.multiselect(
-        "重點國家/地區",
-        ADVANCED_REGIONS,
-        default=["日本", "韓國", "新加坡", "香港", "美國", "英國", "法國", "德國", "澳洲"],
-        help="先以捷運技術、營運透明度與可借鏡性較高的國家/地區為候選。",
-    )
+selected_regions = st.multiselect(
+    "重點國家/地區",
+    ADVANCED_REGIONS,
+    default=["日本", "韓國", "新加坡", "香港", "美國", "英國", "法國", "德國", "澳洲"],
+    label_visibility="visible",
+)
+st.caption("已選：" + "、".join(selected_regions))
 
     st.markdown("### 📬 收件設定")
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
