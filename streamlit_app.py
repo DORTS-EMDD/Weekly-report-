@@ -12,11 +12,14 @@ import time
 import random
 import datetime
 import smtplib
+from io import BytesIO
+from html import escape
 import urllib.request
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 
 import streamlit as st
 from ddgs import DDGS
@@ -83,7 +86,7 @@ st.markdown("""
     font-size: 2rem; font-weight: 700; color: #1a3a5c;
     border-bottom: 3px solid #1a3a5c; padding-bottom: 8px; margin-bottom: 4px;
   }
-  .subtitle { color: #666; font-size: 0.95rem; margin-bottom: 24px; }
+  .subtitle { color: #666; font-size: 0.95rem; margin-bottom: 14px; }
   .warn-box {
     background: #fff8e6; border-left: 4px solid #f59e0b;
     padding: 12px 16px; border-radius: 0 6px 6px 0; margin: 12px 0;
@@ -98,19 +101,21 @@ st.markdown("""
   }
   .stat-num { font-size: 2rem; font-weight: 700; color: #1a3a5c; }
   .stat-label { color: #666; font-size: 0.85rem; }
+  div[data-testid="stVerticalBlock"] > div:has(.main-title) { gap: .35rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # ── 日期 ──────────────────────────────────────────────
-today      = datetime.date.today()
-week_start = today - datetime.timedelta(days=7)
-date_range = f"{week_start.strftime('%Y年%m月%d日')} 至 {today.strftime('%Y年%m月%d日')}"
-report_title = f"【{today.strftime('%Y/%m/%d')}】國際捷運技術新知、重大事件週報"
+today = datetime.date.today()
+
+# ── 金鑰狀態 ──────────────────────────────────────────
+api_key    = get_secret("GEMINI_API_KEY")
+gmail_user = get_secret("GMAIL_USER")
+gmail_pass = get_secret("GMAIL_APP_PASS")
 
 # ── 側邊欄 ──────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🚇 捷運週報系統")
-    st.markdown("---")
 
     st.markdown("### ⚙️ 模型設定")
     model_choice = st.selectbox(
@@ -121,6 +126,14 @@ with st.sidebar:
             "gemini-3.1-flash-lite：輕量版，速度快、省配額。\n"
             "gemini-3.5-flash：接近 Pro 等級，細節更完整。"
         ),
+    )
+    lookback_days = st.number_input(
+        "新聞搜尋天數",
+        min_value=3,
+        max_value=30,
+        value=7,
+        step=1,
+        help="事故與營運爭議依此期間篩選；技術新知仍可納入近 30 天資料。",
     )
 
     st.markdown("### 📬 收件設定")
@@ -135,12 +148,17 @@ with st.sidebar:
         height=90,
     )
     st.caption(
-        "💡 **新增收件人**：直接在上方輸入框換行追加即可，"
-        "本次 session 有效。\n"
-        "若要永久保存，請至 **Streamlit Secrets** 更新 `DEFAULT_RECIPIENTS`。"
+        "💡 **新增收件人**：直接在上方輸入框換行追加即可。"
     )
 
     st.markdown("---")
+    st.markdown("### 🔑 金鑰狀態")
+    st.markdown(f"Gemini API Key：{'✅ 已設定' if api_key else '❌ 未設定'}")
+    st.markdown(f"Gmail 帳號：{'✅ 已設定' if gmail_user else '❌ 未設定'}")
+    st.markdown(f"Gmail 密碼：{'✅ 已設定' if gmail_pass else '❌ 未設定'}")
+    if not api_key:
+        st.warning("請至 Streamlit Cloud 的 Secrets 填入 Gemini 與 Gmail 設定。")
+
     st.markdown("### 📅 排程說明")
     st.markdown("""
 - ⏰ **每週一 08:00**（台灣時間）自動執行
@@ -151,22 +169,24 @@ with st.sidebar:
     st.markdown("---")
     st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統 v4.1")
 
+week_start = today - datetime.timedelta(days=int(lookback_days))
+date_range = f"{week_start.strftime('%Y年%m月%d日')} 至 {today.strftime('%Y年%m月%d日')}"
+report_title = f"【{today.strftime('%Y/%m/%d')}】國際捷運技術新知、重大事件週報"
+
 # ── 主畫面 ──────────────────────────────────────────
 st.markdown('<div class="main-title">🚇 國際捷運技術週報 AI 自動產生系統</div>',
             unsafe_allow_html=True)
 st.markdown(
     f'<div class="subtitle">資料涵蓋期間：{week_start.strftime("%Y/%m/%d")} – '
-    f'{today.strftime("%Y/%m/%d")} ｜ 使用模型：{model_choice}'
-    f' ｜ 搜尋：RSS 6 源 + ddgs 多後端</div>',
+    f'{today.strftime("%Y/%m/%d")} ｜ 使用模型：{model_choice}</div>',
     unsafe_allow_html=True,
 )
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3 = st.columns(3)
 for col, num, label in [
-    (c1, "3",   "監控領域"),
-    (c2, "7",   "監控國家/地區"),
-    (c3, "6+20","RSS源+關鍵字"),
-    (c4, "週一", "自動寄送週期"),
+    (c1, "3",   "主題領域"),
+    (c2, "7",   "重點國家/地區"),
+    (c3, f"{lookback_days}", "新聞搜尋天數"),
 ]:
     col.markdown(
         f'<div class="stat-card"><div class="stat-num">{num}</div>'
@@ -174,29 +194,22 @@ for col, num, label in [
         unsafe_allow_html=True,
     )
 
-st.markdown("<br>", unsafe_allow_html=True)
-
-# ── 金鑰狀態顯示 ──────────────────────────────────────
-api_key    = get_secret("GEMINI_API_KEY")
-gmail_user = get_secret("GMAIL_USER")
-gmail_pass = get_secret("GMAIL_APP_PASS")
-
-with st.expander("🔑 金鑰狀態", expanded=not bool(api_key)):
-    col_k1, col_k2, col_k3 = st.columns(3)
-    col_k1.markdown(f"**Gemini API Key**\n{'✅ 已設定' if api_key else '❌ 未設定'}")
-    col_k2.markdown(f"**Gmail 帳號**\n{'✅ 已設定' if gmail_user else '❌ 未設定'}")
-    col_k3.markdown(f"**Gmail 密碼**\n{'✅ 已設定' if gmail_pass else '❌ 未設定'}")
-
-    if not api_key:
+with st.expander("主題領域與重點地區"):
+    col_area, col_region = st.columns(2)
+    with col_area:
         st.markdown("""
-        <div class="warn-box">
-        金鑰未設定。請至 Streamlit Cloud → App Settings → Secrets 填入：<br><br>
-        <code>GEMINI_API_KEY = "你的金鑰"</code><br>
-        <code>GMAIL_USER = "yourname@gmail.com"</code><br>
-        <code>GMAIL_APP_PASS = "xxxx xxxx xxxx xxxx"</code><br>
-        <code>DEFAULT_RECIPIENTS = "收件人1@gov.taipei,收件人2@gov.taipei"</code>
-        </div>
-        """, unsafe_allow_html=True)
+**主題領域**
+- 技術新知
+- 重大事故
+- 營運爭議
+        """)
+    with col_region:
+        st.markdown("""
+**重點國家/地區**
+- 日本、韓國
+- 美國、歐洲（英國、德國、法國）
+- 新加坡、香港、澳洲
+        """)
 
 
 # ═══════════════════════════════════════════════════════
@@ -307,34 +320,43 @@ def fetch_rss_feeds(status_text=None) -> str:
 #  搜尋關鍵字（ddgs 多後端，補充用）
 # ═══════════════════════════════════════════════════════
 SEARCH_QUERIES = [
-    # A. 技術新知：次世代信號與通訊
-    f"CBTC GoA4 autonomous train signalling deployment {today.strftime('%Y')}",
-    f"FRMCS 5G railway communication migration trial {today.strftime('%Y')}",
-    f"virtual coupling train platooning ETCS {today.strftime('%Y')}",
-    f"EULYNX interlocking standard railway Europe {today.strftime('%Y')}",
-    # B. 技術新知：智慧化與數位雙生
-    f"digital twin railway metro predictive maintenance {today.strftime('%Y')}",
-    f"edge AI artificial intelligence metro fault detection {today.strftime('%Y')}",
-    f"big data cybersecurity railway operations {today.strftime('%Y')}",
-    # C. 技術新知：硬體與能源
-    f"SiC silicon carbide traction inverter metro train {today.strftime('%Y')}",
-    f"supercapacitor regenerative braking energy storage metro {today.strftime('%Y')}",
-    f"hydrogen fuel cell train test pilot route {today.strftime('%Y')}",
-    f"new rolling stock EMU electric train first run {today.strftime('%Y')}",
-    # D. 事故分析（news 搜尋）
-    f"metro subway train derailment accident {today.strftime('%B %Y')}",
-    f"metro subway signal failure power outage disruption {today.strftime('%B %Y')}",
-    f"railway train door mechanical fault delay {today.strftime('%B %Y')}",
-    f"鉄道 事故 脱線 信号障害 遅延 {today.strftime('%Y年%m月')}",
-    f"지하철 사고 탈선 신호 장애 {today.strftime('%Y년 %m월')}",
-    # E. 營運爭議
-    f"metro subway transit workers strike labor dispute {today.strftime('%B %Y')}",
-    f"subway fare increase transit authority policy {today.strftime('%B %Y')}",
-    # F. 地區官方
-    f"MTR Hong Kong MRT Singapore incident announcement {today.strftime('%B %Y')}",
-    f"railway metro official press release news Japan Korea Europe {today.strftime('%B %Y')}",
+    # 技術新知：用「技術名詞 + metro/rail + announcement/trial」提高命中率
+    f"metro railway CBTC GoA4 driverless signalling contract trial {today:%Y}",
+    f"metro railway digital twin predictive maintenance AI condition monitoring {today:%Y}",
+    f"metro rail artificial intelligence fault detection maintenance announcement {today:%Y}",
+    f"railway metro FRMCS 5G communications pilot migration trial {today:%Y}",
+    f"metro rail platform screen door automation upgrade technology {today:%Y}",
+    f"metro railway cybersecurity operations control centre incident response {today:%Y}",
+    f"railway metro battery energy storage regenerative braking supercapacitor {today:%Y}",
+    f"metro train traction inverter SiC silicon carbide new rolling stock {today:%Y}",
+    f"metro rail open payment fare gate QR code account based ticketing {today:%Y}",
+    f"railway metro EULYNX digital interlocking standard deployment {today:%Y}",
+    f"metro extension opening trial operation new line {today:%B %Y}",
+    f"railway metro official press release technology upgrade {today:%B %Y}",
+    # 重大事故：用新聞常見詞彙補足 derailment 以外的事故型態
+    f"metro subway service suspended signal failure power outage {today:%B %Y}",
+    f"metro subway train derailment collision evacuation {today:%B %Y}",
+    f"metro rail fire smoke evacuation station incident {today:%B %Y}",
+    f"metro subway track intrusion person struck service disruption {today:%B %Y}",
+    f"metro train door fault passenger evacuation delay {today:%B %Y}",
+    f"light rail tram accident collision derailment service suspended {today:%B %Y}",
+    f"鉄道 地下鉄 事故 脱線 信号障害 運休 {today:%Y年%m月}",
+    f"지하철 사고 탈선 신호 장애 운행 중단 {today:%Y년 %m월}",
+    # 營運爭議：勞資、票價、停駛、工程延期、公眾反彈
+    f"metro subway transit strike labor dispute service disruption {today:%B %Y}",
+    f"metro subway fare increase public opposition transit authority {today:%B %Y}",
+    f"metro rail construction delay cost overrun controversy {today:%B %Y}",
+    f"metro subway long term closure replacement bus passenger complaints {today:%B %Y}",
+    f"metro transit safety crime passenger complaints operations controversy {today:%B %Y}",
+    # 地區官方與重點城市
+    f"MTR Hong Kong incident service disruption press release {today:%B %Y}",
+    f"Singapore MRT LTA SMRT disruption incident announcement {today:%B %Y}",
+    f"Japan subway railway operator incident service suspension {today:%Y年%m月}",
+    f"Korea metro subway operator incident service disruption {today:%B %Y}",
+    f"London Underground Paris Metro Berlin U-Bahn incident disruption {today:%B %Y}",
+    f"New York subway Washington Metro Chicago CTA incident disruption {today:%B %Y}",
 ]
-_NEWS_QUERY_INDICES = set(range(12, 21))  # 查詢 12~20 用 news() 更精準
+_NEWS_QUERY_INDICES = set(range(13, len(SEARCH_QUERIES) + 1))
 FALLBACK_BACKENDS = ["auto", "bing", "yahoo"]
 
 
@@ -345,6 +367,7 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
     """
     total = len(SEARCH_QUERIES)
     all_blocks: list[str] = []
+    news_timelimit = "w" if int(lookback_days) <= 7 else "m"
 
     for i, query in enumerate(SEARCH_QUERIES, 1):
         if status_text:
@@ -362,7 +385,7 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
                         if use_news:
                             results = ddgs.news(
                                 query, max_results=6,
-                                timelimit="m", backend=backend
+                                timelimit=news_timelimit, backend=backend
                             )
                         else:
                             results = ddgs.text(
@@ -428,6 +451,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 # 任務
 以下是透過「RSS 訂閱源」與「ddgs 多後端搜尋」蒐集到的國際軌道交通原始資料（涵蓋近 30 天）。
 請嚴格依照三大領域與查核原則，整理出週報（目標期間：{date_range}）。
+請先合併重複來源，再保留具公共運輸安全、工程技術、營運管理參考價值的事件；不要因為來源摘要較短就直接排除。
 
 ## ━━ 第一部分：RSS 訂閱源（Railway Gazette / IRJ 等六大媒體）━━
 {rss_results}
@@ -443,8 +467,9 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 3. **禁止舊聞充數**：超過 30 天的歷史案例一律捨棄
 4. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
 5. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
+6. **數量原則**：若原始資料足夠，至少輸出 8 則；若不足 8 則，說明是因來源或日期條件不足，而非自行補舊聞。
 
-## 三大核心監控領域
+## 三大核心主題領域
 
 ### 領域 A：技術新知（聚焦「次世代」與「首創」）
 - **信號與通訊**：GoA4、CBTC、FRMCS/5G/6G、虛擬聯結（Virtual Coupling）
@@ -459,17 +484,17 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ### 領域 C：營運爭議
 - 勞資罷工、票價政策變動、系統轉換困難或延宕
 
-## 優先監控區域
+## 優先關注區域
 日本、韓國、美國、歐洲（英德法）、新加坡、香港、澳洲
 
-## 輸出格式（每則獨立區塊，目標 5–12 則）
+## 輸出格式（每則獨立區塊，目標 8–15 則）
 
 # {report_title}
 > 資料涵蓋期間：{date_range}（技術新知可納入近 30 天）
 
 ---
 
-### 🔹 [A技術/B事故/C爭議] 國家/地區：（一句有力主標題）
+### 🔹 [技術新知/重大事故/營運爭議] 國家/地區：（一句有力主標題）
 * **發布/事件日期**：（原文發布年月日）
 * **事件摘要**：
   - （列點精要說明，3–5 點）
@@ -481,7 +506,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 
 ## 結尾（必填）
 ---
-📊 **本週統計**：共 N 則（A技術 N 則 / B事故 N 則 / C爭議 N 則）
+📊 **本週統計**：共 N 則（技術新知 N 則 / 重大事故 N 則 / 營運爭議 N 則）
 🔍 **執行搜尋次數**：RSS {len(RSS_SOURCES)} 源 + ddgs {len(SEARCH_QUERIES)} 次關鍵字搜尋
 ⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
 """
@@ -527,6 +552,56 @@ def markdown_to_html(md: str) -> str:
 </body></html>"""
 
 
+def markdown_to_pdf_bytes(md: str) -> bytes:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+    pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=36,
+        leftMargin=36,
+        topMargin=36,
+        bottomMargin=36,
+    )
+    styles = getSampleStyleSheet()
+    for style_name in ("Title", "Heading1", "Heading2", "Heading3", "BodyText"):
+        styles[style_name].fontName = "MSung-Light"
+        styles[style_name].leading = max(styles[style_name].leading, 16)
+    styles["BodyText"].fontSize = 10.5
+
+    story = []
+    for raw_line in md.splitlines():
+        line = raw_line.strip()
+        if not line or line == "---":
+            story.append(Spacer(1, 8))
+            continue
+        if line.startswith("# "):
+            story.append(Paragraph(escape(line[2:]), styles["Title"]))
+        elif line.startswith("## "):
+            story.append(Paragraph(escape(line[3:]), styles["Heading2"]))
+        elif line.startswith("### "):
+            story.append(Paragraph(escape(line[4:]), styles["Heading3"]))
+        else:
+            line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
+            line = re.sub(r"\[(.+?)\]\((https?://[^\)]+)\)", r"\1：\2", line)
+            story.append(Paragraph(escape(line), styles["BodyText"]))
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def try_markdown_to_pdf_bytes(md: str) -> bytes | None:
+    try:
+        return markdown_to_pdf_bytes(md)
+    except ModuleNotFoundError:
+        return None
+
+
 def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: str) -> bool:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = report_title
@@ -534,6 +609,15 @@ def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: st
     msg["To"]      = ", ".join(recipients)
     msg.attach(MIMEText(text, "plain", "utf-8"))
     msg.attach(MIMEText(markdown_to_html(text), "html", "utf-8"))
+    pdf_bytes = try_markdown_to_pdf_bytes(text)
+    if pdf_bytes:
+        pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")
+        pdf_part.add_header(
+            "Content-Disposition",
+            "attachment",
+            filename=f"metro_report_{today.strftime('%Y%m%d')}.pdf",
+        )
+        msg.attach(pdf_part)
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(gmail_user, gmail_pass)
@@ -621,6 +705,17 @@ if report_to_show:
     tab1, tab2 = st.tabs(["📋 排版預覽", "📝 原始文字"])
     with tab1:
         st.markdown(report_to_show)
+        pdf_bytes = try_markdown_to_pdf_bytes(report_to_show)
+        if pdf_bytes:
+            st.download_button(
+                "⬇️ 下載報告 PDF",
+                data=pdf_bytes,
+                file_name=f"metro_report_{today.strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        else:
+            st.info("PDF 套件尚未安裝；部署後會依 requirements.txt 自動啟用 PDF 下載。")
     with tab2:
         st.text_area("原始 Markdown", report_to_show, height=600)
         st.download_button(
