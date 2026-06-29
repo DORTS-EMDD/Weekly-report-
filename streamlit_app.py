@@ -200,19 +200,35 @@ with st.expander("🔑 金鑰狀態", expanded=not bool(api_key)):
 
 
 # ── 搜尋關鍵字 ────────────────────────────────────────
+# 20 組精準查詢詞（技術新知 / 事故分析 / 營運爭議 / 地區官方）
+# timelimit="m" 近一個月廣撈，Gemini 再嚴格篩選 7 天 / 30 天
 SEARCH_QUERIES = [
-    f"metro OR subway accident OR incident {today.strftime('%B %Y')}",
-    f"CBTC OR FRMCS OR 5G railway {today.strftime('%B %Y')}",
-    f"metro strike OR fare hike {today.strftime('%B %Y')}",
-    f"digital twin OR AI predictive maintenance railway {today.strftime('%B %Y')}",
-    f"SiC traction OR supercapacitor train {today.strftime('%B %Y')}",
-    f"鉄道 事故 OR 遅延 {today.strftime('%Y年%m月')}",
-    f"지하철 사고 OR 파업 {today.strftime('%Y년%m월')}",
-    f"metro derailment OR signal failure {today.strftime('%B %Y')}",
-    f"EULYNX OR virtual train coupling {today.strftime('%Y')}",
-    f"MRT Singapore incident OR Hong Kong MTR {today.strftime('%B %Y')}",
-    f"subway labor dispute OR strike {today.strftime('%B %Y')}",
-    f"hydrogen train OR green rail energy {today.strftime('%B %Y')}",
+    # A. 技術新知：次世代信號與通訊
+    f"CBTC GoA4 autonomous train signalling deployment {today.strftime('%Y')}",
+    f"FRMCS 5G railway communication migration trial {today.strftime('%Y')}",
+    f"virtual coupling train platooning ETCS {today.strftime('%Y')}",
+    f"EULYNX interlocking standard railway Europe {today.strftime('%Y')}",
+    # B. 技術新知：智慧化與數位雙生
+    f"digital twin railway metro predictive maintenance {today.strftime('%Y')}",
+    f"edge AI artificial intelligence metro fault detection {today.strftime('%Y')}",
+    f"big data cybersecurity railway operations {today.strftime('%Y')}",
+    # C. 技術新知：硬體與能源
+    f"SiC silicon carbide traction inverter metro train {today.strftime('%Y')}",
+    f"supercapacitor regenerative braking energy storage metro {today.strftime('%Y')}",
+    f"hydrogen fuel cell train test pilot route {today.strftime('%Y')}",
+    f"new rolling stock EMU electric train first run {today.strftime('%Y')}",
+    # D. 事故分析
+    f"metro subway train derailment accident {today.strftime('%B %Y')}",
+    f"metro subway signal failure power outage disruption {today.strftime('%B %Y')}",
+    f"railway train door mechanical fault delay {today.strftime('%B %Y')}",
+    f"鉄道 事故 脱線 信号障害 遅延 {today.strftime('%Y年%m月')}",
+    f"지하철 사고 탈선 신호 장애 {today.strftime('%Y년 %m월')}",
+    # E. 營運爭議
+    f"metro subway transit workers strike labor dispute {today.strftime('%B %Y')}",
+    f"subway fare increase transit authority policy {today.strftime('%B %Y')}",
+    # F. 地區官方
+    f"MTR Hong Kong MRT Singapore incident announcement {today.strftime('%B %Y')}",
+    f"railway metro official press release news Japan Korea Europe {today.strftime('%B %Y')}",
 ]
 
 
@@ -226,7 +242,7 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
             if progress_bar:
                 progress_bar.progress(i / len(SEARCH_QUERIES))
             try:
-                results = list(ddgs.text(query, max_results=6, timelimit="w"))
+                results = list(ddgs.text(query, max_results=8, timelimit="m"))
                 if results:
                     block_lines = [f"【搜尋 {i}】{query}"]
                     for r in results:
@@ -238,7 +254,7 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
                     all_blocks.append("\n".join(block_lines))
                 else:
                     all_blocks.append(f"【搜尋 {i}】{query}\n  （本次無結果）")
-                time.sleep(0.8)
+                time.sleep(1.2)
             except Exception as e:
                 all_blocks.append(f"【搜尋 {i}】{query}\n  ⚠️ 搜尋失敗：{e}")
     return "\n\n".join(all_blocks)
@@ -248,51 +264,64 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
 def build_prompt(search_results: str) -> str:
     weekday = ['一','二','三','四','五','六','日'][today.weekday()]
     return f"""
-# 任務
-你是專業捷運機電技術分析師。以下是透過 DuckDuckGo 搜尋引擎
-針對 12 組關鍵字所蒐集到的最新國際軌道交通資訊（過去 7 天）。
-請根據這些搜尋結果，整理出涵蓋 {date_range} 的國際捷運技術週報。
+# 角色
+你是專業捷運機電技術分析師，服務對象為台北市政府捷運工程局處長及技術同仁。
 
-## 搜尋結果（原始資料）
+# 任務
+以下是透過 DuckDuckGo 搜尋引擎（近一個月範圍）蒐集到的國際軌道交通原始資料。
+請嚴格依照三大領域與查核原則，整理出週報（目標涵蓋期間：{date_range}）。
+
+## 搜尋結果（原始資料，請分析整理，勿直接複製）
 {search_results}
 
-## ⚠️ 最高查核原則（防幻覺）
-1. **只使用上方提供的搜尋結果**，禁止自行編造未出現的新聞
-2. **雙重日期查核**：「發布日」與「事件日」皆須在 {date_range} 內
-3. **禁止舊聞充數**：舊案調查報告、歷史回顧一律捨棄
-4. **寧缺勿濫**：無符合條件者回報「本週無符合條件之重大異動」
-5. **目標數量**：符合條件者請盡量納入，目標 8–15 則，請勿人為縮減
+## ⚠️ 最高查核原則（零容忍，違反即捨棄該則）
+1. **只使用搜尋結果中出現的資訊**，禁止自行編造
+2. **日期判斷（依類別分級）**：
+   - 事故類、爭議類：「新聞發布日」與「事件發生日」皆須在 {date_range} 內
+   - 技術新知類：「新聞發布日」或「技術發表/測試日」在過去 30 天內即可納入
+3. **禁止舊聞充數**：舊案調查報告、歷史事故回顧（超過 30 天）一律捨棄
+4. **無付費牆**：確保來源 URL 可公開存取，付費牆來源捨棄
+5. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
 
-## 核心監控領域
-1. **技術新知**：GoA4、CBTC、FRMCS/5G/6G、虛擬聯結、AI維修、數位雙生、SiC牽引、超級電容、氫能、EULYNX
-2. **事故分析**：出軌、號誌故障、機電異常、延誤（分析根因）
-3. **營運爭議**：勞資罷工、票價政策、系統轉換延宕
+## 三大核心監控領域
+
+### 領域 A：技術新知（聚焦「次世代」與「首創」）
+- **信號與通訊**：GoA4、CBTC、FRMCS/5G/6G、虛擬聯結（Virtual Coupling）
+- **智慧化與數據**：AI 預防性維修、數位雙生（Digital Twin）、邊緣運算（Edge AI）、資安
+- **硬體與能源**：SiC 牽引變流器、超級電容回生儲能、氫能列車、新型電聯車首發
+- **標準與政策**：EULYNX、綠能減碳政策、重大建設進度
+
+### 領域 B：事故分析（根因導向）
+- 出軌、號誌故障、機電異常、延誤
+- 每則須分析根因：人為 / 系統 / 環境 / 機電介面
+
+### 領域 C：營運爭議
+- 勞資罷工、票價政策變動、系統轉換困難或延宕
 
 ## 優先監控區域
-日本、韓國、美國、歐洲、新加坡、香港、澳洲
+日本、韓國、美國、歐洲（英德法）、新加坡、香港、澳洲
 
-## 輸出格式
+## 輸出格式（每則獨立區塊，目標 5–12 則）
 
 # {report_title}
-> 資料涵蓋期間：{date_range}
+> 資料涵蓋期間：{date_range}（技術新知可納入近 30 天）
 
 ---
 
-### 🔹 [類別] 國家/地區：（一句有力的主標題）
+### 🔹 [A技術/B事故/C爭議] 國家/地區：（一句有力主標題）
 * **發布/事件日期**：（原文發布年月日）
 * **事件摘要**：
-  - （列點精要說明）
-* **技術關鍵字**：（英漢對照）
+  - （列點精要說明，3–5 點）
+* **技術關鍵字**：（英漢對照，例：FRMCS / 未來鐵道行動通訊系統）
 * **資料來源**：[來源名稱](完整 https:// 網址)
-* **【臺北捷運啟示】**：（具體參考；若無關聯請寫「暫無直接關聯」）
+* **【臺北捷運啟示】**：（對北捷系統的具體參考價值；無關聯請寫「暫無直接關聯」）
 
 ---
-（以上區塊重複，直到所有符合條件的新聞都列完）
 
 ## 結尾（必填）
 ---
-📊 **本週統計**：共 N 則
-🔍 **執行搜尋次數**：12 次（DuckDuckGo）
+📊 **本週統計**：共 N 則（A技術 N 則 / B事故 N 則 / C爭議 N 則）
+🔍 **執行搜尋次數**：本次共執行 {len(SEARCH_QUERIES)} 次（DuckDuckGo）
 ⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
 """
 
