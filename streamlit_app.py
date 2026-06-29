@@ -230,7 +230,7 @@ with st.sidebar:
 
     selected_regions = []
 
-    with st.expander("選擇國家/地區", expanded=True):
+    with st.expander("選擇國家", expanded=False):
         for region in ADVANCED_REGIONS:
             checked = region in st.session_state["selected_regions_state"]
             if st.checkbox(region, value=checked, key=f"region_{region}"):
