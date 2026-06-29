@@ -36,9 +36,7 @@ NEWS_LOOKBACK_DAYS = int(os.environ.get("NEWS_LOOKBACK_DAYS", "7"))
 
 # GitHub 排程版預設聚焦制度透明、軌道技術成熟且對臺北捷運較有借鏡性的國家/地區。
 ADVANCED_REGIONS = [
-    "日本", "韓國", "新加坡", "香港",
-    "美國", "加拿大", "英國", "法國",
-    "德國", "荷蘭", "瑞士", "澳洲",
+    "日本", "韓國", "新加坡", "香港", "德國",
 ]
 
 REGION_SEARCH_TERMS = {
