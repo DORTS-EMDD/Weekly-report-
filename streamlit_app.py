@@ -102,35 +102,6 @@ st.markdown("""
   .stat-num { font-size: 2rem; font-weight: 700; color: #1a3a5c; }
   .stat-label { color: #666; font-size: 0.85rem; }
   div[data-testid="stVerticalBlock"] > div:has(.main-title) { gap: .35rem; }
-  [data-testid="stSidebar"] div[data-baseweb="select"] > div {
-    flex-wrap: wrap !important;
-    align-items: flex-start !important;
-    min-height: 44px !important;
-    height: auto !important;
-    overflow: visible !important;
-  }
-
-  [data-testid="stSidebar"] [data-baseweb="tag"] {
-    display: inline-flex !important;
-    width: auto !important;
-    min-width: 52px !important;
-    max-width: 100% !important;
-    min-height: 28px !important;
-    height: auto !important;
-    margin: 3px 4px !important;
-    padding: 2px 8px !important;
-    align-items: center !important;
-    overflow: visible !important;
-  }
-
-  [data-testid="stSidebar"] [data-baseweb="tag"] span {
-    display: inline-block !important;
-    min-width: 28px !important;
-    line-height: 1.5 !important;
-    white-space: nowrap !important;
-    overflow: visible !important;
-    text-overflow: clip !important;
-  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -185,13 +156,34 @@ with st.sidebar:
         step=1,
         help="事故與營運爭議依此期間篩選；技術新知仍可納入近 30 天資料。",
     )
-selected_regions = st.multiselect(
-    "重點國家/地區",
-    ADVANCED_REGIONS,
-    default=["日本", "韓國", "新加坡", "香港", "美國", "英國", "法國", "德國", "澳洲"],
-    label_visibility="visible",
-)
-st.caption("已選：" + "、".join(selected_regions))
+    st.markdown("### 🌏 重點國家/地區")
+
+    default_regions = ["日本", "韓國", "新加坡", "香港", "美國", "英國", "法國", "德國", "澳洲"]
+
+    if "selected_regions_state" not in st.session_state:
+        st.session_state["selected_regions_state"] = default_regions.copy()
+
+    col_all, col_clear = st.columns(2)
+    if col_all.button("全選", use_container_width=True):
+        st.session_state["selected_regions_state"] = ADVANCED_REGIONS.copy()
+
+    if col_clear.button("清除", use_container_width=True):
+        st.session_state["selected_regions_state"] = []
+
+    selected_regions = []
+
+    with st.expander("選擇國家/地區", expanded=True):
+        for region in ADVANCED_REGIONS:
+            checked = region in st.session_state["selected_regions_state"]
+            if st.checkbox(region, value=checked, key=f"region_{region}"):
+                selected_regions.append(region)
+
+    st.session_state["selected_regions_state"] = selected_regions
+
+    if selected_regions:
+        st.caption("已選：" + "、".join(selected_regions))
+    else:
+        st.warning("請至少選擇一個國家/地區。")
 
     st.markdown("### 📬 收件設定")
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
