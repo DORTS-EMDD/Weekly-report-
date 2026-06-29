@@ -117,6 +117,42 @@ st.markdown("""
     color: #111111 !important;
     background-color: #e2e8f0 !important;
   }
+
+  /* ── Expander 標題文字（白底上顯示白字問題） ── */
+  [data-testid="stSidebar"] [data-testid="stExpander"] {
+    border: 1px solid rgba(255,255,255,0.25) !important;
+    border-radius: 6px !important;
+    background-color: rgba(255,255,255,0.08) !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stExpander"] summary,
+  [data-testid="stSidebar"] [data-testid="stExpander"] summary p,
+  [data-testid="stSidebar"] [data-testid="stExpander"] summary span,
+  [data-testid="stSidebar"] details summary,
+  [data-testid="stSidebar"] details summary * {
+    color: white !important;
+    background-color: transparent !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+    background-color: rgba(255,255,255,0.12) !important;
+  }
+
+  /* ── number_input +/- 按鈕配色 ── */
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"],
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"] {
+    background-color: #2c5f8a !important;
+    color: white !important;
+    border-color: rgba(255,255,255,0.3) !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"]:hover,
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"]:hover {
+    background-color: #3a7ab5 !important;
+    color: white !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"] svg,
+  [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"] svg {
+    fill: white !important;
+    stroke: white !important;
+  }
 </style>
 """, unsafe_allow_html=True)
 
