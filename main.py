@@ -26,8 +26,8 @@ GMAIL_APP_PASS = os.environ["GMAIL_APP_PASS"]
 RECIPIENTS     = os.environ["RECIPIENTS"]        # 逗號分隔
 
 # ── 模型設定 ──────────────────────────────────────────
-MODEL_NORMAL   = "gemini-2.0-flash-lite"   # 預設：輕量省配額
-MODEL_POWERFUL = "gemini-2.0-flash"        # 強化：細節更完整
+MODEL_NORMAL   = "gemini-3.1-flash-lite"   # 預設：輕量省配額
+MODEL_POWERFUL = "gemini-3.5-flash"        # 強化：細節更完整
 
 # ── 日期 ──────────────────────────────────────────────
 today      = datetime.date.today()

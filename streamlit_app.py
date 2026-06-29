@@ -49,21 +49,32 @@ st.markdown("""
   [data-testid="stSidebar"] textarea {
     color: #111 !important; background-color: #f5f5f5 !important;
   }
-  /* 側邊欄 selectbox 已選取值 */
-  [data-testid="stSidebar"] .stSelectbox > div > div {
-    color: #111 !important; background-color: #f5f5f5 !important;
+  /* ── Selectbox 已選取值（sidebar 內）── */
+  /* 用 data-baseweb 選到 select 觸發器內所有子元素，覆蓋白字 */
+  [data-testid="stSidebar"] [data-baseweb="select"],
+  [data-testid="stSidebar"] [data-baseweb="select"] *,
+  [data-testid="stSidebar"] [data-baseweb="select"] div,
+  [data-testid="stSidebar"] [data-baseweb="select"] span,
+  [data-testid="stSidebar"] [data-baseweb="select"] input,
+  [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] div,
+  [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] span {
+    color: #111111 !important;
+    background-color: #f5f5f5 !important;
   }
-  /* 下拉選單彈出清單（在 sidebar 之外渲染，需全域設定） */
-  [data-baseweb="popover"] [data-baseweb="menu"] li,
-  [data-baseweb="popover"] [role="option"],
+  /* ── 下拉清單彈出層（portal，在 sidebar DOM 之外） ── */
   [data-baseweb="option"],
-  ul[data-baseweb="menu"] li {
+  [data-baseweb="option"] *,
+  [role="option"],
+  [data-baseweb="menu"] li,
+  [data-baseweb="popover"] li,
+  [data-baseweb="popover"] [role="option"] {
     color: #111111 !important;
     background-color: #ffffff !important;
   }
   [data-baseweb="option"]:hover,
-  [data-baseweb="option"][aria-selected="true"] {
-    background-color: #e8f0fe !important;
+  [data-baseweb="option"][aria-selected="true"],
+  [role="option"]:hover {
+    background-color: #dbeafe !important;
     color: #111111 !important;
   }
   .main-title {
@@ -102,11 +113,11 @@ with st.sidebar:
     st.markdown("### ⚙️ 模型設定")
     model_choice = st.selectbox(
         "選擇 Gemini 模型",
-        ["gemini-2.0-flash-lite", "gemini-2.0-flash"],
+        ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
         index=0,
         help=(
-            "gemini-2.0-flash-lite：輕量版，速度快、省配額。\n"
-            "gemini-2.0-flash：接近 Pro 等級，細節更完整。"
+            "gemini-3.1-flash-lite：輕量版，速度快、省配額。\n"
+            "gemini-3.5-flash：接近 Pro 等級，細節更完整。"
         ),
     )
 
