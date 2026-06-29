@@ -1,23 +1,26 @@
 """
-國際捷運技術週報 — Streamlit 競賽展示介面 v3
-金鑰來源：Streamlit Secrets（不硬碼在程式中）
+國際捷運技術週報 — Streamlit 展示介面 v4
+- 搜尋改用 DuckDuckGo（無 Google API 配額問題）
+- 收件人欄位使用 session_state 保留編輯狀態
+- 下拉選單文字顯示修正（黑字）
 """
 
 import os
 import re
+import time
 import datetime
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import streamlit as st
+from duckduckgo_search import DDGS
 from google import genai
 from google.genai import types
 
+
 # ══════════════════════════════════════════════════════
-#  金鑰讀取（順序：Streamlit Secrets → 環境變數）
-#  ⚠️ 請勿在此處直接填入金鑰！
-#  設定方式：Streamlit Cloud → App Settings → Secrets
+#  金鑰讀取
 # ══════════════════════════════════════════════════════
 def get_secret(key: str, default: str = "") -> str:
     try:
@@ -46,8 +49,22 @@ st.markdown("""
   [data-testid="stSidebar"] textarea {
     color: #111 !important; background-color: #f5f5f5 !important;
   }
+  /* 側邊欄 selectbox 已選取值 */
   [data-testid="stSidebar"] .stSelectbox > div > div {
     color: #111 !important; background-color: #f5f5f5 !important;
+  }
+  /* 下拉選單彈出清單（在 sidebar 之外渲染，需全域設定） */
+  [data-baseweb="popover"] [data-baseweb="menu"] li,
+  [data-baseweb="popover"] [role="option"],
+  [data-baseweb="option"],
+  ul[data-baseweb="menu"] li {
+    color: #111111 !important;
+    background-color: #ffffff !important;
+  }
+  [data-baseweb="option"]:hover,
+  [data-baseweb="option"][aria-selected="true"] {
+    background-color: #e8f0fe !important;
+    color: #111111 !important;
   }
   .main-title {
     font-size: 2rem; font-weight: 700; color: #1a3a5c;
@@ -85,21 +102,32 @@ with st.sidebar:
     st.markdown("### ⚙️ 模型設定")
     model_choice = st.selectbox(
         "選擇 Gemini 模型",
-        ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
+        ["gemini-2.0-flash-lite", "gemini-2.0-flash"],
         index=0,
         help=(
-            "gemini-3.1-flash-lite：輕量版，速度快、省配額。\n"
-            "gemini-3.5-flash：接近 Pro 等級，細節更完整。"
+            "gemini-2.0-flash-lite：輕量版，速度快、省配額。\n"
+            "gemini-2.0-flash：接近 Pro 等級，細節更完整。"
         ),
     )
 
     st.markdown("### 📬 收件設定")
+
+    # ── 收件人：使用 session_state 保留跨按鈕點擊的編輯狀態 ──
+    # 初次載入時從 Secrets 取預設值；之後的 rerun 保留使用者輸入
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
+    if "recipients_text" not in st.session_state:
+        st.session_state["recipients_text"] = default_recipients
+
     recipient_input = st.text_area(
         "收件信箱（每行一個）",
-        value=default_recipients,
+        key="recipients_text",          # 綁定 session_state，點按鈕後不會被清空
         placeholder="pe9875@gov.taipei\n10983@gov.taipei",
         height=90,
+    )
+    st.caption(
+        "💡 **新增收件人**：直接在上方輸入框換行追加即可，"
+        "本次 session 有效。\n"
+        "若要永久保存，請至 **Streamlit Secrets** 更新 `DEFAULT_RECIPIENTS`。"
     )
 
     st.markdown("---")
@@ -111,23 +139,23 @@ with st.sidebar:
 - 📧 自動寄送至公務信箱
     """)
     st.markdown("---")
-    st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統 v3")
+    st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統 v4")
 
 # ── 主畫面 ──────────────────────────────────────────
 st.markdown('<div class="main-title">🚇 國際捷運技術週報 AI 自動產生系統</div>',
             unsafe_allow_html=True)
 st.markdown(
     f'<div class="subtitle">資料涵蓋期間：{week_start.strftime("%Y/%m/%d")} – '
-    f'{today.strftime("%Y/%m/%d")} ｜ 使用模型：{model_choice}</div>',
+    f'{today.strftime("%Y/%m/%d")} ｜ 使用模型：{model_choice} ｜ 搜尋引擎：DuckDuckGo</div>',
     unsafe_allow_html=True,
 )
 
 c1, c2, c3, c4 = st.columns(4)
 for col, num, label in [
-    (c1, "3",  "監控領域"),
-    (c2, "7",  "監控國家/地區"),
-    (c3, "12+","每次搜尋次數"),
-    (c4, "週一","自動寄送週期"),
+    (c1, "3",   "監控領域"),
+    (c2, "7",   "監控國家/地區"),
+    (c3, "12+", "每次搜尋次數"),
+    (c4, "週一", "自動寄送週期"),
 ]:
     col.markdown(
         f'<div class="stat-card"><div class="stat-num">{num}</div>'
@@ -154,43 +182,79 @@ with st.expander("🔑 金鑰狀態", expanded=not bool(api_key)):
         金鑰未設定。請至 Streamlit Cloud → App Settings → Secrets 填入：<br><br>
         <code>GEMINI_API_KEY = "你的金鑰"</code><br>
         <code>GMAIL_USER = "yourname@gmail.com"</code><br>
-        <code>GMAIL_APP_PASS = "xxxx xxxx xxxx xxxx"</code>
+        <code>GMAIL_APP_PASS = "xxxx xxxx xxxx xxxx"</code><br>
+        <code>DEFAULT_RECIPIENTS = "收件人1@gov.taipei,收件人2@gov.taipei"</code>
         </div>
         """, unsafe_allow_html=True)
 
 
+# ── 搜尋關鍵字 ────────────────────────────────────────
+SEARCH_QUERIES = [
+    f"metro OR subway accident OR incident {today.strftime('%B %Y')}",
+    f"CBTC OR FRMCS OR 5G railway {today.strftime('%B %Y')}",
+    f"metro strike OR fare hike {today.strftime('%B %Y')}",
+    f"digital twin OR AI predictive maintenance railway {today.strftime('%B %Y')}",
+    f"SiC traction OR supercapacitor train {today.strftime('%B %Y')}",
+    f"鉄道 事故 OR 遅延 {today.strftime('%Y年%m月')}",
+    f"지하철 사고 OR 파업 {today.strftime('%Y년%m월')}",
+    f"metro derailment OR signal failure {today.strftime('%B %Y')}",
+    f"EULYNX OR virtual train coupling {today.strftime('%Y')}",
+    f"MRT Singapore incident OR Hong Kong MTR {today.strftime('%B %Y')}",
+    f"subway labor dispute OR strike {today.strftime('%B %Y')}",
+    f"hydrogen train OR green rail energy {today.strftime('%B %Y')}",
+]
+
+
+def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
+    """執行 12 組 DuckDuckGo 搜尋，回傳合併結果字串"""
+    all_blocks = []
+    with DDGS() as ddgs:
+        for i, query in enumerate(SEARCH_QUERIES, 1):
+            if status_text:
+                status_text.text(f"🔍 搜尋 {i:02d}/12：{query[:50]}...")
+            if progress_bar:
+                progress_bar.progress(i / len(SEARCH_QUERIES))
+            try:
+                results = list(ddgs.text(query, max_results=6, timelimit="w"))
+                if results:
+                    block_lines = [f"【搜尋 {i}】{query}"]
+                    for r in results:
+                        block_lines.append(
+                            f"  標題：{r.get('title','')}\n"
+                            f"  摘要：{r.get('body','')}\n"
+                            f"  連結：{r.get('href','')}"
+                        )
+                    all_blocks.append("\n".join(block_lines))
+                else:
+                    all_blocks.append(f"【搜尋 {i}】{query}\n  （本次無結果）")
+                time.sleep(0.8)
+            except Exception as e:
+                all_blocks.append(f"【搜尋 {i}】{query}\n  ⚠️ 搜尋失敗：{e}")
+    return "\n\n".join(all_blocks)
+
+
 # ── Prompt 建立 ───────────────────────────────────────
-def build_prompt() -> str:
+def build_prompt(search_results: str) -> str:
     weekday = ['一','二','三','四','五','六','日'][today.weekday()]
     return f"""
 # 任務
-你是專業捷運機電技術分析師。請使用內建的 Google Search 工具，
-在今日（{today.strftime('%Y年%m月%d日')}）針對下列 12 組關鍵字各執行一次獨立搜尋，
-產出涵蓋過去 7 天（{date_range}）的國際軌道交通重大資訊週報。
+你是專業捷運機電技術分析師。以下是透過 DuckDuckGo 搜尋引擎
+針對 12 組關鍵字所蒐集到的最新國際軌道交通資訊（過去 7 天）。
+請根據這些搜尋結果，整理出涵蓋 {date_range} 的國際捷運技術週報。
 
-## 強制執行的 12 次搜尋
-1. metro OR subway accident OR incident {today.strftime('%B %Y')}
-2. CBTC OR FRMCS OR 5G railway {today.strftime('%B %Y')}
-3. metro strike OR fare hike {today.strftime('%B %Y')}
-4. digital twin OR AI predictive maintenance railway {today.strftime('%B %Y')}
-5. SiC traction OR supercapacitor train {today.strftime('%B %Y')}
-6. 鉄道 事故 OR 遅延 {today.strftime('%Y年%m月')}
-7. 지하철 사고 OR 파업 {today.strftime('%Y년%m월')}
-8. metro derailment OR signal failure {today.strftime('%B %Y')}
-9. EULYNX OR virtual train coupling {today.strftime('%Y')}
-10. MRT Singapore incident OR Hong Kong MTR {today.strftime('%B %Y')}
-11. subway labor dispute OR strike {today.strftime('%B %Y')}
-12. hydrogen train OR green rail energy {today.strftime('%B %Y')}
+## 搜尋結果（原始資料）
+{search_results}
 
-## ⚠️ 最高查核原則（防幻覺，違反整份作廢）
-1. **雙重日期查核**：「新聞發布日」與「事件實際發生日」皆須在 {date_range} 內
-2. **禁止舊聞充數**：舊案調查報告、歷史回顧一律捨棄
-3. **免費公開原則**：禁止引用付費牆網站；優先使用官方新聞稿
-4. **寧缺勿濫**：無符合條件者回報「系統監測正常，本週無符合條件之重大異動」
+## ⚠️ 最高查核原則（防幻覺）
+1. **只使用上方提供的搜尋結果**，禁止自行編造未出現的新聞
+2. **雙重日期查核**：「發布日」與「事件日」皆須在 {date_range} 內
+3. **禁止舊聞充數**：舊案調查報告、歷史回顧一律捨棄
+4. **寧缺勿濫**：無符合條件者回報「本週無符合條件之重大異動」
+5. **目標數量**：符合條件者請盡量納入，目標 8–15 則，請勿人為縮減
 
 ## 核心監控領域
 1. **技術新知**：GoA4、CBTC、FRMCS/5G/6G、虛擬聯結、AI維修、數位雙生、SiC牽引、超級電容、氫能、EULYNX
-2. **事故分析**：出軌、號誌故障、機電異常、延誤（分析根因：人為/系統/環境/機電介面）
+2. **事故分析**：出軌、號誌故障、機電異常、延誤（分析根因）
 3. **營運爭議**：勞資罷工、票價政策、系統轉換延宕
 
 ## 優先監控區域
@@ -212,11 +276,12 @@ def build_prompt() -> str:
 * **【臺北捷運啟示】**：（具體參考；若無關聯請寫「暫無直接關聯」）
 
 ---
+（以上區塊重複，直到所有符合條件的新聞都列完）
 
 ## 結尾（必填）
 ---
 📊 **本週統計**：共 N 則
-🔍 **執行搜尋次數**：N 次
+🔍 **執行搜尋次數**：12 次（DuckDuckGo）
 ⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
 """
 
@@ -257,7 +322,7 @@ def markdown_to_html(md: str) -> str:
   strong{{color:#1a3a5c}}
   .footer{{background:#f5f8fc;padding:12px;border-radius:6px;margin-top:24px;font-size:.9em;color:#666}}
 </style></head><body><p>{h}</p>
-<div class="footer">📧 AI 自動產生 | Gemini + Google Search | 僅供參考，請交叉驗證原始來源</div>
+<div class="footer">📧 AI 自動產生 | Gemini + DuckDuckGo | 僅供參考，請交叉驗證原始來源</div>
 </body></html>"""
 
 
@@ -288,42 +353,52 @@ if generate_btn or send_btn:
     if not api_key:
         st.error("❌ Gemini API Key 未設定，請至 Streamlit Cloud App Settings → Secrets 填入")
     else:
-        with st.spinner(f"🔍 {model_choice} 正在搜尋國際捷運資訊（約 30–90 秒）..."):
-            try:
-                client   = genai.Client(api_key=api_key)
-                response = client.models.generate_content(
-                    model=model_choice,
-                    contents=build_prompt(),
-                    config=types.GenerateContentConfig(
-                        tools=[types.Tool(google_search=types.GoogleSearch())],
-                        temperature=0.2,
-                    ),
-                )
-                report_text = extract_text(response)
+        progress_bar = st.progress(0)
+        status_text  = st.empty()
 
-                os.makedirs("reports", exist_ok=True)
-                with open("reports/latest.md", "w", encoding="utf-8") as f:
-                    f.write(report_text)
-                with open(f"reports/report_{today.strftime('%Y%m%d')}.md", "w", encoding="utf-8") as f:
-                    f.write(report_text)
+        try:
+            # Step 1：DuckDuckGo 搜尋
+            status_text.text("🔍 開始 DuckDuckGo 搜尋...")
+            search_results = run_duckduckgo_searches(progress_bar, status_text)
 
-                st.session_state["latest_report"] = report_text
-                st.success("✅ 報告產生完成！")
+            # Step 2：Gemini 分析
+            progress_bar.progress(1.0)
+            status_text.text(f"🤖 {model_choice} 正在分析整理（約 20–60 秒）...")
+            client   = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=model_choice,
+                contents=build_prompt(search_results),
+                config=types.GenerateContentConfig(temperature=0.2),
+            )
+            report_text = extract_text(response)
 
-                if send_btn:
-                    recipients = [r.strip() for r in recipient_input.splitlines() if r.strip()]
-                    if not recipients:
-                        st.warning("⚠️ 請在左側填入收件信箱")
-                    elif not gmail_user or not gmail_pass:
-                        st.warning("⚠️ GMAIL_USER 或 GMAIL_APP_PASS 未在 Secrets 中設定")
-                    else:
-                        ok = send_email_func(report_text, recipients, gmail_user, gmail_pass)
-                        if ok:
-                            st.success(f"📧 已成功寄送至：{', '.join(recipients)}")
+            os.makedirs("reports", exist_ok=True)
+            with open("reports/latest.md", "w", encoding="utf-8") as f:
+                f.write(report_text)
+            with open(f"reports/report_{today.strftime('%Y%m%d')}.md", "w", encoding="utf-8") as f:
+                f.write(report_text)
 
-            except Exception as e:
-                st.error(f"❌ 發生錯誤：{e}")
-                st.info("請確認 Gemini API Key 正確，且帳號配額未超限")
+            st.session_state["latest_report"] = report_text
+            progress_bar.empty()
+            status_text.empty()
+            st.success("✅ 報告產生完成！")
+
+            if send_btn:
+                recipients = [r.strip() for r in recipient_input.splitlines() if r.strip()]
+                if not recipients:
+                    st.warning("⚠️ 請在左側填入收件信箱")
+                elif not gmail_user or not gmail_pass:
+                    st.warning("⚠️ GMAIL_USER 或 GMAIL_APP_PASS 未在 Secrets 中設定")
+                else:
+                    ok = send_email_func(report_text, recipients, gmail_user, gmail_pass)
+                    if ok:
+                        st.success(f"📧 已成功寄送至：{', '.join(recipients)}")
+
+        except Exception as e:
+            progress_bar.empty()
+            status_text.empty()
+            st.error(f"❌ 發生錯誤：{e}")
+            st.info("請確認 Gemini API Key 正確，且帳號配額未超限")
 
 # ── 報告顯示區 ──────────────────────────────────────
 st.markdown("---")
@@ -359,13 +434,13 @@ else:
 with st.expander("📐 系統架構說明"):
     st.markdown("""
 ```
-GitHub Actions（每週一 08:00 台灣時間 / 00:00 UTC，雲端自動執行）
+GitHub Actions（排程時間可於 .github/workflows/weekly.yml 修改）
         ↓
     main.py
-        ├── Gemini API（gemini-3.1-flash-lite / gemini-3.5-flash）
-        │       └── Google Search Grounding（Gemini 內建，免費 5,000次/月）
-        │               ├── 12 組關鍵字 × 英/日/韓語搜尋
-        │               └── 整理成繁體中文週報
+        ├── DuckDuckGo Search（免費、無配額限制）
+        │       └── 12 組關鍵字 × 英/日/韓語搜尋
+        ├── Gemini API（gemini-2.0-flash-lite / gemini-2.0-flash）
+        │       └── 分析整理為繁體中文週報
         └── Gmail SMTP → 自動寄送至公務信箱
 ```
     """)
@@ -375,7 +450,7 @@ GitHub Actions（每週一 08:00 台灣時間 / 00:00 UTC，雲端自動執行�
 **✅ 完全免費**
 - GitHub Actions：2,000 分鐘/月
 - Gemini Flash：免費配額每日足用
-- Google Search Grounding：5,000 次/月
+- DuckDuckGo Search：無配額限制
 - Gmail SMTP：無限制
 - Streamlit Cloud：免費部署
         """)
