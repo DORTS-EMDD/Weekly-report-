@@ -102,6 +102,22 @@ st.markdown("""
   .stat-num { font-size: 2rem; font-weight: 700; color: #1a3a5c; }
   .stat-label { color: #666; font-size: 0.85rem; }
   div[data-testid="stVerticalBlock"] > div:has(.main-title) { gap: .35rem; }
+    [data-testid="stSidebar"] [data-baseweb="tag"] {
+    min-height: 28px !important;
+    height: auto !important;
+    padding: 2px 8px !important;
+    align-items: center !important;
+  }
+
+  [data-testid="stSidebar"] [data-baseweb="tag"] span {
+    line-height: 1.4 !important;
+    white-space: nowrap !important;
+    overflow: visible !important;
+  }
+
+  [data-testid="stSidebar"] [data-baseweb="select"] {
+    min-height: 44px !important;
+  }
 </style>
 """, unsafe_allow_html=True)
 
