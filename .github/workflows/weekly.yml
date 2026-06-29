@@ -1,15 +1,15 @@
 name: 每週捷運技術週報自動寄送
 
 on:
-  # 每週一 00:00 UTC = 台灣時間週一早上 08:00
+  # 每週一 00:00 UTC = 台灣時間週一 08:00
   schedule:
     - cron: '0 0 * * 1'
 
-  # ✅ 手動觸發（競賽展示用，可在 GitHub Actions 頁面按按鈕）
+  # 手動觸發（競賽展示用）
   workflow_dispatch:
     inputs:
       use_powerful_model:
-        description: '使用較強模型 gemini-3.5-flash（預設用 gemini-3.1-flash-lite）'
+        description: '使用較強模型 gemini-3.5-flash（否則用 gemini-3.1-flash-lite）'
         required: false
         default: 'false'
         type: choice
@@ -34,7 +34,7 @@ jobs:
       - name: 📦 安裝套件
         run: pip install -r requirements.txt
 
-      - name: 🤖 產生報告並寄信
+      - name: 🤖 產生報告並寄信（含自動重試）
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GMAIL_USER:     ${{ secrets.GMAIL_USER }}
@@ -46,24 +46,24 @@ jobs:
             CMD="python main.py --powerful"
           fi
 
-          # 遇到 429（配額暫時超限）時自動重試，最多 3 次，每次等待加倍
+          # 遇到 429 配額超限時自動重試，最多 3 次，間隔加倍
           MAX_RETRY=3
           WAIT=60
           for i in $(seq 1 $MAX_RETRY); do
             echo "▶ 第 $i 次嘗試..."
             $CMD && break
-            EXIT_CODE=$?
+            EXIT=$?
             if [ $i -lt $MAX_RETRY ]; then
-              echo "⚠️ 失敗（exit $EXIT_CODE），等待 ${WAIT} 秒後重試..."
+              echo "⚠️ 失敗（exit $EXIT），等待 ${WAIT}s 後重試..."
               sleep $WAIT
               WAIT=$((WAIT * 2))
             else
-              echo "❌ 已重試 $MAX_RETRY 次，仍然失敗"
-              exit $EXIT_CODE
+              echo "❌ 重試 $MAX_RETRY 次後仍失敗"
+              exit $EXIT
             fi
           done
 
-      - name: 💾 上傳報告為 Artifact
+      - name: 💾 上傳報告為 Artifact（保留 90 天）
         uses: actions/upload-artifact@v4
         if: always()
         with:
