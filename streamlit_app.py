@@ -209,7 +209,7 @@ with st.sidebar:
     )
     st.markdown("### 🌏 重點國家/地區")
 
-    default_regions = ["日本", "韓國", "新加坡", "香港", "美國", "英國", "法國", "德國", "澳洲"]
+    default_regions = ["日本", "韓國", "新加坡", "香港"]
 
     if "selected_regions_state" not in st.session_state:
         st.session_state["selected_regions_state"] = default_regions.copy()
@@ -230,7 +230,7 @@ with st.sidebar:
 
     selected_regions = []
 
-    with st.expander("選擇國家", expanded=False):
+    with st.expander("選擇國家/地區", expanded=True):
         for region in ADVANCED_REGIONS:
             checked = region in st.session_state["selected_regions_state"]
             if st.checkbox(region, value=checked, key=f"region_{region}"):
@@ -290,7 +290,7 @@ st.markdown(
 c1, c2, c3 = st.columns(3)
 for col, num, label in [
     (c1, "3",   "主題領域"),
-    (c2, str(len(selected_regions)), "重點國家/地區"),
+    (c2, "7",   "重點國家/地區"),
     (c3, f"{lookback_days}", "新聞搜尋天數"),
 ]:
     col.markdown(
