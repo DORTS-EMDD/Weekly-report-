@@ -395,18 +395,49 @@ BASE_SEARCH_QUERIES = [
     f"metro transit safety crime complaints operations controversy {today:%B %Y}",
 ]
 
+# ── ddgs 結果網域白名單（只保留下列媒體／機構，過濾掉地方新聞、Yahoo 等雜訊來源）──
+TRUSTED_MEDIA_DOMAINS = [d for _, d in GNEWS_SOURCES]  # 與 GNEWS_SOURCES 同步，10 個專業媒體
+INVESTIGATION_DOMAINS = [
+    "ntsb.gov",        # 美國 NTSB
+    "raib.gov.uk",     # 英國 RAIB
+    "orr.gov.uk",      # 英國 ORR
+    "ttsb.gov.tw",     # 台灣運安會
+    "atsb.gov.au",     # 澳洲 ATSB
+    "bea-tt.developpement-durable.gouv.fr",  # 法國 BEA-TT
+]
+
+
+def _domain_allowed(href: str, allowed_domains: list[str]) -> bool:
+    """檢查連結網域是否落在白名單內（含子網域）。"""
+    if not href:
+        return False
+    try:
+        netloc = urllib.parse.urlparse(href).netloc.lower()
+    except Exception:
+        return False
+    netloc = netloc.removeprefix("www.")
+    return any(netloc == d or netloc.endswith("." + d) for d in allowed_domains)
+
 
 def build_search_queries() -> tuple[list[str], set[int]]:
     queries = list(BASE_SEARCH_QUERIES)
     base_len = len(queries)
-    # 第 3~6 組（事故／爭議）用新聞型搜尋，較貼近時效性
+    # 第 3~7 組（事故／爭議）用新聞型搜尋，較貼近時效性
     news_indices = set(range(3, base_len + 1))
     return queries, news_indices
+
+
+def _allowed_domains_for(i: int) -> list[str]:
+    """第 5 組（投資調查報告）用運安機構白名單，其餘一律限定 10 個專業媒體網域。"""
+    if i == 5:
+        return INVESTIGATION_DOMAINS
+    return TRUSTED_MEDIA_DOMAINS
 
 
 def _fetch_one_ddg(i: int, query: str, use_news: bool) -> str:
     """執行單一 ddgs 查詢（供平行呼叫使用）。不重試、不睡眠，失敗就略過。"""
     news_timelimit = "w" if int(lookback_days) <= 7 else "m"
+    allowed_domains = _allowed_domains_for(i)
     try:
         with DDGS() as ddgs:
             if use_news:
@@ -424,6 +455,7 @@ def _fetch_one_ddg(i: int, query: str, use_news: bool) -> str:
                     f"{r.get('title','')} "
                     f"{r.get('body') or r.get('excerpt') or r.get('description') or ''}"
                 )
+                and _domain_allowed(r.get("href") or r.get("url") or "", allowed_domains)
             ]
         if results:
             lines = [f"【DDG {i}】{query}"]
@@ -515,6 +547,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ## ⚠️ 最高查核原則（零容忍，違反即捨棄該則）
 1. **只使用上方原始資料中出現的資訊**，禁止自行編造
 2. **範疇限制**：本報告僅涵蓋「都市軌道交通」（捷運／輕軌／MRT／LRT／地鐵／電車），**不納入**重型鐵路、高鐵、貨運鐵路等非都市軌道系統之新聞，全球範圍皆可納入（不限定國家）
+2.5 **來源限制**：下方原始資料已透過程式碼限定只抓取指定的國際專業鐵道媒體與官方運安調查機構，**不會出現地方新聞、八卦媒體等雜訊來源**；若仍看到非專業來源的內容，直接捨棄
 3. **地區排除（零容忍）**：**不納入中國大陸地區**（北京、上海、廣州、深圳、南京、武漢、成都等）之地鐵／輕軌新聞；**香港、台灣及其餘國際地區皆正常納入**，不在此限
 4. **日期判斷（統一嚴格標準，不分類別）**：「新聞發布日」與「事件/技術發表日」皆須在 {date_range} 內（過去 {lookback_days} 天），**超出一律捨棄，技術新知亦不例外**
 5. **禁止舊聞充數**：超過上述天數限制的歷史案例一律捨棄
