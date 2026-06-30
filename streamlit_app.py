@@ -1,8 +1,8 @@
 """
 國際捷運技術週報 — Streamlit 展示介面
-- 搜尋一：RSS 訂閱源（涵蓋 Railway Gazette 等 12 項權威媒體）
+- 搜尋一：RSS 訂閱源（涵蓋 12 項權威媒體）
 - 搜尋二：ddgs 多後端（動態精簡關鍵字以加速）
-- 依左側勾選事件篩選各自的新聞
+- 依左側勾選事件篩選各自的新聞 (新增「營運政策」並改為下拉收合選單)
 - 嚴格排除傳統火車/高鐵，優先聚焦捷運、中運量與LRRT系統
 """
 
@@ -123,6 +123,7 @@ st.markdown("""
     border: 1px solid rgba(255,255,255,0.25) !important;
     border-radius: 6px !important;
     background-color: rgba(255,255,255,0.08) !important;
+    margin-bottom: 8px !important;
   }
   [data-testid="stSidebar"] [data-testid="stExpander"] summary,
   [data-testid="stSidebar"] [data-testid="stExpander"] summary p,
@@ -156,8 +157,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── 日期 ──────────────────────────────────────────────
+# ── 日期與常數 ──────────────────────────────────────────────
 today = datetime.date.today()
+
+ADVANCED_TYPES = ["技術新知", "重大事故", "營運爭議", "營運政策"]
 
 ADVANCED_REGIONS = [
     "日本", "韓國", "新加坡", "香港",
@@ -199,32 +202,51 @@ with st.sidebar:
         "新聞搜尋天數", min_value=3, max_value=30, value=7, step=1,
     )
 
+    # ── 新聞類型篩選 (下拉式收合) ──
     st.markdown("### 📑 新聞類型篩選")
-    type_tech = st.checkbox("技術新知", value=True)
-    type_acc = st.checkbox("重大事故", value=True)
-    type_ops = st.checkbox("營運爭議", value=True)
+    if "selected_types_state" not in st.session_state:
+        st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
+
+    col_t_all, col_t_clear = st.columns(2)
+    if col_t_all.button("全選類型", use_container_width=True):
+        st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
+        for t in ADVANCED_TYPES:
+            st.session_state[f"type_{t}"] = True
+        st.rerun()
+
+    if col_t_clear.button("清除類型", use_container_width=True):
+        st.session_state["selected_types_state"] = []
+        for t in ADVANCED_TYPES:
+            st.session_state[f"type_{t}"] = False
+        st.rerun()
 
     selected_types = []
-    if type_tech: selected_types.append("技術新知")
-    if type_acc: selected_types.append("重大事故")
-    if type_ops: selected_types.append("營運爭議")
+    with st.expander("選擇新聞類型", expanded=False):
+        for t in ADVANCED_TYPES:
+            checked = t in st.session_state["selected_types_state"]
+            if st.checkbox(t, value=checked, key=f"type_{t}"):
+                selected_types.append(t)
 
-    if not selected_types:
+    st.session_state["selected_types_state"] = selected_types
+    if selected_types:
+        st.caption("已選：" + "、".join(selected_types))
+    else:
         st.warning("⚠️ 請至少選擇一種新聞類型。")
 
+    # ── 國家地區篩選 (下拉式收合) ──
     st.markdown("### 🌏 重點國家/地區")
     default_regions = ["日本", "韓國", "新加坡", "香港"]
     if "selected_regions_state" not in st.session_state:
         st.session_state["selected_regions_state"] = default_regions.copy()
 
     col_all, col_clear = st.columns(2)
-    if col_all.button("全選", use_container_width=True):
+    if col_all.button("全選國家", use_container_width=True):
         st.session_state["selected_regions_state"] = ADVANCED_REGIONS.copy()
         for region in ADVANCED_REGIONS:
             st.session_state[f"region_{region}"] = True
         st.rerun()
 
-    if col_clear.button("清除", use_container_width=True):
+    if col_clear.button("清除國家", use_container_width=True):
         st.session_state["selected_regions_state"] = []
         for region in ADVANCED_REGIONS:
             st.session_state[f"region_{region}"] = False
@@ -243,6 +265,7 @@ with st.sidebar:
     else:
         st.warning("請至少選擇一個國家/地區。")
 
+    # ── 收件設定 ──
     st.markdown("### 📬 收件設定")
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
     if "recipients_text" not in st.session_state:
@@ -286,7 +309,7 @@ st.markdown(
 c1, c2, c3 = st.columns(3)
 for col, num, label in [
     (c1, str(len(selected_types)), "追蹤主題數"),
-    (c2, str(len(selected_regions)), "重點國家/地區"),
+    (c2, str(len(selected_regions)), "重點國家"),
     (c3, f"{lookback_days}", "新聞搜尋天數"),
 ]:
     col.markdown(
@@ -422,20 +445,26 @@ def build_search_queries() -> tuple[list[str], set[int]]:
             f"metro subway transit strike delay controversy {today:%B %Y}",
             f"鉄道 地下鉄 遅延 争議 {today:%Y年%m月}"
         ])
+    if "營運政策與安全" in selected_types:
+        queries.extend([
+            f"metro subway policy passenger safety regulation {today:%B %Y}",
+            f"鉄道 地下鉄 規則 安全対策 {today:%Y年%m月}"
+        ])
 
     # 2. 地區合併關鍵字（避免每個地區查3次導致耗時過長）
-    # 最多處理前 5 個地區，其餘交由 Gemini 透過 RSS 萃取
     for i, region in enumerate(selected_regions[:5]):
         term = REGION_SEARCH_TERMS.get(region, region)
         if "技術新知" in selected_types:
             queries.append(f"{term} metro LRRT subway upgrade press release {today:%B %Y}")
-        if "重大事故" in selected_types or "營運爭議" in selected_types:
+        
+        # 將事故、爭議、政策合併為一個查詢字串，精簡發送數量
+        if any(t in selected_types for t in ["重大事故", "營運爭議", "營運政策與安全"]):
             idx = len(queries)
-            queries.append(f"{term} metro subway incident strike controversy {today:%B %Y}")
+            queries.append(f"{term} metro subway incident strike policy controversy {today:%B %Y}")
             news_indices.add(idx)
 
-    # 上限控制在 15 次內，保證搜尋速度
-    return queries[:15], news_indices
+    # 上限控制，保證搜尋速度
+    return queries[:16], news_indices
 
 
 def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
@@ -513,7 +542,11 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 
 ## 🎯 篩選與優先級指示（請保持彈性）
 1. **新聞類型過濾**：本次報告**只能**包含以下使用者勾選的新聞類型：【{selected_types_str}】。若不屬於這些類型，請直接忽略。
-2. **最高優先級（專注捷運與LRRT，排除一般鐵路/高鐵）**：本報告是提供給北市府捷運局的國際週報，請**嚴格過濾並排除**傳統客運/貨運鐵路（火車、城際列車）與高速鐵路（HSR）的新聞。請**絕對優先保留並聚焦**於國際上的**「都市捷運系統（Metro / Subway / Underground）」**以及**「中運量 / 輕軌 / 膠輪系統（LRRT / AGT / LRT）」**的技術、營運與事故新聞，並給予最大篇幅。
+   - **技術新知**：機電、號誌、車輛、土木等工程技術。
+   - **重大事故**：出軌、追撞、火災、嚴重系統當機。
+   - **營運爭議**：罷工、預算超支、票價爭議、合約糾紛。
+   - **營運政策與安全**：捷運站內安檢新規、乘車規則變動（如禁帶大型鋰電池/滑板車）、安全管理政策。
+2. **最高優先級（專注捷運與LRRT，排除一般鐵路/高鐵）**：本報告是提供給北市府捷運局的國際週報，請**嚴格過濾並排除**傳統客運/貨運鐵路（火車、城際列車）與高速鐵路（HSR）的新聞。請**絕對優先保留並聚焦**於國際上的**「都市捷運系統（Metro / Subway / Underground）」**以及**「中運量 / 輕軌 / 膠輪系統（LRRT / AGT / LRT）」**的新聞，並給予最大篇幅。
 3. **來源權重**：請優先採納來自 12 大權威機構的報導：Railway Gazette, IRJ, UITP, IRSE, Railway Technology, Rail Forum, Global Mass Transit, NTSB/RAIB/TTSB, Transit Jam, Railway-News, 東洋經濟 Online, 交通新聞/乗りものニュース。
 4. **放寬篩選**：只要事件對捷運局具備實務參考價值、或與使用者選擇的國家/地區有關聯，即使日期稍有落差或摘要較短，亦可納入。不需要過度嚴格剃除。
 
@@ -529,11 +562,11 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 
 ---
 
-### 🔹 [{selected_types_str}之一] 國家/地區：（一句有力主標題）
+### 🔹 [填入該則所屬之分類：技術新知/重大事故/營運爭議/營運政策與安全] 國家/地區：（一句有力主標題）
 * **發布/事件日期**：（原文發布年月日）
 * **事件摘要**：
   - （列點精要說明，3–5 點）
-* **技術關鍵字**：（英漢對照，例：LRRT / 中運量軌道運輸系統）
+* **技術/政策關鍵字**：（英漢對照）
 * **資料來源**：[來源名稱](完整 https:// 網址)
 * **【臺北捷運局啟示】**：（對北捷系統/中運量的具體參考價值）
 
