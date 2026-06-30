@@ -205,9 +205,10 @@ with st.sidebar:
         max_value=30,
         value=7,
         step=1,
-        help="事故與營運爭議依此期間篩選；技術新知仍可納入近 30 天資料。",
+        help="事故與營運爭議依此期間篩選；技術新知可納入 2 倍天數（最多 30 天）。",
     )
-    st.markdown("### 🌏 重點國家/地區")
+
+    st.markdown("### 🌏 重點國家")
 
     default_regions = ["日本", "韓國", "新加坡", "香港"]
 
@@ -242,6 +243,20 @@ with st.sidebar:
         st.caption("已選：" + "、".join(selected_regions))
     else:
         st.warning("請至少選擇一個國家/地區。")
+
+    with st.expander("🔍 搜尋後端設定", expanded=False):
+        st.caption("ddgs 補充搜尋使用的後端（至少選一個）")
+        use_ddg   = st.checkbox("DuckDuckGo（預設首選）", value=True)
+        use_bing  = st.checkbox("Bing（限速時備援）",      value=True)
+        use_yahoo = st.checkbox("Yahoo（最終備援）",        value=True)
+    selected_backends = (
+        (["auto"]  if use_ddg   else []) +
+        (["bing"]  if use_bing  else []) +
+        (["yahoo"] if use_yahoo else [])
+    )
+    if not selected_backends:
+        st.warning("⚠️ 請至少選一個搜尋後端。")
+        selected_backends = ["auto"]
 
     st.markdown("### 📬 收件設定")
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
@@ -461,7 +476,6 @@ FALLBACK_BACKENDS = ["auto", "bing", "yahoo"]
 def build_search_queries() -> tuple[list[str], set[int]]:
     queries = list(BASE_SEARCH_QUERIES)
     base_len = len(queries)
-    # 事故/爭議類 base queries（index 12 以後，0-based）
     news_indices = set(range(12, base_len))
 
     for region in selected_regions:
@@ -472,7 +486,6 @@ def build_search_queries() -> tuple[list[str], set[int]]:
             f"{term} metro subway incident disruption accident {today:%B %Y}",
             f"{term} metro transit fare strike construction delay controversy {today:%B %Y}",
         ])
-        # 後兩條（incident / controversy）是時效性新聞
         news_indices.update({start + 1, start + 2})
 
     return queries, news_indices
@@ -497,7 +510,7 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
         use_news = i in news_query_indices
         result_block = None
 
-        for backend in FALLBACK_BACKENDS:
+        for backend in selected_backends:
             for attempt in range(1, 3):
                 try:
                     with DDGS() as ddgs:
@@ -581,9 +594,11 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 
 ## ⚠️ 最高查核原則（零容忍，違反即捨棄該則）
 1. **只使用上方原始資料中出現的資訊**，禁止自行編造
-2. **國家/地區限制（最優先執行）**：本次報告**只能**納入以下國家/地區的新聞：
-   **{', '.join(selected_regions)}**
-   其他國家/地區（含「國際」通則性報導）一律**完全忽略，不得納入**。
+2. **國家/地區限制（依領域分級，最高優先）**：
+   - **領域 A 技術新知**：不限定國家，全球範圍皆可納入，**但一律排除「中國」（含中國大陸各城市，如北京、上海、廣州、深圳、廈門等）**
+   - **領域 B 事故分析、領域 C 營運爭議**：**只能**納入以下使用者勾選之國家/地區：
+     **{', '.join(selected_regions)}**
+     其他國家（含中國、含未勾選國家）的事故或爭議新聞一律**完全忽略，不得納入**
 3. **日期判斷（依類別分級）**：
    - 事故類、爭議類：「新聞發布日」與「事件發生日」皆須在 {date_range} 內（**嚴格執行，超出即捨棄**）
    - 技術新知類：「新聞發布日」或「技術發表/測試日」須在過去 {min(int(lookback_days) * 2, 30)} 天內
@@ -607,13 +622,15 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ### 領域 C：營運爭議
 - 勞資罷工、票價政策變動、系統轉換困難或延宕
 
-## 本次報告限定國家/地區（僅此清單，其他一律排除）
-{chr(10).join('- ' + r for r in selected_regions)}
+## 地區範圍說明
+- 技術新知（領域 A）：全球皆可納入，唯獨排除中國
+- 事故分析、營運爭議（領域 B、C）：僅限以下國家/地區
+{chr(10).join('  - ' + r for r in selected_regions)}
 
 ## 輸出格式（每則獨立區塊，目標 8–15 則）
 
 # {report_title}
-> 資料涵蓋期間：{date_range}（技術新知可納入近 {min(int(lookback_days) * 2, 30)} 天）
+> 資料涵蓋期間：{date_range}（技術新知可納入近 {min(int(lookback_days) * 2, 30)} 天，全球範圍，排除中國）
 
 ---
 
