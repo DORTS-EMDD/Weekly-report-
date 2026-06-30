@@ -408,7 +408,7 @@ INVESTIGATION_DOMAINS = [
 
 
 def _domain_allowed(href: str, allowed_domains: list[str]) -> bool:
-    """檢查連結網域是否落在白名單內（含子網域）。"""
+    """檢查連結網域是否落在白名單內（含子網域、寬鬆比對避免漏判）。"""
     if not href:
         return False
     try:
@@ -416,7 +416,11 @@ def _domain_allowed(href: str, allowed_domains: list[str]) -> bool:
     except Exception:
         return False
     netloc = netloc.removeprefix("www.")
-    return any(netloc == d or netloc.endswith("." + d) for d in allowed_domains)
+    # 寬鬆比對：完全相符、子網域、或網域字串互相包含（容錯新聞聚合連結變形）
+    return any(
+        netloc == d or netloc.endswith("." + d) or d in netloc or netloc in d
+        for d in allowed_domains
+    )
 
 
 def build_search_queries() -> tuple[list[str], set[int]]:
@@ -457,8 +461,9 @@ def _fetch_one_ddg(i: int, query: str, use_news: bool, cutoff: datetime.datetime
                     f"{r.get('body') or r.get('excerpt') or r.get('description') or ''}"
                 )
                 and _domain_allowed(r.get("href") or r.get("url") or "", allowed_domains)
-                # 日期欄位必須存在且在 cutoff 內，避免抓到舊聞卻無法判斷
-                and r.get("date") and _is_recent(r.get("date"), cutoff)
+                # 有日期才檢查是否過期；沒有日期欄位則保留，交給 Gemini 端依內容判斷
+                # （ddgs 的 timelimit 參數已先做一層粗篩，避免在程式碼層誤殺真實新聞）
+                and (not r.get("date") or _is_recent(r.get("date"), cutoff))
             ]
         if results:
             lines = [f"【DDG {i}】{query}"]
@@ -552,7 +557,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 2. **範疇限制**：本報告僅涵蓋「都市軌道交通」（捷運／輕軌／MRT／LRT／地鐵／電車），**不納入**重型鐵路、高鐵、貨運鐵路等非都市軌道系統之新聞，全球範圍皆可納入（不限定國家）
 2.5 **來源限制**：下方原始資料已透過程式碼限定只抓取指定的國際專業鐵道媒體與官方運安調查機構，**不會出現地方新聞、八卦媒體等雜訊來源**；若仍看到非專業來源的內容，直接捨棄
 3. **地區排除（零容忍）**：**不納入中國大陸地區**（北京、上海、廣州、深圳、南京、武漢、成都等）之地鐵／輕軌新聞；**香港、台灣及其餘國際地區皆正常納入**，不在此限
-4. **日期判斷（統一嚴格標準，不分類別）**：「新聞發布日」與「事件/技術發表日」皆須在 {date_range} 內（過去 {lookback_days} 天），**超出一律捨棄，技術新知亦不例外**；**禁止使用「具體日期未詳載，屬期限內發布」之類的推測性說法**，原始資料中若沒有明確日期可供判斷，該則直接捨棄，不可納入報告
+4. **日期判斷（統一標準，不分類別）**：原始資料中標註「日期：YYYY-MM-DD」者，須在 {date_range} 內，超出一律捨棄；原始資料若標註「日期未知」，表示程式碼層已透過搜尋引擎的時間範圍參數（{lookback_days} 天內）做過篩選，**可正常採用**，但報告中該則的發布日期欄位請誠實寫「日期未標示（依搜尋區間判定為近期）」，**禁止自行編造或推測出一個具體日期（例如「2026年06月」）**
 5. **禁止舊聞充數**：超過上述天數限制的歷史案例一律捨棄
 6. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
 7. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
@@ -579,6 +584,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 - 不納入中國大陸地區地鐵新聞；香港、台灣及其餘國際地區正常納入
 
 ## 輸出格式（每則獨立區塊，目標固定 10 則，詳見上方數量原則）
+（以下「# {report_title}」開始才是實際要輸出的報告內容；最後兩行統計與時間是必填項目，但「---」前不要輸出任何如「結尾」之類的標題文字）
 
 # {report_title}
 > 資料涵蓋期間：{date_range}（都市軌道交通範疇，嚴格依 {lookback_days} 天篩選）
@@ -586,7 +592,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ---
 
 ### 🔹 [技術新知/重大事故/營運爭議] 國家/地區：（一句有力主標題）
-* **發布/事件日期**：（原文發布年月日）
+* **發布/事件日期**：（原文發布年月日，或「日期未標示（依搜尋區間判定為近期）」）
 * **事件摘要**：
   - （列點精要說明，3–5 點）
 * **技術關鍵字**：（英漢對照，例：FRMCS / 未來鐵道行動通訊系統）
@@ -595,8 +601,6 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 
 ---
 
-## 結尾（必填）
----
 📊 **本週統計**：共 N 則（技術新知 N 則 / 重大事故 N 則 / 營運爭議 N 則）
 ⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
 """
