@@ -283,12 +283,8 @@ with st.expander("主題領域說明"):
 #  新聞來源（透過 Google News RSS 代理；聚焦捷運/輕軌媒體，避開來源網站封鎖）
 # ═══════════════════════════════════════════════════════
 GNEWS_SOURCES = [
-    ("Metro Report International", "metro-report.com"),
+    ("Railway News", "railway-news.com"),
     ("Railway Gazette International", "railwaygazette.com"),
-    ("International Railway Journal", "railjournal.com"),
-    ("Mass Transit Magazine", "masstransitmag.com"),
-    ("Global Railway Review", "globalrailwayreview.com"),
-    ("UITP – Global Public Transport", "uitp.org"),
 ]
 METRO_SCOPE_FILTER = '(metro OR subway OR "light rail" OR LRT OR MRT OR tram)'
 
