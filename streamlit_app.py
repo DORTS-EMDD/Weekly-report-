@@ -1,22 +1,20 @@
 """
-國際捷運技術週報 — Streamlit 展示介面 v4.2（展示加速版）
-- 搜尋一：Google News 代理（主要；聚焦捷運/輕軌專業媒體）
-- 搜尋二：ddgs 關鍵字搜尋（次要；精簡查詢量 + 平行抓取）
-- 所有外部請求改為 ThreadPoolExecutor 平行執行，目標 20–30 秒內產出報告
-  （正式週報排程 main.py／GitHub Actions 仍保留完整地毯式查詢，不受此檔影響）
+國際捷運技術週報 — Streamlit 展示介面 v4.1
+- 搜尋一：RSS 訂閱源（主要；六大媒體，無限速）
+- 搜尋二：ddgs 多後端（次要；DuckDuckGo + Bing + Yahoo，帶重試）
 - 收件人欄位使用 session_state 保留編輯狀態
 - 下拉選單文字顯示修正（黑字）
 """
 
 import os
 import re
+import time
+import random
 import datetime
-import concurrent.futures
 import smtplib
 from io import BytesIO
 from html import escape
 import urllib.request
-import urllib.parse
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from email.mime.multipart import MIMEMultipart
@@ -161,6 +159,27 @@ st.markdown("""
 # ── 日期 ──────────────────────────────────────────────
 today = datetime.date.today()
 
+ADVANCED_REGIONS = [
+    "日本", "韓國", "新加坡", "香港",
+    "澳洲", "英國", "法國", "德國", "荷蘭",
+    "瑞士", "美國", "加拿大",
+]
+
+REGION_SEARCH_TERMS = {
+    "日本": "Japan Tokyo Osaka subway railway operator",
+    "韓國": "Korea Seoul metro subway operator",
+    "新加坡": "Singapore MRT LTA SMRT",
+    "香港": "Hong Kong MTR",
+    "美國": "United States New York subway Washington Metro Chicago CTA",
+    "加拿大": "Canada Toronto TTC Vancouver SkyTrain Montreal REM",
+    "英國": "United Kingdom London Underground Transport for London",
+    "法國": "France Paris Metro RATP Grand Paris Express",
+    "德國": "Germany Berlin U-Bahn Munich U-Bahn Hamburg U-Bahn",
+    "荷蘭": "Netherlands Amsterdam metro Rotterdam metro",
+    "瑞士": "Switzerland Zurich tram Lausanne metro",
+    "澳洲": "Australia Sydney Metro Melbourne Metro Brisbane rail",
+}
+
 # ── 金鑰狀態 ──────────────────────────────────────────
 api_key    = get_secret("GEMINI_API_KEY")
 gmail_user = get_secret("GMAIL_USER")
@@ -186,8 +205,43 @@ with st.sidebar:
         max_value=30,
         value=7,
         step=1,
-        help="事故、營運爭議、技術新知皆依此天數篩選。",
+        help="事故與營運爭議依此期間篩選；技術新知仍可納入近 30 天資料。",
     )
+    st.markdown("### 🌏 重點國家/地區")
+
+    default_regions = ["日本", "韓國", "新加坡", "香港"]
+
+    if "selected_regions_state" not in st.session_state:
+        st.session_state["selected_regions_state"] = default_regions.copy()
+
+    col_all, col_clear = st.columns(2)
+
+    if col_all.button("全選", use_container_width=True):
+        st.session_state["selected_regions_state"] = ADVANCED_REGIONS.copy()
+        for region in ADVANCED_REGIONS:
+            st.session_state[f"region_{region}"] = True
+        st.rerun()
+
+    if col_clear.button("清除", use_container_width=True):
+        st.session_state["selected_regions_state"] = []
+        for region in ADVANCED_REGIONS:
+            st.session_state[f"region_{region}"] = False
+        st.rerun()
+
+    selected_regions = []
+
+    with st.expander("選擇國家", expanded=False):
+        for region in ADVANCED_REGIONS:
+            checked = region in st.session_state["selected_regions_state"]
+            if st.checkbox(region, value=checked, key=f"region_{region}"):
+                selected_regions.append(region)
+
+    st.session_state["selected_regions_state"] = selected_regions
+
+    if selected_regions:
+        st.caption("已選：" + "、".join(selected_regions))
+    else:
+        st.warning("請至少選擇一個國家/地區。")
 
     st.markdown("### 📬 收件設定")
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
@@ -236,7 +290,7 @@ st.markdown(
 c1, c2, c3 = st.columns(3)
 for col, num, label in [
     (c1, "3",   "主題領域"),
-    (c2, "全球", "涵蓋範圍"),
+    (c2, str(len(selected_regions)), "重點國家/地區"),
     (c3, f"{lookback_days}", "新聞搜尋天數"),
 ]:
     col.markdown(
@@ -245,68 +299,41 @@ for col, num, label in [
         unsafe_allow_html=True,
     )
 
-with st.expander("主題領域說明"):
-    st.markdown("""
+with st.expander("主題領域與重點地區"):
+    col_area, col_region = st.columns(2)
+    with col_area:
+        st.markdown("""
 **主題領域**
 - 技術新知
 - 重大事故
 - 營運爭議
-
-涵蓋範圍：全球國際捷運／鐵道系統，不限定特定國家。
-    """)
-
+        """)
+    with col_region:
+        st.markdown("""
+**重點國家/地區**
+- 日本、韓國、新加坡、香港、澳洲
+- 英國、法國、德國、荷蘭、瑞士
+- 美國、加拿大
+        """)
 
 
 # ═══════════════════════════════════════════════════════
-#  新聞來源（透過 Google News RSS 代理；聚焦捷運/輕軌媒體，避開來源網站封鎖）
+#  RSS 訂閱源（主要；無配額限制）
 # ═══════════════════════════════════════════════════════
-GNEWS_SOURCES = [
-    # ── 技術新知優先（更新頻率高、技術報導扎實的媒體）──
-    ("Railway Gazette International", "railwaygazette.com"),
-    ("Metro Report International", "metro-report.com"),
-    ("IRJ (International Railway Journal)", "railjournal.com"),
-    ("Railway Technology", "railway-technology.com"),
-    ("Railway-News", "railway-news.com"),
-    ("SmartRail World", "smartrailworld.com"),
-    ("Global Mass Transit", "globalmasstransit.net"),
-    # ── 加分來源（產業協會/學會，更新頻率較低，能抓到算賺到）──
-    ("UITP", "uitp.org"),
-    ("IRSE", "irse.org"),
-    ("Transit Jam", "transit-jam.com"),
+RSS_SOURCES = [
+    ("Railway Gazette International",
+     "https://www.railwaygazette.com/rss/latest"),
+    ("International Railway Journal",
+     "https://www.railjournal.com/feed/"),
+    ("Railway Technology News",
+     "https://www.railway-technology.com/news/feed/"),
+    ("Global Railway Review",
+     "https://www.globalrailwayreview.com/feed/"),
+    ("Intelligent Transport",
+     "https://www.intelligenttransport.com/feed/"),
+    ("UITP – Global Public Transport",
+     "https://www.uitp.org/rss.xml"),
 ]
-METRO_SCOPE_FILTER = '(metro OR subway OR "light rail" OR LRT OR MRT OR tram)'
-
-# ── 中國大陸新聞過濾（保留香港）─────────────────────────
-# 程式碼層先過濾一輪，Gemini 端的查核原則再做第二道把關。
-_MAINLAND_CHINA_TERMS = [
-    "中国大陆", "中國大陸", "中国铁路", "中國鐵路", "China Railway",
-    "北京", "Beijing", "上海", "Shanghai", "广州", "廣州", "Guangzhou",
-    "深圳", "Shenzhen", "南京", "Nanjing", "武汉", "武漢", "Wuhan",
-    "成都", "Chengdu", "西安", "Xi'an", "重庆", "重慶", "Chongqing",
-    "天津", "Tianjin", "苏州", "蘇州", "Suzhou", "杭州", "Hangzhou",
-    "郑州", "鄭州", "Zhengzhou", "长沙", "長沙", "Changsha",
-    "青岛", "青島", "Qingdao", "大连", "大連", "Dalian",
-    "沈阳", "瀋陽", "Shenyang", "哈尔滨", "哈爾濱", "Harbin",
-    "昆明", "Kunming", "福州", "Fuzhou", "厦门", "廈門", "Xiamen",
-    "无锡", "無錫", "Wuxi", "宁波", "寧波", "Ningbo", "合肥", "Hefei",
-    "济南", "濟南", "Jinan", "东莞", "東莞", "Dongguan", "佛山", "Foshan",
-    "长春", "長春", "Changchun", "石家庄", "石家莊", "Shijiazhuang",
-    "兰州", "蘭州", "Lanzhou", "乌鲁木齐", "烏魯木齊", "Urumqi",
-    "南宁", "南寧", "Nanning", "贵阳", "貴陽", "Guiyang", "太原", "Taiyuan",
-    "南昌", "Nanchang", "呼和浩特", "Hohhot", "银川", "銀川", "Yinchuan",
-    "西宁", "西寧", "Xining",
-]
-_HONGKONG_TERMS = ["香港", "Hong Kong", "MTR", "HKSAR"]
-
-
-def _is_mainland_china_item(text: str) -> bool:
-    """判斷文章是否屬於中國大陸（不含香港）地鐵新聞，供過濾使用。"""
-    if not text:
-        return False
-    if any(term in text for term in _HONGKONG_TERMS):
-        return False
-    return any(term in text for term in _MAINLAND_CHINA_TERMS)
-
 
 def _parse_pub_date(pub_str: str) -> str:
     if not pub_str:
@@ -338,199 +365,199 @@ def _is_recent(pub_str: str, cutoff: datetime.datetime) -> bool:
     except Exception:
         return True
 
-_GNEWS_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; MetroWeeklyBot/4.2)"}
-
-
-def _fetch_one_gnews(source_name: str, domain: str, cutoff: datetime.datetime) -> str:
-    """抓取單一 Google News 代理來源（供平行呼叫使用）。"""
-    query = f"site:{domain} {METRO_SCOPE_FILTER} when:{int(lookback_days)}d"
-    url = (
-        "https://news.google.com/rss/search?q="
-        + urllib.parse.quote(query)
-        + "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+def fetch_rss_feeds(status_text=None) -> str:
+    """從六大國際鐵道 RSS 取得文章（依使用者設定的新聞搜尋天數過濾）。"""
+    cutoff = (
+        datetime.datetime.now(datetime.timezone.utc)
+        - datetime.timedelta(days=min(int(lookback_days) * 2, 30))
     )
-    try:
-        req = urllib.request.Request(url, headers=_GNEWS_HEADERS)
-        with urllib.request.urlopen(req, timeout=8) as f:
-            raw = f.read()
-        root = ET.fromstring(raw)
-        items_found: list[tuple[str, str, str, str]] = []
+    all_blocks: list[str] = []
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MetroWeeklyBot/4.1)"}
+    ATOM = "http://www.w3.org/2005/Atom"
 
-        for item in root.findall(".//item"):
-            raw_title = (item.findtext("title") or "").strip()
-            title = re.sub(r"\s*-\s*[^-]+$", "", raw_title).strip() or raw_title
-            link = (item.findtext("link") or "").strip()
-            desc = re.sub(r"<[^>]+>", "", item.findtext("description") or "")[:300].strip()
-            pub_str = (item.findtext("pubDate") or "").strip()
-            if (
-                title
-                and _is_recent(pub_str, cutoff)
-                and not _is_mainland_china_item(f"{title} {desc}")
-            ):
-                items_found.append((title, link, desc, _parse_pub_date(pub_str)))
+    for idx, (source_name, url) in enumerate(RSS_SOURCES, 1):
+        if status_text:
+            status_text.text(f"📡 RSS {idx}/{len(RSS_SOURCES)}：{source_name}...")
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as f:
+                raw = f.read()
+            root = ET.fromstring(raw)
+            items_found: list[tuple[str, str, str, str]] = []
 
-        if items_found:
-            lines = [f"【新聞來源：{source_name}（共 {len(items_found)} 篇）】"]
-            for t, l, d, dt in items_found[:12]:
-                lines.append(f"  日期：{dt}\n  標題：{t}\n  摘要：{d}\n  連結：{l}")
-            return "\n".join(lines)
-        return f"【新聞來源：{source_name}】（近 {lookback_days} 天無符合範疇之新文章）"
-    except Exception as exc:
-        return f"【新聞來源：{source_name}】⚠️ 失敗：{exc}"
+            for item in root.findall(".//item"):
+                title   = (item.findtext("title") or "").strip()
+                link    = (item.findtext("link")  or "").strip()
+                desc    = (item.findtext("description") or "").strip()[:400]
+                pub_str = (item.findtext("pubDate") or "").strip()
+                if title and _is_recent(pub_str, cutoff):
+                    items_found.append((title, link, desc, _parse_pub_date(pub_str)))
+
+            if not items_found:
+                for entry in root.findall(f".//{{{ATOM}}}entry"):
+                    title   = (entry.findtext(f"{{{ATOM}}}title") or "").strip()
+                    link_el = entry.find(f"{{{ATOM}}}link")
+                    link    = link_el.get("href", "") if link_el is not None else ""
+                    summ    = (entry.findtext(f"{{{ATOM}}}summary") or "").strip()[:400]
+                    pub_str = (
+                        entry.findtext(f"{{{ATOM}}}published")
+                        or entry.findtext(f"{{{ATOM}}}updated") or ""
+                    ).strip()
+                    if title and _is_recent(pub_str, cutoff):
+                        items_found.append((title, link, summ, _parse_pub_date(pub_str)))
+
+            if items_found:
+                lines = [f"【RSS來源：{source_name}（共 {len(items_found)} 篇）】"]
+                for t, l, d, dt in items_found[:12]:
+                    lines.append(
+                        f"  日期：{dt}\n  標題：{t}\n  摘要：{d}\n  連結：{l}"
+                    )
+                all_blocks.append("\n".join(lines))
+            else:
+                all_blocks.append(f"【RSS來源：{source_name}】（近30天無新文章）")
+        except Exception as exc:
+            all_blocks.append(f"【RSS來源：{source_name}】⚠️ 失敗：{exc}")
+
+    return "\n\n".join(all_blocks)
 
 
 # ═══════════════════════════════════════════════════════
 #  搜尋關鍵字（ddgs 多後端，補充用）
 # ═══════════════════════════════════════════════════════
 BASE_SEARCH_QUERIES = [
-    # 技術新知（2 組，廣義關鍵字覆蓋信號/智慧化/硬體/標準）
-    f"metro railway technology CBTC GoA4 AI digital twin announcement {today:%Y}",
-    f"metro railway FRMCS 5G signalling battery energy rolling stock trial {today:%Y}",
-    # 重大事故（3 組，含官方運安調查機構報告，不適合走 Google News site: 代理）
-    f"metro subway derailment signal failure fire evacuation incident {today:%B %Y}",
-    f"metro subway accident collision track intrusion service disruption {today:%B %Y}",
-    f"metro subway investigation report site:ntsb.gov OR site:gov.uk/raib OR TTSB {today:%Y}",
-    # 營運爭議（2 組）
-    f"metro subway strike fare increase construction delay controversy {today:%B %Y}",
-    f"metro transit safety crime complaints operations controversy {today:%B %Y}",
+    # 技術新知：用「技術名詞 + metro/rail + announcement/trial」提高命中率
+    f"metro railway CBTC GoA4 driverless signalling contract trial {today:%Y}",
+    f"metro railway digital twin predictive maintenance AI condition monitoring {today:%Y}",
+    f"metro rail artificial intelligence fault detection maintenance announcement {today:%Y}",
+    f"railway metro FRMCS 5G communications pilot migration trial {today:%Y}",
+    f"metro rail platform screen door automation upgrade technology {today:%Y}",
+    f"metro railway cybersecurity operations control centre incident response {today:%Y}",
+    f"railway metro battery energy storage regenerative braking supercapacitor {today:%Y}",
+    f"metro train traction inverter SiC silicon carbide new rolling stock {today:%Y}",
+    f"metro rail open payment fare gate QR code account based ticketing {today:%Y}",
+    f"railway metro EULYNX digital interlocking standard deployment {today:%Y}",
+    f"metro extension opening trial operation new line {today:%B %Y}",
+    f"railway metro official press release technology upgrade {today:%B %Y}",
+    # 重大事故：用新聞常見詞彙補足 derailment 以外的事故型態
+    f"metro subway service suspended signal failure power outage {today:%B %Y}",
+    f"metro subway train derailment collision evacuation {today:%B %Y}",
+    f"metro rail fire smoke evacuation station incident {today:%B %Y}",
+    f"metro subway track intrusion person struck service disruption {today:%B %Y}",
+    f"metro train door fault passenger evacuation delay {today:%B %Y}",
+    f"light rail tram accident collision derailment service suspended {today:%B %Y}",
+    f"鉄道 地下鉄 事故 脱線 信号障害 運休 {today:%Y年%m月}",
+    f"지하철 사고 탈선 신호 장애 운행 중단 {today:%Y년 %m월}",
+    # 營運爭議：勞資、票價、停駛、工程延期、公眾反彈
+    f"metro subway transit strike labor dispute service disruption {today:%B %Y}",
+    f"metro subway fare increase public opposition transit authority {today:%B %Y}",
+    f"metro rail construction delay cost overrun controversy {today:%B %Y}",
+    f"metro subway long term closure replacement bus passenger complaints {today:%B %Y}",
+    f"metro transit safety crime passenger complaints operations controversy {today:%B %Y}",
+    # 地區查詢依使用者選擇動態生成，見 build_search_queries()
 ]
-
-# ── ddgs 結果網域白名單（只保留下列媒體／機構，過濾掉地方新聞、Yahoo 等雜訊來源）──
-TRUSTED_MEDIA_DOMAINS = [d for _, d in GNEWS_SOURCES]  # 與 GNEWS_SOURCES 同步，10 個專業媒體
-INVESTIGATION_DOMAINS = [
-    "ntsb.gov",        # 美國 NTSB
-    "raib.gov.uk",     # 英國 RAIB
-    "orr.gov.uk",      # 英國 ORR
-    "ttsb.gov.tw",     # 台灣運安會
-    "atsb.gov.au",     # 澳洲 ATSB
-    "bea-tt.developpement-durable.gouv.fr",  # 法國 BEA-TT
-]
-
-
-def _domain_allowed(href: str, allowed_domains: list[str]) -> bool:
-    """檢查連結網域是否落在白名單內（含子網域、寬鬆比對避免漏判）。"""
-    if not href:
-        return False
-    try:
-        netloc = urllib.parse.urlparse(href).netloc.lower()
-    except Exception:
-        return False
-    netloc = netloc.removeprefix("www.")
-    # 寬鬆比對：完全相符、子網域、或網域字串互相包含（容錯新聞聚合連結變形）
-    return any(
-        netloc == d or netloc.endswith("." + d) or d in netloc or netloc in d
-        for d in allowed_domains
-    )
+FALLBACK_BACKENDS = ["auto", "bing", "yahoo"]
 
 
 def build_search_queries() -> tuple[list[str], set[int]]:
     queries = list(BASE_SEARCH_QUERIES)
     base_len = len(queries)
-    # 全部改用新聞型搜尋（ddgs.news），因為只有 news 後端會回傳日期欄位，
-    # 才能在程式碼層做日期過濾，避免抓到舊聞卻無法判斷。
-    news_indices = set(range(1, base_len + 1))
+    # 事故/爭議類 base queries（index 12 以後，0-based）
+    news_indices = set(range(12, base_len))
+
+    for region in selected_regions:
+        term = REGION_SEARCH_TERMS.get(region, region)
+        start = len(queries)
+        queries.extend([
+            f"{term} metro rail technology upgrade press release {today:%B %Y}",
+            f"{term} metro subway incident disruption accident {today:%B %Y}",
+            f"{term} metro transit fare strike construction delay controversy {today:%B %Y}",
+        ])
+        # 後兩條（incident / controversy）是時效性新聞
+        news_indices.update({start + 1, start + 2})
+
     return queries, news_indices
 
 
-def _allowed_domains_for(i: int) -> list[str]:
-    """第 5 組（投資調查報告）用運安機構白名單，其餘一律限定 10 個專業媒體網域。"""
-    if i == 5:
-        return INVESTIGATION_DOMAINS
-    return TRUSTED_MEDIA_DOMAINS
-
-
-def _fetch_one_ddg(i: int, query: str, use_news: bool, cutoff: datetime.datetime) -> str:
-    """執行單一 ddgs 查詢（供平行呼叫使用）。不重試、不睡眠，失敗就略過。"""
-    news_timelimit = "w" if int(lookback_days) <= 7 else "m"
-    allowed_domains = _allowed_domains_for(i)
-    try:
-        with DDGS() as ddgs:
-            if use_news:
-                results = ddgs.news(
-                    query, max_results=8, timelimit=news_timelimit, backend="auto"
-                )
-            else:
-                results = ddgs.text(
-                    query, max_results=10, timelimit="m", backend="auto"
-                )
-        if results:
-            results = [
-                r for r in results
-                if not _is_mainland_china_item(
-                    f"{r.get('title','')} "
-                    f"{r.get('body') or r.get('excerpt') or r.get('description') or ''}"
-                )
-                and _domain_allowed(r.get("href") or r.get("url") or "", allowed_domains)
-                # 有日期才檢查是否過期；沒有日期欄位則保留，交給 Gemini 端依內容判斷
-                # （ddgs 的 timelimit 參數已先做一層粗篩，避免在程式碼層誤殺真實新聞）
-                and (not r.get("date") or _is_recent(r.get("date"), cutoff))
-            ]
-        if results:
-            lines = [f"【DDG {i}】{query}"]
-            for r in results:
-                body = (
-                    r.get("body") or r.get("excerpt") or r.get("description") or ""
-                )[:300]
-                href = r.get("href") or r.get("url") or ""
-                lines.append(
-                    f"  標題：{r.get('title','')}\n"
-                    f"  日期：{_parse_pub_date(r.get('date',''))}\n"
-                    f"  摘要：{body}\n"
-                    f"  連結：{href}"
-                )
-            return "\n".join(lines)
-        return f"【DDG {i}】{query}\n  （無結果）"
-    except Exception as exc:
-        return f"【DDG {i}】{query}\n  ⚠️ {type(exc).__name__}：{str(exc)[:120]}"
-
-
-def fetch_all_sources_parallel(progress_bar=None, status_text=None) -> tuple[str, str]:
+def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
     """
-    平行抓取 Google News 代理 + ddgs 關鍵字搜尋（展示版）。
-    所有來源同時發出請求，整體耗時取決於最慢的單一查詢，
-    而非逐一序列等待，目標在 20–30 秒內完成。
+    執行基礎關鍵字與使用者選定國家/地區的補充搜尋（ddgs v9 多後端）。
+    限速時自動切換後備後端（bing / yahoo），最多重試3次。
     """
-    cutoff = (
-        datetime.datetime.now(datetime.timezone.utc)
-        - datetime.timedelta(days=int(lookback_days))
-    )
     search_queries, news_query_indices = build_search_queries()
+    total = len(search_queries)
+    all_blocks: list[str] = []
+    news_timelimit = "w" if int(lookback_days) <= 7 else "m"
 
-    gnews_jobs = list(GNEWS_SOURCES)
-    ddg_jobs = [(i, q, i in news_query_indices) for i, q in enumerate(search_queries, 1)]
-    total = len(gnews_jobs) + len(ddg_jobs)
-    done = 0
+    for i, query in enumerate(search_queries, 1):
+        if status_text:
+            status_text.text(f"🔍 ddgs 搜尋 {i:02d}/{total}：{query[:50]}...")
+        if progress_bar:
+            progress_bar.progress(i / total)
 
-    gnews_blocks: list[str] = []
-    ddg_blocks: list[str] = []
+        use_news = i in news_query_indices
+        result_block = None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, max(total, 1))) as executor:
-        future_map = {}
-        for source_name, domain in gnews_jobs:
-            fut = executor.submit(_fetch_one_gnews, source_name, domain, cutoff)
-            future_map[fut] = "gnews"
-        for i, query, use_news in ddg_jobs:
-            fut = executor.submit(_fetch_one_ddg, i, query, use_news, cutoff)
-            future_map[fut] = "ddg"
-
-        try:
-            for future in concurrent.futures.as_completed(future_map, timeout=25):
-                kind = future_map[future]
+        for backend in FALLBACK_BACKENDS:
+            for attempt in range(1, 3):
                 try:
-                    text = future.result()
+                    with DDGS() as ddgs:
+                        if use_news:
+                            results = ddgs.news(
+                                query, max_results=8,
+                                timelimit=news_timelimit, backend=backend
+                            )
+                        else:
+                            results = ddgs.text(
+                                query, max_results=10,
+                                timelimit="m", backend=backend
+                            )
+                    if results:
+                        lines = [f"【DDG {i}（{backend}）】{query}"]
+                        for r in results:
+                            body = (
+                                r.get("body")
+                                or r.get("excerpt")
+                                or r.get("description") or ""
+                            )[:300]
+                            href = r.get("href") or r.get("url") or ""
+                            lines.append(
+                                f"  標題：{r.get('title','')}\n"
+                                f"  日期：{r.get('date','')}\n"
+                                f"  摘要：{body}\n"
+                                f"  連結：{href}"
+                            )
+                        result_block = "\n".join(lines)
+                    else:
+                        result_block = (
+                            f"【DDG {i}（{backend}）】{query}\n"
+                            f"  （{backend} 無結果）"
+                        )
+                    break
                 except Exception as exc:
-                    text = f"⚠️ 查詢失敗：{exc}"
-                (gnews_blocks if kind == "gnews" else ddg_blocks).append(text)
-                done += 1
-                if status_text:
-                    status_text.text(f"📡 平行抓取資料中... {done}/{total} 完成")
-                if progress_bar:
-                    progress_bar.progress(done / total)
-        except concurrent.futures.TimeoutError:
-            if status_text:
-                status_text.text(f"⏱️ 部分查詢逾時，已採用目前取得的 {done}/{total} 筆資料...")
+                    err = str(exc)
+                    is_rate = any(
+                        k in err for k in
+                        ("Ratelimit", "429", "403", "vqd", "No results")
+                    )
+                    wait = (2 ** attempt) * 3 + random.uniform(1, 4)
+                    time.sleep(wait)
+                    if not is_rate:
+                        result_block = (
+                            f"【DDG {i}】{query}\n"
+                            f"  ⚠️ {type(exc).__name__}: {err[:120]}"
+                        )
+                        break
 
-    return "\n\n".join(gnews_blocks), "\n\n".join(ddg_blocks)
+            if result_block and "無結果" not in result_block and "⚠️" not in result_block:
+                break
+
+        all_blocks.append(
+            result_block
+            or f"【DDG {i}】{query}\n  ⚠️ 三個後端均無法取得結果，已略過"
+        )
+        time.sleep(random.uniform(2.0, 5.0))
+
+    return "\n\n".join(all_blocks)
 
 
 # ── Prompt 建立 ───────────────────────────────────────
@@ -542,11 +569,11 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 你是專業捷運機電技術分析師，服務對象為台北市政府捷運工程局處長及技術同仁。
 
 # 任務
-以下是透過「Google News 代理（聚焦捷運/輕軌媒體）」與「ddgs 多後端搜尋」蒐集到的國際都市軌道交通原始資料（嚴格涵蓋近 {lookback_days} 天）。
+以下是透過「RSS 訂閱源」與「ddgs 多後端搜尋」蒐集到的國際軌道交通原始資料（涵蓋近 30 天）。
 請嚴格依照三大領域與查核原則，整理出週報（目標期間：{date_range}）。
 請先合併重複來源，再保留具公共運輸安全、工程技術、營運管理參考價值的事件；不要因為來源摘要較短就直接排除。
 
-## ━━ 第一部分：Google News 代理（Metro Report / Railway Gazette / IRJ 等捷運輕軌專業媒體）━━
+## ━━ 第一部分：RSS 訂閱源（Railway Gazette / IRJ 等六大媒體）━━
 {rss_results}
 
 ## ━━ 第二部分：關鍵字搜尋結果（ddgs 多後端）━━
@@ -554,14 +581,16 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 
 ## ⚠️ 最高查核原則（零容忍，違反即捨棄該則）
 1. **只使用上方原始資料中出現的資訊**，禁止自行編造
-2. **範疇限制**：本報告僅涵蓋「都市軌道交通」（捷運／輕軌／MRT／LRT／地鐵／電車），**不納入**重型鐵路、高鐵、貨運鐵路等非都市軌道系統之新聞，全球範圍皆可納入（不限定國家）
-2.5 **來源限制**：下方原始資料已透過程式碼限定只抓取指定的國際專業鐵道媒體與官方運安調查機構，**不會出現地方新聞、八卦媒體等雜訊來源**；若仍看到非專業來源的內容，直接捨棄
-3. **地區排除（零容忍）**：**不納入中國大陸地區**（北京、上海、廣州、深圳、南京、武漢、成都等）之地鐵／輕軌新聞；**香港、台灣及其餘國際地區皆正常納入**，不在此限
-4. **日期判斷（統一標準，不分類別）**：原始資料中標註「日期：YYYY-MM-DD」者，須在 {date_range} 內，超出一律捨棄；原始資料若標註「日期未知」，表示程式碼層已透過搜尋引擎的時間範圍參數（{lookback_days} 天內）做過篩選，**可正常採用**，但報告中該則的發布日期欄位請誠實寫「日期未標示（依搜尋區間判定為近期）」，**禁止自行編造或推測出一個具體日期（例如「2026年06月」）**
-5. **禁止舊聞充數**：超過上述天數限制的歷史案例一律捨棄
-6. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
-7. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
-8. **數量原則（目標固定 10 則）**：請以「輸出 10 則」為目標。若第一輪嚴格篩選後不足 10 則，可在不違反上述查核原則（地區排除、時間範圍、不納入高鐵/貨運鐵路）的前提下，放寬「次要相關性」標準（例如同類別中關聯度較低、但仍屬都市軌道交通範疇的事件）來補足；**但絕對不可捏造、虛構或挪用非本週時間範圍的新聞來湊數**。若放寬後仍不足 10 則，請如實輸出實際則數即可，**結尾統計處不需說明原因，只需列出實際則數**。
+2. **國家/地區限制（最優先執行）**：本次報告**只能**納入以下國家/地區的新聞：
+   **{', '.join(selected_regions)}**
+   其他國家/地區（含「國際」通則性報導）一律**完全忽略，不得納入**。
+3. **日期判斷（依類別分級）**：
+   - 事故類、爭議類：「新聞發布日」與「事件發生日」皆須在 {date_range} 內（**嚴格執行，超出即捨棄**）
+   - 技術新知類：「新聞發布日」或「技術發表/測試日」須在過去 {min(int(lookback_days) * 2, 30)} 天內
+4. **禁止舊聞充數**：超過上述天數限制的歷史案例一律捨棄
+5. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
+6. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
+7. **數量原則**：若原始資料足夠，至少輸出 8 則；若不足 8 則，說明是因來源或日期條件不足，而非自行補舊聞。
 
 ## 三大核心主題領域
 
@@ -578,21 +607,18 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ### 領域 C：營運爭議
 - 勞資罷工、票價政策變動、系統轉換困難或延宕
 
-## 範疇說明
-- 全球國際捷運／輕軌／MRT／LRT 系統，不限定特定國家
-- 不納入重型鐵路、高鐵、貨運鐵路等非都市軌道系統
-- 不納入中國大陸地區地鐵新聞；香港、台灣及其餘國際地區正常納入
+## 本次報告限定國家/地區（僅此清單，其他一律排除）
+{chr(10).join('- ' + r for r in selected_regions)}
 
-## 輸出格式（每則獨立區塊，目標固定 10 則，詳見上方數量原則）
-（以下「# {report_title}」開始才是實際要輸出的報告內容；最後兩行統計與時間是必填項目，但「---」前不要輸出任何如「結尾」之類的標題文字）
+## 輸出格式（每則獨立區塊，目標 8–15 則）
 
 # {report_title}
-> 資料涵蓋期間：{date_range}（都市軌道交通範疇，嚴格依 {lookback_days} 天篩選）
+> 資料涵蓋期間：{date_range}（技術新知可納入近 {min(int(lookback_days) * 2, 30)} 天）
 
 ---
 
 ### 🔹 [技術新知/重大事故/營運爭議] 國家/地區：（一句有力主標題）
-* **發布/事件日期**：（原文發布年月日，或「日期未標示（依搜尋區間判定為近期）」）
+* **發布/事件日期**：（原文發布年月日）
 * **事件摘要**：
   - （列點精要說明，3–5 點）
 * **技術關鍵字**：（英漢對照，例：FRMCS / 未來鐵道行動通訊系統）
@@ -601,7 +627,10 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 
 ---
 
+## 結尾（必填）
+---
 📊 **本週統計**：共 N 則（技術新知 N 則 / 重大事故 N 則 / 營運爭議 N 則）
+🔍 **執行搜尋次數**：RSS {len(RSS_SOURCES)} 源 + ddgs {search_count} 次關鍵字搜尋
 ⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
 """
 
@@ -736,13 +765,17 @@ if generate_btn or send_btn:
         status_text  = st.empty()
 
         try:
-            # Step 1：平行抓取 Google News 代理 + ddgs 關鍵字搜尋
-            status_text.text("📡 平行抓取 Google News 代理 + ddgs 關鍵字搜尋中...")
-            rss_results, ddg_results = fetch_all_sources_parallel(progress_bar, status_text)
+            # Step 1：RSS 訂閱源（主要，穩定）
+            status_text.text("📡 抓取 RSS 訂閱源（Railway Gazette / IRJ 等）...")
+            rss_results = fetch_rss_feeds(status_text=status_text)
 
-            # Step 2：Gemini 分析
+            # Step 2：ddgs 搜尋（補充）
+            status_text.text("🔍 開始 ddgs 多後端關鍵字搜尋...")
+            ddg_results = run_duckduckgo_searches(progress_bar, status_text)
+
+            # Step 3：Gemini 分析
             progress_bar.progress(1.0)
-            status_text.text(f"🤖 {model_choice} 正在分析整理...")
+            status_text.text(f"🤖 {model_choice} 正在分析整理（約 20–60 秒）...")
             client   = genai.Client(api_key=api_key)
             response = client.models.generate_content(
                 model=model_choice,
@@ -819,3 +852,43 @@ else:
     <div class="warn-box">
     📭 尚無報告資料。請點擊上方「立即產生週報」按鈕產生第一份報告。
     </div>""", unsafe_allow_html=True)
+
+# ── 系統架構說明 ──────────────────────────────────────
+with st.expander("📐 系統架構說明"):
+    st.markdown("""
+```
+GitHub Actions（排程：每週一 08:00 台灣時間）
+        ↓
+    main.py
+        ├── 【主要】RSS 訂閱源（6 大媒體；無 API 金鑰、無配額限制）
+        │       Railway Gazette / IRJ / Railway Technology /
+        │       Global Railway Review / Intelligent Transport / UITP
+        ├── 【補充】ddgs 多後端搜尋（20 組關鍵字；DDG → Bing → Yahoo 自動切換）
+        ├── Gemini API（分析整理為繁體中文週報）
+        └── Gmail SMTP → 自動寄送至公務信箱
+```
+    """)
+    ca, cb = st.columns(2)
+    with ca:
+        st.markdown("""
+**✅ 完全免費**
+- GitHub Actions：2,000 分鐘/月
+- Gemini Flash：免費配額每日足用
+- RSS 訂閱源：完全免費、無限速
+- ddgs：開源多後端（DDG/Bing/Yahoo）
+- Gmail SMTP：無限制
+- Streamlit Cloud：免費部署
+        """)
+    with cb:
+        st.markdown("""
+**🔒 安全設計**
+- 金鑰存於 GitHub Secrets / Streamlit Secrets
+- 程式碼中無任何硬碼金鑰
+- Gmail 使用應用程式密碼（非登入密碼）
+- 報告僅寄送至指定信箱
+
+**🔄 容錯設計**
+- RSS 無限速，不受 GitHub Actions IP 限制
+- ddgs 限速時自動切換 Bing / Yahoo 後端
+- 每次查詢 2~5 秒隨機延遲，降低觸發限速機率
+        """)
