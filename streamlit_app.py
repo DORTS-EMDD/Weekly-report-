@@ -261,8 +261,18 @@ with st.expander("主題領域說明"):
 #  新聞來源（透過 Google News RSS 代理；聚焦捷運/輕軌媒體，避開來源網站封鎖）
 # ═══════════════════════════════════════════════════════
 GNEWS_SOURCES = [
-    ("Railway News", "railway-news.com"),
+    # ── 技術新知優先（更新頻率高、技術報導扎實的媒體）──
     ("Railway Gazette International", "railwaygazette.com"),
+    ("Metro Report International", "metro-report.com"),
+    ("IRJ (International Railway Journal)", "railjournal.com"),
+    ("Railway Technology", "railway-technology.com"),
+    ("Railway-News", "railway-news.com"),
+    ("SmartRail World", "smartrailworld.com"),
+    ("Global Mass Transit", "globalmasstransit.net"),
+    # ── 加分來源（產業協會/學會，更新頻率較低，能抓到算賺到）──
+    ("UITP", "uitp.org"),
+    ("IRSE", "irse.org"),
+    ("Transit Jam", "transit-jam.com"),
 ]
 METRO_SCOPE_FILTER = '(metro OR subway OR "light rail" OR LRT OR MRT OR tram)'
 
@@ -376,9 +386,10 @@ BASE_SEARCH_QUERIES = [
     # 技術新知（2 組，廣義關鍵字覆蓋信號/智慧化/硬體/標準）
     f"metro railway technology CBTC GoA4 AI digital twin announcement {today:%Y}",
     f"metro railway FRMCS 5G signalling battery energy rolling stock trial {today:%Y}",
-    # 重大事故（2 組）
+    # 重大事故（3 組，含官方運安調查機構報告，不適合走 Google News site: 代理）
     f"metro subway derailment signal failure fire evacuation incident {today:%B %Y}",
     f"metro subway accident collision track intrusion service disruption {today:%B %Y}",
+    f"metro subway investigation report site:ntsb.gov OR site:gov.uk/raib OR TTSB {today:%Y}",
     # 營運爭議（2 組）
     f"metro subway strike fare increase construction delay controversy {today:%B %Y}",
     f"metro transit safety crime complaints operations controversy {today:%B %Y}",
