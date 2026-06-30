@@ -1,7 +1,7 @@
 """
 國際捷運技術週報 自動產生器 v4.1
 - SDK    : google-genai (新版)
-- 搜尋一 : Google News 代理（主要；聚焦捷運/輕軌媒體，避開來源網站封鎖）
+- 搜尋一 : RSS 訂閱源（主要；Railway Gazette / IRJ 等六大媒體，無限速）
 - 搜尋二 : ddgs（次要；DuckDuckGo + Bing + Yahoo 多後端，帶重試）
 - 寄信   : Gmail SMTP
 - 排程   : GitHub Actions（時間請見 .github/workflows/weekly.yml）
@@ -17,7 +17,6 @@ import datetime
 from io import BytesIO
 from html import escape
 import urllib.request
-import urllib.parse
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from email.mime.multipart import MIMEMultipart
@@ -71,43 +70,34 @@ report_title = f"【{today.strftime('%Y/%m/%d')}】國際捷運技術新知、�
 
 
 # ─────────────────────────────────────────────────────
-# 新聞來源（透過 Google News RSS 代理抓取，避開來源網站 Cloudflare 封鎖）
-# 聚焦都市軌道交通（捷運／輕軌／MRT／LRT）相關專業媒體
+# RSS 訂閱源（主要數據來源；無需 API 金鑰、不受限速）
 # ─────────────────────────────────────────────────────
-GNEWS_SOURCES = [
-    ("Metro Report International", "metro-report.com"),
-    ("Railway Gazette International", "railwaygazette.com"),
-    ("International Railway Journal", "railjournal.com"),
-    ("Mass Transit Magazine", "masstransitmag.com"),
-    ("Global Railway Review", "globalrailwayreview.com"),
-    ("UITP – Global Public Transport", "uitp.org"),
+RSS_SOURCES = [
+    ("Railway Gazette International",
+     "https://www.railwaygazette.com/rss/latest"),
+    ("International Railway Journal",
+     "https://www.railjournal.com/feed/"),
+    ("Railway Technology News",
+     "https://www.railway-technology.com/news/feed/"),
+    ("Global Railway Review",
+     "https://www.globalrailwayreview.com/feed/"),
+    ("Intelligent Transport",
+     "https://www.intelligenttransport.com/feed/"),
+    ("UITP – Global Public Transport",
+     "https://www.uitp.org/rss.xml"),
 ]
 
-# 限定都市軌道交通範疇的關鍵字（過濾掉重型鐵路/貨運等不相關內容）
-METRO_SCOPE_FILTER = '(metro OR subway OR "light rail" OR LRT OR MRT OR tram)'
-
-
-def fetch_google_news() -> str:
-    """
-    透過 Google News RSS 代理抓取指定捷運/輕軌媒體的近期文章。
-    優點：由 Google 端代為抓取，不受來源網站 Cloudflare/反爬蟲機制封鎖；
-    並可用 when:Nd 語法直接在搜尋端嚴格限定天數，不需事後過濾。
-    """
-    all_blocks: list[str] = []
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; MetroWeeklyBot/4.2)"}
+def fetch_rss_feeds() -> str:
+    """從六大國際鐵道/交通期刊 RSS 取得近 30 天文章，不受任何配額限制。"""
     cutoff = (
         datetime.datetime.now(datetime.timezone.utc)
-        - datetime.timedelta(days=NEWS_LOOKBACK_DAYS)
+        - datetime.timedelta(days=30)
     )
+    all_blocks: list[str] = []
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MetroWeeklyBot/4.1)"}
 
-    for source_name, domain in GNEWS_SOURCES:
-        print(f"[INFO] Google News 代理抓取：{source_name}")
-        query = f"site:{domain} {METRO_SCOPE_FILTER} when:{NEWS_LOOKBACK_DAYS}d"
-        url = (
-            "https://news.google.com/rss/search?q="
-            + urllib.parse.quote(query)
-            + "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-        )
+    for source_name, url in RSS_SOURCES:
+        print(f"[INFO] RSS 抓取：{source_name}")
         try:
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=15) as f:
@@ -115,32 +105,53 @@ def fetch_google_news() -> str:
             root = ET.fromstring(raw)
 
             items_found: list[tuple[str, str, str, str]] = []
+            ATOM = "http://www.w3.org/2005/Atom"
+
+            # ── RSS 2.0 ──
             for item in root.findall(".//item"):
-                raw_title = (item.findtext("title") or "").strip()
-                # Google News 標題常附加「 - 來源名稱」後綴，移除以利閱讀
-                title = re.sub(r"\s*-\s*[^-]+$", "", raw_title).strip() or raw_title
-                link = (item.findtext("link") or "").strip()
-                desc = re.sub(r"<[^>]+>", "", item.findtext("description") or "")[:300].strip()
-                pub_str = (item.findtext("pubDate") or "").strip()
-                date_label = _parse_pub_date(pub_str)
+                title    = (item.findtext("title") or "").strip()
+                link     = (item.findtext("link")  or "").strip()
+                desc     = (item.findtext("description") or "").strip()[:400]
+                pub_str  = (item.findtext("pubDate") or "").strip()
                 if not title:
                     continue
+                date_label = _parse_pub_date(pub_str)
                 if _is_recent(pub_str, cutoff):
                     items_found.append((title, link, desc, date_label))
 
+            # ── Atom ──
+            if not items_found:
+                for entry in root.findall(f".//{{{ATOM}}}entry"):
+                    title  = (entry.findtext(f"{{{ATOM}}}title")   or "").strip()
+                    link_el = entry.find(f"{{{ATOM}}}link")
+                    link   = link_el.get("href", "") if link_el is not None else ""
+                    summ   = (entry.findtext(f"{{{ATOM}}}summary") or "").strip()[:400]
+                    pub_str = (
+                        entry.findtext(f"{{{ATOM}}}published")
+                        or entry.findtext(f"{{{ATOM}}}updated")
+                        or ""
+                    ).strip()
+                    if not title:
+                        continue
+                    date_label = _parse_pub_date(pub_str)
+                    if _is_recent(pub_str, cutoff):
+                        items_found.append((title, link, summ, date_label))
+
             if items_found:
-                lines = [f"【新聞來源：{source_name}（共 {len(items_found)} 篇）】"]
+                lines = [f"【RSS來源：{source_name}（共 {len(items_found)} 篇）】"]
                 for t, l, d, dt in items_found[:20]:
-                    lines.append(f"  日期：{dt}\n  標題：{t}\n  摘要：{d}\n  連結：{l}")
+                    lines.append(
+                        f"  日期：{dt}\n  標題：{t}\n  摘要：{d}\n  連結：{l}"
+                    )
                 all_blocks.append("\n".join(lines))
-                print(f"[INFO]   → 取得 {len(items_found)} 篇近 {NEWS_LOOKBACK_DAYS} 天文章")
+                print(f"[INFO]   → 取得 {len(items_found)} 篇近30天文章")
             else:
-                all_blocks.append(f"【新聞來源：{source_name}】（近 {NEWS_LOOKBACK_DAYS} 天無符合範疇之新文章）")
-                print(f"[INFO]   → 無符合範疇之近期文章")
+                all_blocks.append(f"【RSS來源：{source_name}】（近30天無新文章）")
+                print(f"[INFO]   → 無近30天文章")
 
         except Exception as exc:
-            all_blocks.append(f"【新聞來源：{source_name}】⚠️ 失敗：{exc}")
-            print(f"[WARN] {source_name} 失敗：{exc}")
+            all_blocks.append(f"【RSS來源：{source_name}】⚠️ 失敗：{exc}")
+            print(f"[WARN] RSS {source_name} 失敗：{exc}")
 
     return "\n\n".join(all_blocks)
 
@@ -332,11 +343,11 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 你是專業捷運機電技術分析師，服務對象為台北市政府捷運工程局處長及技術同仁。
 
 # 任務
-以下是透過「Google News 代理（聚焦捷運/輕軌媒體）」與「ddgs 多後端搜尋」蒐集到的國際都市軌道交通原始資料（嚴格涵蓋近 {NEWS_LOOKBACK_DAYS} 天）。
+以下是透過「RSS 訂閱源」與「ddgs 多後端搜尋」蒐集到的國際軌道交通原始資料（涵蓋近 30 天）。
 請嚴格依照三大領域與查核原則，整理出週報（目標期間：{date_range}）。
 請先合併重複來源，再保留具公共運輸安全、工程技術、營運管理參考價值的事件；不要因為來源摘要較短就直接排除。
 
-## ━━ 第一部分：Google News 代理（Metro Report / Railway Gazette / IRJ 等捷運輕軌專業媒體）━━
+## ━━ 第一部分：RSS 訂閱源（Railway Gazette / IRJ 等六大媒體）━━
 {rss_results}
 
 ## ━━ 第二部分：關鍵字搜尋結果（ddgs 多後端）━━
@@ -344,12 +355,13 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 
 ## ⚠️ 最高查核原則（零容忍，違反即捨棄該則）
 1. **只使用上方原始資料中出現的資訊**，禁止自行編造
-2. **範疇限制**：本報告僅涵蓋「都市軌道交通」（捷運／輕軌／MRT／LRT／地鐵／電車），**不納入**重型鐵路、高鐵、貨運鐵路等非都市軌道系統之新聞
-3. **日期判斷（統一嚴格標準，不分類別）**：「新聞發布日」與「事件/技術發表日」皆須在 {date_range} 內（過去 {NEWS_LOOKBACK_DAYS} 天），**超出一律捨棄，技術新知亦不例外**
-4. **禁止舊聞充數**：超過上述天數限制的歷史案例一律捨棄
-5. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
-6. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
-7. **數量原則**：若原始資料足夠，至少輸出 8 則；若不足 8 則，說明是因來源或日期條件不足，而非自行補舊聞。
+2. **日期判斷（依類別分級）**：
+   - 事故類、爭議類：「新聞發布日」與「事件發生日」皆須在 {date_range} 內
+   - 技術新知類：「新聞發布日」或「技術發表/測試日」在過去 30 天內即可納入
+3. **禁止舊聞充數**：超過 30 天的歷史案例一律捨棄
+4. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
+5. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
+6. **數量原則**：若原始資料足夠，至少輸出 8 則；若不足 8 則，說明是因來源或日期條件不足，而非自行補舊聞。
 
 ## 三大核心主題領域
 
@@ -372,7 +384,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ## 輸出格式（每則獨立區塊，目標 8–15 則）
 
 # {report_title}
-> 資料涵蓋期間：{date_range}（都市軌道交通範疇，嚴格依 {NEWS_LOOKBACK_DAYS} 天篩選）
+> 資料涵蓋期間：{date_range}（技術新知可納入近 30 天）
 
 ---
 
@@ -389,7 +401,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ## 結尾（必填）
 ---
 📊 **本週統計**：共 N 則（技術新知 N 則 / 重大事故 N 則 / 營運爭議 N 則）
-🔍 **執行搜尋次數**：Google News 代理 {len(GNEWS_SOURCES)} 源 + ddgs {len(SEARCH_QUERIES)} 次關鍵字搜尋
+🔍 **執行搜尋次數**：RSS {len(RSS_SOURCES)} 源 + ddgs {len(SEARCH_QUERIES)} 次關鍵字搜尋
 ⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday_zh}
 """
 
@@ -400,10 +412,10 @@ def generate_report(use_powerful: bool = False) -> str:
     print(f"[INFO] 模型：{model_name}")
     print(f"[INFO] 期間：{date_range}")
 
-    # Step 1：Google News 代理（主要，穩定，聚焦捷運/輕軌媒體）
-    print("\n[INFO] ── Step 1：Google News 代理抓取 ──")
-    rss_results = fetch_google_news()
-    print(f"[INFO] 新聞資料量：{len(rss_results):,} 字元")
+    # Step 1：RSS 訂閱源（主要，穩定）
+    print("\n[INFO] ── Step 1：RSS 訂閱源抓取 ──")
+    rss_results = fetch_rss_feeds()
+    print(f"[INFO] RSS 資料量：{len(rss_results):,} 字元")
 
     # Step 2：ddgs 搜尋（補充，可能受限速）
     print("\n[INFO] ── Step 2：ddgs 多後端搜尋 ──")
@@ -565,7 +577,7 @@ def main():
     print(f"  日期：{today.strftime('%Y年%m月%d日')}")
     print(f"  模式：{'強化版' if use_powerful else '標準版'}")
     print(f"  新聞天數：{NEWS_LOOKBACK_DAYS} 天")
-    print(f"  搜尋：Google News {len(GNEWS_SOURCES)} 源 + ddgs {len(SEARCH_QUERIES)} 次")
+    print(f"  搜尋：RSS {len(RSS_SOURCES)} 源 + ddgs {len(SEARCH_QUERIES)} 次")
     print("=" * 55)
 
     report = generate_report(use_powerful)
