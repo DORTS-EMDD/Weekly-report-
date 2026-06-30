@@ -161,27 +161,6 @@ st.markdown("""
 # ── 日期 ──────────────────────────────────────────────
 today = datetime.date.today()
 
-ADVANCED_REGIONS = [
-    "日本", "韓國", "新加坡", "香港",
-    "澳洲", "英國", "法國", "德國", "荷蘭",
-    "瑞士", "美國", "加拿大",
-]
-
-REGION_SEARCH_TERMS = {
-    "日本": "Japan Tokyo Osaka subway railway operator",
-    "韓國": "Korea Seoul metro subway operator",
-    "新加坡": "Singapore MRT LTA SMRT",
-    "香港": "Hong Kong MTR",
-    "美國": "United States New York subway Washington Metro Chicago CTA",
-    "加拿大": "Canada Toronto TTC Vancouver SkyTrain Montreal REM",
-    "英國": "United Kingdom London Underground Transport for London",
-    "法國": "France Paris Metro RATP Grand Paris Express",
-    "德國": "Germany Berlin U-Bahn Munich U-Bahn Hamburg U-Bahn",
-    "荷蘭": "Netherlands Amsterdam metro Rotterdam metro",
-    "瑞士": "Switzerland Zurich tram Lausanne metro",
-    "澳洲": "Australia Sydney Metro Melbourne Metro Brisbane rail",
-}
-
 # ── 金鑰狀態 ──────────────────────────────────────────
 api_key    = get_secret("GEMINI_API_KEY")
 gmail_user = get_secret("GMAIL_USER")
@@ -208,17 +187,6 @@ with st.sidebar:
         value=7,
         step=1,
         help="事故、營運爭議、技術新知皆依此天數篩選。",
-    )
-
-    st.markdown("### 🌏 地區涵蓋（展示版）")
-    selected_regions = st.multiselect(
-        "額外加強搜尋的地區（平行查詢，數量增加對速度影響很小）",
-        ADVANCED_REGIONS,
-        default=["日本", "新加坡", "香港", "英國"],
-        help=(
-            "正式週報排程（main.py／GitHub Actions）固定涵蓋全部 12 個地區；"
-            "展示版可自由調整，預設精簡組合以確保現場展示流暢（約 20–30 秒）。"
-        ),
     )
 
     st.markdown("### 📬 收件設定")
@@ -298,6 +266,38 @@ GNEWS_SOURCES = [
 ]
 METRO_SCOPE_FILTER = '(metro OR subway OR "light rail" OR LRT OR MRT OR tram)'
 
+# ── 中國大陸新聞過濾（保留香港）─────────────────────────
+# 程式碼層先過濾一輪，Gemini 端的查核原則再做第二道把關。
+_MAINLAND_CHINA_TERMS = [
+    "中国大陆", "中國大陸", "中国铁路", "中國鐵路", "China Railway",
+    "北京", "Beijing", "上海", "Shanghai", "广州", "廣州", "Guangzhou",
+    "深圳", "Shenzhen", "南京", "Nanjing", "武汉", "武漢", "Wuhan",
+    "成都", "Chengdu", "西安", "Xi'an", "重庆", "重慶", "Chongqing",
+    "天津", "Tianjin", "苏州", "蘇州", "Suzhou", "杭州", "Hangzhou",
+    "郑州", "鄭州", "Zhengzhou", "长沙", "長沙", "Changsha",
+    "青岛", "青島", "Qingdao", "大连", "大連", "Dalian",
+    "沈阳", "瀋陽", "Shenyang", "哈尔滨", "哈爾濱", "Harbin",
+    "昆明", "Kunming", "福州", "Fuzhou", "厦门", "廈門", "Xiamen",
+    "无锡", "無錫", "Wuxi", "宁波", "寧波", "Ningbo", "合肥", "Hefei",
+    "济南", "濟南", "Jinan", "东莞", "東莞", "Dongguan", "佛山", "Foshan",
+    "长春", "長春", "Changchun", "石家庄", "石家莊", "Shijiazhuang",
+    "兰州", "蘭州", "Lanzhou", "乌鲁木齐", "烏魯木齊", "Urumqi",
+    "南宁", "南寧", "Nanning", "贵阳", "貴陽", "Guiyang", "太原", "Taiyuan",
+    "南昌", "Nanchang", "呼和浩特", "Hohhot", "银川", "銀川", "Yinchuan",
+    "西宁", "西寧", "Xining",
+]
+_HONGKONG_TERMS = ["香港", "Hong Kong", "MTR", "HKSAR"]
+
+
+def _is_mainland_china_item(text: str) -> bool:
+    """判斷文章是否屬於中國大陸（不含香港）地鐵新聞，供過濾使用。"""
+    if not text:
+        return False
+    if any(term in text for term in _HONGKONG_TERMS):
+        return False
+    return any(term in text for term in _MAINLAND_CHINA_TERMS)
+
+
 def _parse_pub_date(pub_str: str) -> str:
     if not pub_str:
         return "日期未知"
@@ -352,7 +352,11 @@ def _fetch_one_gnews(source_name: str, domain: str, cutoff: datetime.datetime) -
             link = (item.findtext("link") or "").strip()
             desc = re.sub(r"<[^>]+>", "", item.findtext("description") or "")[:300].strip()
             pub_str = (item.findtext("pubDate") or "").strip()
-            if title and _is_recent(pub_str, cutoff):
+            if (
+                title
+                and _is_recent(pub_str, cutoff)
+                and not _is_mainland_china_item(f"{title} {desc}")
+            ):
                 items_found.append((title, link, desc, _parse_pub_date(pub_str)))
 
         if items_found:
@@ -378,7 +382,6 @@ BASE_SEARCH_QUERIES = [
     # 營運爭議（2 組）
     f"metro subway strike fare increase construction delay controversy {today:%B %Y}",
     f"metro transit safety crime complaints operations controversy {today:%B %Y}",
-    # 地區查詢依使用者選擇動態生成，見 build_search_queries()
 ]
 
 
@@ -387,15 +390,6 @@ def build_search_queries() -> tuple[list[str], set[int]]:
     base_len = len(queries)
     # 第 3~6 組（事故／爭議）用新聞型搜尋，較貼近時效性
     news_indices = set(range(3, base_len + 1))
-
-    for region in selected_regions:
-        term = REGION_SEARCH_TERMS.get(region, region)
-        idx = len(queries) + 1
-        queries.append(
-            f"{term} metro rail technology incident controversy news {today:%B %Y}"
-        )
-        news_indices.add(idx)
-
     return queries, news_indices
 
 
@@ -412,6 +406,14 @@ def _fetch_one_ddg(i: int, query: str, use_news: bool) -> str:
                 results = ddgs.text(
                     query, max_results=10, timelimit="m", backend="auto"
                 )
+        if results:
+            results = [
+                r for r in results
+                if not _is_mainland_china_item(
+                    f"{r.get('title','')} "
+                    f"{r.get('body') or r.get('excerpt') or r.get('description') or ''}"
+                )
+            ]
         if results:
             lines = [f"【DDG {i}】{query}"]
             for r in results:
@@ -502,11 +504,12 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ## ⚠️ 最高查核原則（零容忍，違反即捨棄該則）
 1. **只使用上方原始資料中出現的資訊**，禁止自行編造
 2. **範疇限制**：本報告僅涵蓋「都市軌道交通」（捷運／輕軌／MRT／LRT／地鐵／電車），**不納入**重型鐵路、高鐵、貨運鐵路等非都市軌道系統之新聞，全球範圍皆可納入（不限定國家）
-3. **日期判斷（統一嚴格標準，不分類別）**：「新聞發布日」與「事件/技術發表日」皆須在 {date_range} 內（過去 {lookback_days} 天），**超出一律捨棄，技術新知亦不例外**
-4. **禁止舊聞充數**：超過上述天數限制的歷史案例一律捨棄
-5. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
-6. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
-7. **數量原則**：若原始資料足夠，至少輸出 8 則；若不足 8 則，說明是因來源或日期條件不足，而非自行補舊聞。
+3. **地區排除（零容忍）**：**不納入中國大陸地區**（北京、上海、廣州、深圳、南京、武漢、成都等）之地鐵／輕軌新聞；**香港、台灣及其餘國際地區皆正常納入**，不在此限
+4. **日期判斷（統一嚴格標準，不分類別）**：「新聞發布日」與「事件/技術發表日」皆須在 {date_range} 內（過去 {lookback_days} 天），**超出一律捨棄，技術新知亦不例外**
+5. **禁止舊聞充數**：超過上述天數限制的歷史案例一律捨棄
+6. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
+7. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
+8. **數量原則**：若原始資料足夠，至少輸出 8 則；若不足 8 則，說明是因來源或日期條件不足，而非自行補舊聞。
 
 ## 三大核心主題領域
 
@@ -526,6 +529,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ## 範疇說明
 - 全球國際捷運／輕軌／MRT／LRT 系統，不限定特定國家
 - 不納入重型鐵路、高鐵、貨運鐵路等非都市軌道系統
+- 不納入中國大陸地區地鐵新聞；香港、台灣及其餘國際地區正常納入
 
 ## 輸出格式（每則獨立區塊，目標 8–15 則）
 
