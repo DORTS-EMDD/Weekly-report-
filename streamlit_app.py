@@ -205,46 +205,10 @@ with st.sidebar:
         max_value=30,
         value=7,
         step=1,
-        help="事故與營運爭議依此期間篩選；技術新知可納入 2 倍天數（最多 30 天）。",
+        help="事故、營運爭議、技術新知皆依此天數篩選。",
     )
 
-    st.markdown("### 🌏 重點國家")
-
-    default_regions = ["日本", "韓國", "新加坡", "香港"]
-
-    if "selected_regions_state" not in st.session_state:
-        st.session_state["selected_regions_state"] = default_regions.copy()
-
-    col_all, col_clear = st.columns(2)
-
-    if col_all.button("全選", use_container_width=True):
-        st.session_state["selected_regions_state"] = ADVANCED_REGIONS.copy()
-        for region in ADVANCED_REGIONS:
-            st.session_state[f"region_{region}"] = True
-        st.rerun()
-
-    if col_clear.button("清除", use_container_width=True):
-        st.session_state["selected_regions_state"] = []
-        for region in ADVANCED_REGIONS:
-            st.session_state[f"region_{region}"] = False
-        st.rerun()
-
-    selected_regions = []
-
-    with st.expander("選擇國家", expanded=False):
-        for region in ADVANCED_REGIONS:
-            checked = region in st.session_state["selected_regions_state"]
-            if st.checkbox(region, value=checked, key=f"region_{region}"):
-                selected_regions.append(region)
-
-    st.session_state["selected_regions_state"] = selected_regions
-
-    if selected_regions:
-        st.caption("已選：" + "、".join(selected_regions))
-    else:
-        st.warning("請至少選擇一個國家/地區。")
-
-    st.caption("🔍 搜尋採用 DuckDuckGo→Bing→Yahoo 自動依序重試，無需手動設定。")
+    selected_regions = ADVANCED_REGIONS.copy()
 
     st.markdown("### 📬 收件設定")
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
@@ -293,7 +257,7 @@ st.markdown(
 c1, c2, c3 = st.columns(3)
 for col, num, label in [
     (c1, "3",   "主題領域"),
-    (c2, str(len(selected_regions)), "重點國家/地區"),
+    (c2, "全球", "涵蓋範圍"),
     (c3, f"{lookback_days}", "新聞搜尋天數"),
 ]:
     col.markdown(
@@ -302,22 +266,16 @@ for col, num, label in [
         unsafe_allow_html=True,
     )
 
-with st.expander("主題領域與重點地區"):
-    col_area, col_region = st.columns(2)
-    with col_area:
-        st.markdown("""
+with st.expander("主題領域說明"):
+    st.markdown("""
 **主題領域**
 - 技術新知
 - 重大事故
 - 營運爭議
-        """)
-    with col_region:
-        st.markdown("""
-**重點國家/地區**
-- 日本、韓國、新加坡、香港、澳洲
-- 英國、法國、德國、荷蘭、瑞士
-- 美國、加拿大
-        """)
+
+涵蓋範圍：全球國際捷運／鐵道系統，不限定特定國家。
+    """)
+
 
 
 # ═══════════════════════════════════════════════════════
@@ -857,43 +815,3 @@ else:
     <div class="warn-box">
     📭 尚無報告資料。請點擊上方「立即產生週報」按鈕產生第一份報告。
     </div>""", unsafe_allow_html=True)
-
-# ── 系統架構說明 ──────────────────────────────────────
-with st.expander("📐 系統架構說明"):
-    st.markdown("""
-```
-GitHub Actions（排程：每週一 08:00 台灣時間）
-        ↓
-    main.py
-        ├── 【主要】RSS 訂閱源（6 大媒體；無 API 金鑰、無配額限制）
-        │       Railway Gazette / IRJ / Railway Technology /
-        │       Global Railway Review / Intelligent Transport / UITP
-        ├── 【補充】ddgs 多後端搜尋（20 組關鍵字；DDG → Bing → Yahoo 自動切換）
-        ├── Gemini API（分析整理為繁體中文週報）
-        └── Gmail SMTP → 自動寄送至公務信箱
-```
-    """)
-    ca, cb = st.columns(2)
-    with ca:
-        st.markdown("""
-**✅ 完全免費**
-- GitHub Actions：2,000 分鐘/月
-- Gemini Flash：免費配額每日足用
-- RSS 訂閱源：完全免費、無限速
-- ddgs：開源多後端（DDG/Bing/Yahoo）
-- Gmail SMTP：無限制
-- Streamlit Cloud：免費部署
-        """)
-    with cb:
-        st.markdown("""
-**🔒 安全設計**
-- 金鑰存於 GitHub Secrets / Streamlit Secrets
-- 程式碼中無任何硬碼金鑰
-- Gmail 使用應用程式密碼（非登入密碼）
-- 報告僅寄送至指定信箱
-
-**🔄 容錯設計**
-- RSS 無限速，不受 GitHub Actions IP 限制
-- ddgs 限速時自動切換 Bing / Yahoo 後端
-- 每次查詢 2~5 秒隨機延遲，降低觸發限速機率
-        """)
