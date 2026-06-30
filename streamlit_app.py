@@ -1,16 +1,17 @@
 """
-國際捷運技術週報 — Streamlit 展示介面 v4.1
-- 搜尋一：RSS 訂閱源（主要；六大媒體，無限速）
-- 搜尋二：ddgs 多後端（次要；DuckDuckGo + Bing + Yahoo，帶重試）
+國際捷運技術週報 — Streamlit 展示介面 v4.2（展示加速版）
+- 搜尋一：Google News 代理（主要；聚焦捷運/輕軌專業媒體）
+- 搜尋二：ddgs 關鍵字搜尋（次要；精簡查詢量 + 平行抓取）
+- 所有外部請求改為 ThreadPoolExecutor 平行執行，目標 20–30 秒內產出報告
+  （正式週報排程 main.py／GitHub Actions 仍保留完整地毯式查詢，不受此檔影響）
 - 收件人欄位使用 session_state 保留編輯狀態
 - 下拉選單文字顯示修正（黑字）
 """
 
 import os
 import re
-import time
-import random
 import datetime
+import concurrent.futures
 import smtplib
 from io import BytesIO
 from html import escape
@@ -209,7 +210,16 @@ with st.sidebar:
         help="事故、營運爭議、技術新知皆依此天數篩選。",
     )
 
-    selected_regions = ADVANCED_REGIONS.copy()
+    st.markdown("### 🌏 地區涵蓋（展示版）")
+    selected_regions = st.multiselect(
+        "額外加強搜尋的地區（平行查詢，數量增加對速度影響很小）",
+        ADVANCED_REGIONS,
+        default=["日本", "新加坡", "香港", "英國"],
+        help=(
+            "正式週報排程（main.py／GitHub Actions）固定涵蓋全部 12 個地區；"
+            "展示版可自由調整，預設精簡組合以確保現場展示流暢（約 20–30 秒）。"
+        ),
+    )
 
     st.markdown("### 📬 收件設定")
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
@@ -318,194 +328,156 @@ def _is_recent(pub_str: str, cutoff: datetime.datetime) -> bool:
     except Exception:
         return True
 
-def fetch_google_news(status_text=None) -> str:
-    """
-    透過 Google News RSS 代理抓取捷運/輕軌專業媒體文章。
-    由 Google 端代為請求，不受來源網站 Cloudflare/反爬蟲機制封鎖；
-    並用 when:Nd 語法在搜尋端直接嚴格限定天數。
-    """
-    cutoff = (
-        datetime.datetime.now(datetime.timezone.utc)
-        - datetime.timedelta(days=int(lookback_days))
+_GNEWS_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; MetroWeeklyBot/4.2)"}
+
+
+def _fetch_one_gnews(source_name: str, domain: str, cutoff: datetime.datetime) -> str:
+    """抓取單一 Google News 代理來源（供平行呼叫使用）。"""
+    query = f"site:{domain} {METRO_SCOPE_FILTER} when:{int(lookback_days)}d"
+    url = (
+        "https://news.google.com/rss/search?q="
+        + urllib.parse.quote(query)
+        + "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     )
-    all_blocks: list[str] = []
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; MetroWeeklyBot/4.2)"}
+    try:
+        req = urllib.request.Request(url, headers=_GNEWS_HEADERS)
+        with urllib.request.urlopen(req, timeout=8) as f:
+            raw = f.read()
+        root = ET.fromstring(raw)
+        items_found: list[tuple[str, str, str, str]] = []
 
-    for idx, (source_name, domain) in enumerate(GNEWS_SOURCES, 1):
-        if status_text:
-            status_text.text(f"📡 Google News {idx}/{len(GNEWS_SOURCES)}：{source_name}...")
-        query = f"site:{domain} {METRO_SCOPE_FILTER} when:{int(lookback_days)}d"
-        url = (
-            "https://news.google.com/rss/search?q="
-            + urllib.parse.quote(query)
-            + "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-        )
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=15) as f:
-                raw = f.read()
-            root = ET.fromstring(raw)
-            items_found: list[tuple[str, str, str, str]] = []
+        for item in root.findall(".//item"):
+            raw_title = (item.findtext("title") or "").strip()
+            title = re.sub(r"\s*-\s*[^-]+$", "", raw_title).strip() or raw_title
+            link = (item.findtext("link") or "").strip()
+            desc = re.sub(r"<[^>]+>", "", item.findtext("description") or "")[:300].strip()
+            pub_str = (item.findtext("pubDate") or "").strip()
+            if title and _is_recent(pub_str, cutoff):
+                items_found.append((title, link, desc, _parse_pub_date(pub_str)))
 
-            for item in root.findall(".//item"):
-                raw_title = (item.findtext("title") or "").strip()
-                title = re.sub(r"\s*-\s*[^-]+$", "", raw_title).strip() or raw_title
-                link = (item.findtext("link") or "").strip()
-                desc = re.sub(r"<[^>]+>", "", item.findtext("description") or "")[:300].strip()
-                pub_str = (item.findtext("pubDate") or "").strip()
-                if title and _is_recent(pub_str, cutoff):
-                    items_found.append((title, link, desc, _parse_pub_date(pub_str)))
-
-            if items_found:
-                lines = [f"【新聞來源：{source_name}（共 {len(items_found)} 篇）】"]
-                for t, l, d, dt in items_found[:12]:
-                    lines.append(
-                        f"  日期：{dt}\n  標題：{t}\n  摘要：{d}\n  連結：{l}"
-                    )
-                all_blocks.append("\n".join(lines))
-            else:
-                all_blocks.append(f"【新聞來源：{source_name}】（近 {lookback_days} 天無符合範疇之新文章）")
-        except Exception as exc:
-            all_blocks.append(f"【新聞來源：{source_name}】⚠️ 失敗：{exc}")
-
-    return "\n\n".join(all_blocks)
+        if items_found:
+            lines = [f"【新聞來源：{source_name}（共 {len(items_found)} 篇）】"]
+            for t, l, d, dt in items_found[:12]:
+                lines.append(f"  日期：{dt}\n  標題：{t}\n  摘要：{d}\n  連結：{l}")
+            return "\n".join(lines)
+        return f"【新聞來源：{source_name}】（近 {lookback_days} 天無符合範疇之新文章）"
+    except Exception as exc:
+        return f"【新聞來源：{source_name}】⚠️ 失敗：{exc}"
 
 
 # ═══════════════════════════════════════════════════════
 #  搜尋關鍵字（ddgs 多後端，補充用）
 # ═══════════════════════════════════════════════════════
 BASE_SEARCH_QUERIES = [
-    # 技術新知：用「技術名詞 + metro/rail + announcement/trial」提高命中率
-    f"metro railway CBTC GoA4 driverless signalling contract trial {today:%Y}",
-    f"metro railway digital twin predictive maintenance AI condition monitoring {today:%Y}",
-    f"metro rail artificial intelligence fault detection maintenance announcement {today:%Y}",
-    f"railway metro FRMCS 5G communications pilot migration trial {today:%Y}",
-    f"metro rail platform screen door automation upgrade technology {today:%Y}",
-    f"metro railway cybersecurity operations control centre incident response {today:%Y}",
-    f"railway metro battery energy storage regenerative braking supercapacitor {today:%Y}",
-    f"metro train traction inverter SiC silicon carbide new rolling stock {today:%Y}",
-    f"metro rail open payment fare gate QR code account based ticketing {today:%Y}",
-    f"railway metro EULYNX digital interlocking standard deployment {today:%Y}",
-    f"metro extension opening trial operation new line {today:%B %Y}",
-    f"railway metro official press release technology upgrade {today:%B %Y}",
-    # 重大事故：用新聞常見詞彙補足 derailment 以外的事故型態
-    f"metro subway service suspended signal failure power outage {today:%B %Y}",
-    f"metro subway train derailment collision evacuation {today:%B %Y}",
-    f"metro rail fire smoke evacuation station incident {today:%B %Y}",
-    f"metro subway track intrusion person struck service disruption {today:%B %Y}",
-    f"metro train door fault passenger evacuation delay {today:%B %Y}",
-    f"light rail tram accident collision derailment service suspended {today:%B %Y}",
-    f"鉄道 地下鉄 事故 脱線 信号障害 運休 {today:%Y年%m月}",
-    f"지하철 사고 탈선 신호 장애 운행 중단 {today:%Y년 %m월}",
-    # 營運爭議：勞資、票價、停駛、工程延期、公眾反彈
-    f"metro subway transit strike labor dispute service disruption {today:%B %Y}",
-    f"metro subway fare increase public opposition transit authority {today:%B %Y}",
-    f"metro rail construction delay cost overrun controversy {today:%B %Y}",
-    f"metro subway long term closure replacement bus passenger complaints {today:%B %Y}",
-    f"metro transit safety crime passenger complaints operations controversy {today:%B %Y}",
+    # 技術新知（2 組，廣義關鍵字覆蓋信號/智慧化/硬體/標準）
+    f"metro railway technology CBTC GoA4 AI digital twin announcement {today:%Y}",
+    f"metro railway FRMCS 5G signalling battery energy rolling stock trial {today:%Y}",
+    # 重大事故（2 組）
+    f"metro subway derailment signal failure fire evacuation incident {today:%B %Y}",
+    f"metro subway accident collision track intrusion service disruption {today:%B %Y}",
+    # 營運爭議（2 組）
+    f"metro subway strike fare increase construction delay controversy {today:%B %Y}",
+    f"metro transit safety crime complaints operations controversy {today:%B %Y}",
     # 地區查詢依使用者選擇動態生成，見 build_search_queries()
 ]
-FALLBACK_BACKENDS = ["auto", "bing", "yahoo"]
 
 
 def build_search_queries() -> tuple[list[str], set[int]]:
     queries = list(BASE_SEARCH_QUERIES)
     base_len = len(queries)
-    news_indices = set(range(12, base_len))
+    # 第 3~6 組（事故／爭議）用新聞型搜尋，較貼近時效性
+    news_indices = set(range(3, base_len + 1))
 
     for region in selected_regions:
         term = REGION_SEARCH_TERMS.get(region, region)
-        start = len(queries)
-        queries.extend([
-            f"{term} metro rail technology upgrade press release {today:%B %Y}",
-            f"{term} metro subway incident disruption accident {today:%B %Y}",
-            f"{term} metro transit fare strike construction delay controversy {today:%B %Y}",
-        ])
-        news_indices.update({start + 1, start + 2})
+        idx = len(queries) + 1
+        queries.append(
+            f"{term} metro rail technology incident controversy news {today:%B %Y}"
+        )
+        news_indices.add(idx)
 
     return queries, news_indices
 
 
-def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
-    """
-    執行基礎關鍵字與使用者選定國家/地區的補充搜尋（ddgs v9 多後端）。
-    限速時自動切換後備後端（bing / yahoo），最多重試3次。
-    """
-    search_queries, news_query_indices = build_search_queries()
-    total = len(search_queries)
-    all_blocks: list[str] = []
+def _fetch_one_ddg(i: int, query: str, use_news: bool) -> str:
+    """執行單一 ddgs 查詢（供平行呼叫使用）。不重試、不睡眠，失敗就略過。"""
     news_timelimit = "w" if int(lookback_days) <= 7 else "m"
+    try:
+        with DDGS() as ddgs:
+            if use_news:
+                results = ddgs.news(
+                    query, max_results=8, timelimit=news_timelimit, backend="auto"
+                )
+            else:
+                results = ddgs.text(
+                    query, max_results=10, timelimit="m", backend="auto"
+                )
+        if results:
+            lines = [f"【DDG {i}】{query}"]
+            for r in results:
+                body = (
+                    r.get("body") or r.get("excerpt") or r.get("description") or ""
+                )[:300]
+                href = r.get("href") or r.get("url") or ""
+                lines.append(
+                    f"  標題：{r.get('title','')}\n"
+                    f"  日期：{r.get('date','')}\n"
+                    f"  摘要：{body}\n"
+                    f"  連結：{href}"
+                )
+            return "\n".join(lines)
+        return f"【DDG {i}】{query}\n  （無結果）"
+    except Exception as exc:
+        return f"【DDG {i}】{query}\n  ⚠️ {type(exc).__name__}：{str(exc)[:120]}"
 
-    for i, query in enumerate(search_queries, 1):
-        if status_text:
-            status_text.text(f"🔍 ddgs 搜尋 {i:02d}/{total}：{query[:50]}...")
-        if progress_bar:
-            progress_bar.progress(i / total)
 
-        use_news = i in news_query_indices
-        result_block = None
+def fetch_all_sources_parallel(progress_bar=None, status_text=None) -> tuple[str, str]:
+    """
+    平行抓取 Google News 代理 + ddgs 關鍵字搜尋（展示版）。
+    所有來源同時發出請求，整體耗時取決於最慢的單一查詢，
+    而非逐一序列等待，目標在 20–30 秒內完成。
+    """
+    cutoff = (
+        datetime.datetime.now(datetime.timezone.utc)
+        - datetime.timedelta(days=int(lookback_days))
+    )
+    search_queries, news_query_indices = build_search_queries()
 
-        for backend in FALLBACK_BACKENDS:
-            for attempt in range(1, 3):
+    gnews_jobs = list(GNEWS_SOURCES)
+    ddg_jobs = [(i, q, i in news_query_indices) for i, q in enumerate(search_queries, 1)]
+    total = len(gnews_jobs) + len(ddg_jobs)
+    done = 0
+
+    gnews_blocks: list[str] = []
+    ddg_blocks: list[str] = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, max(total, 1))) as executor:
+        future_map = {}
+        for source_name, domain in gnews_jobs:
+            fut = executor.submit(_fetch_one_gnews, source_name, domain, cutoff)
+            future_map[fut] = "gnews"
+        for i, query, use_news in ddg_jobs:
+            fut = executor.submit(_fetch_one_ddg, i, query, use_news)
+            future_map[fut] = "ddg"
+
+        try:
+            for future in concurrent.futures.as_completed(future_map, timeout=25):
+                kind = future_map[future]
                 try:
-                    with DDGS() as ddgs:
-                        if use_news:
-                            results = ddgs.news(
-                                query, max_results=8,
-                                timelimit=news_timelimit, backend=backend
-                            )
-                        else:
-                            results = ddgs.text(
-                                query, max_results=10,
-                                timelimit="m", backend=backend
-                            )
-                    if results:
-                        lines = [f"【DDG {i}（{backend}）】{query}"]
-                        for r in results:
-                            body = (
-                                r.get("body")
-                                or r.get("excerpt")
-                                or r.get("description") or ""
-                            )[:300]
-                            href = r.get("href") or r.get("url") or ""
-                            lines.append(
-                                f"  標題：{r.get('title','')}\n"
-                                f"  日期：{r.get('date','')}\n"
-                                f"  摘要：{body}\n"
-                                f"  連結：{href}"
-                            )
-                        result_block = "\n".join(lines)
-                    else:
-                        result_block = (
-                            f"【DDG {i}（{backend}）】{query}\n"
-                            f"  （{backend} 無結果）"
-                        )
-                    break
+                    text = future.result()
                 except Exception as exc:
-                    err = str(exc)
-                    is_rate = any(
-                        k in err for k in
-                        ("Ratelimit", "429", "403", "vqd", "No results")
-                    )
-                    wait = (2 ** attempt) * 3 + random.uniform(1, 4)
-                    time.sleep(wait)
-                    if not is_rate:
-                        result_block = (
-                            f"【DDG {i}】{query}\n"
-                            f"  ⚠️ {type(exc).__name__}: {err[:120]}"
-                        )
-                        break
+                    text = f"⚠️ 查詢失敗：{exc}"
+                (gnews_blocks if kind == "gnews" else ddg_blocks).append(text)
+                done += 1
+                if status_text:
+                    status_text.text(f"📡 平行抓取資料中... {done}/{total} 完成")
+                if progress_bar:
+                    progress_bar.progress(done / total)
+        except concurrent.futures.TimeoutError:
+            if status_text:
+                status_text.text(f"⏱️ 部分查詢逾時，已採用目前取得的 {done}/{total} 筆資料...")
 
-            if result_block and "無結果" not in result_block and "⚠️" not in result_block:
-                break
-
-        all_blocks.append(
-            result_block
-            or f"【DDG {i}】{query}\n  ⚠️ 三個後端均無法取得結果，已略過"
-        )
-        time.sleep(random.uniform(2.0, 5.0))
-
-    return "\n\n".join(all_blocks)
+    return "\n\n".join(gnews_blocks), "\n\n".join(ddg_blocks)
 
 
 # ── Prompt 建立 ───────────────────────────────────────
@@ -710,17 +682,13 @@ if generate_btn or send_btn:
         status_text  = st.empty()
 
         try:
-            # Step 1：Google News 代理（主要，聚焦捷運/輕軌媒體）
-            status_text.text("📡 透過 Google News 代理抓取（Metro Report / Railway Gazette 等）...")
-            rss_results = fetch_google_news(status_text=status_text)
+            # Step 1：平行抓取 Google News 代理 + ddgs 關鍵字搜尋
+            status_text.text("📡 平行抓取 Google News 代理 + ddgs 關鍵字搜尋中...")
+            rss_results, ddg_results = fetch_all_sources_parallel(progress_bar, status_text)
 
-            # Step 2：ddgs 搜尋（補充）
-            status_text.text("🔍 開始 ddgs 多後端關鍵字搜尋...")
-            ddg_results = run_duckduckgo_searches(progress_bar, status_text)
-
-            # Step 3：Gemini 分析
+            # Step 2：Gemini 分析
             progress_bar.progress(1.0)
-            status_text.text(f"🤖 {model_choice} 正在分析整理（約 20–60 秒）...")
+            status_text.text(f"🤖 {model_choice} 正在分析整理...")
             client   = genai.Client(api_key=api_key)
             response = client.models.generate_content(
                 model=model_choice,
