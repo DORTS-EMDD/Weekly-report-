@@ -244,19 +244,7 @@ with st.sidebar:
     else:
         st.warning("請至少選擇一個國家/地區。")
 
-    with st.expander("🔍 搜尋後端設定", expanded=False):
-        st.caption("ddgs 補充搜尋使用的後端（至少選一個）")
-        use_ddg   = st.checkbox("DuckDuckGo（預設首選）", value=True)
-        use_bing  = st.checkbox("Bing（限速時備援）",      value=True)
-        use_yahoo = st.checkbox("Yahoo（最終備援）",        value=True)
-    selected_backends = (
-        (["auto"]  if use_ddg   else []) +
-        (["bing"]  if use_bing  else []) +
-        (["yahoo"] if use_yahoo else [])
-    )
-    if not selected_backends:
-        st.warning("⚠️ 請至少選一個搜尋後端。")
-        selected_backends = ["auto"]
+    st.caption("🔍 搜尋採用 DuckDuckGo→Bing→Yahoo 自動依序重試，無需手動設定。")
 
     st.markdown("### 📬 收件設定")
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
@@ -384,7 +372,7 @@ def fetch_rss_feeds(status_text=None) -> str:
     """從六大國際鐵道 RSS 取得文章（依使用者設定的新聞搜尋天數過濾）。"""
     cutoff = (
         datetime.datetime.now(datetime.timezone.utc)
-        - datetime.timedelta(days=int(lookback_days))
+        - datetime.timedelta(days=min(int(lookback_days) * 2, 30))
     )
     all_blocks: list[str] = []
     headers = {"User-Agent": "Mozilla/5.0 (compatible; MetroWeeklyBot/4.1)"}
@@ -510,7 +498,7 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
         use_news = i in news_query_indices
         result_block = None
 
-        for backend in selected_backends:
+        for backend in FALLBACK_BACKENDS:
             for attempt in range(1, 3):
                 try:
                     with DDGS() as ddgs:
@@ -582,7 +570,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 你是專業捷運機電技術分析師，服務對象為台北市政府捷運工程局處長及技術同仁。
 
 # 任務
-以下是透過「RSS 訂閱源」與「ddgs 多後端搜尋」蒐集到的國際軌道交通原始資料（涵蓋近 {lookback_days} 天）。
+以下是透過「RSS 訂閱源」與「ddgs 多後端搜尋」蒐集到的國際軌道交通原始資料（涵蓋近 30 天）。
 請嚴格依照三大領域與查核原則，整理出週報（目標期間：{date_range}）。
 請先合併重複來源，再保留具公共運輸安全、工程技術、營運管理參考價值的事件；不要因為來源摘要較短就直接排除。
 
@@ -595,21 +583,17 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ## ⚠️ 最高查核原則（零容忍，違反即捨棄該則）
 1. **只使用上方原始資料中出現的資訊**，禁止自行編造
 2. **國家/地區限制（依領域分級，最高優先）**：
-   - **領域 A 技術新知**：不限定國家，全球範圍皆可納入
+   - **領域 A 技術新知**：不限定國家，全球範圍皆可納入，**但一律排除「中國」（含中國大陸各城市，如北京、上海、廣州、深圳、廈門等）**
    - **領域 B 事故分析、領域 C 營運爭議**：**只能**納入以下使用者勾選之國家/地區：
      **{', '.join(selected_regions)}**
-     其他未勾選國家的事故或爭議新聞一律**完全忽略，不得納入**
+     其他國家（含中國、含未勾選國家）的事故或爭議新聞一律**完全忽略，不得納入**
 3. **日期判斷（依類別分級）**：
    - 事故類、爭議類：「新聞發布日」與「事件發生日」皆須在 {date_range} 內（**嚴格執行，超出即捨棄**）
-   - 技術新知類：「新聞發布日」或「技術發表/測試日」須在過去 {lookback_days} 天內（與使用者設定天數一致，**不得自行放寬**）
+   - 技術新知類：「新聞發布日」或「技術發表/測試日」須在過去 {min(int(lookback_days) * 2, 30)} 天內
 4. **禁止舊聞充數**：超過上述天數限制的歷史案例一律捨棄
 5. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
 6. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
-7. **數量與配額原則**：
-   - 三大領域**各自獨立蒐集、互不排擠**：技術新知最多 5 則、重大事故最多 5 則、營運爭議最多 5 則，總計上限 15 則
-   - 不可因技術新知資料量大就排擠事故/爭議類別的篇幅；若某領域實際符合條件者不足 5 則，依實際數量輸出即可，不需湊數
-   - 若三領域加總不足 8 則，請說明是因來源或日期條件不足，而非自行補舊聞
-8. **領域 B、C 強制檢查**：在輸出前，請務必逐一檢查上方原始資料中，是否有任何一則與「{', '.join(selected_regions)}」相關的事故或營運爭議內容（即使摘要簡短、即使只有片段資訊），只要符合日期與地區條件就應納入，不可僅因技術新知類別資料豐富就略過此步驟。
+7. **數量原則**：若原始資料足夠，至少輸出 8 則；若不足 8 則，說明是因來源或日期條件不足，而非自行補舊聞。
 
 ## 三大核心主題領域
 
@@ -627,14 +611,14 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 - 勞資罷工、票價政策變動、系統轉換困難或延宕
 
 ## 地區範圍說明
-- 技術新知（領域 A）：全球皆可納入
+- 技術新知（領域 A）：全球皆可納入，唯獨排除中國
 - 事故分析、營運爭議（領域 B、C）：僅限以下國家/地區
 {chr(10).join('  - ' + r for r in selected_regions)}
 
-## 輸出格式（每則獨立區塊；技術新知最多5則／重大事故最多5則／營運爭議最多5則，總計上限 15 則，依實際符合條件數量為準）
+## 輸出格式（每則獨立區塊，目標 8–15 則）
 
 # {report_title}
-> 資料涵蓋期間：{date_range}（技術新知可納入近 {lookback_days} 天）
+> 資料涵蓋期間：{date_range}（技術新知可納入近 {min(int(lookback_days) * 2, 30)} 天，全球範圍，排除中國）
 
 ---
 
