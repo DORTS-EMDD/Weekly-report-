@@ -422,8 +422,9 @@ def _domain_allowed(href: str, allowed_domains: list[str]) -> bool:
 def build_search_queries() -> tuple[list[str], set[int]]:
     queries = list(BASE_SEARCH_QUERIES)
     base_len = len(queries)
-    # 第 3~7 組（事故／爭議）用新聞型搜尋，較貼近時效性
-    news_indices = set(range(3, base_len + 1))
+    # 全部改用新聞型搜尋（ddgs.news），因為只有 news 後端會回傳日期欄位，
+    # 才能在程式碼層做日期過濾，避免抓到舊聞卻無法判斷。
+    news_indices = set(range(1, base_len + 1))
     return queries, news_indices
 
 
@@ -434,7 +435,7 @@ def _allowed_domains_for(i: int) -> list[str]:
     return TRUSTED_MEDIA_DOMAINS
 
 
-def _fetch_one_ddg(i: int, query: str, use_news: bool) -> str:
+def _fetch_one_ddg(i: int, query: str, use_news: bool, cutoff: datetime.datetime) -> str:
     """執行單一 ddgs 查詢（供平行呼叫使用）。不重試、不睡眠，失敗就略過。"""
     news_timelimit = "w" if int(lookback_days) <= 7 else "m"
     allowed_domains = _allowed_domains_for(i)
@@ -456,6 +457,8 @@ def _fetch_one_ddg(i: int, query: str, use_news: bool) -> str:
                     f"{r.get('body') or r.get('excerpt') or r.get('description') or ''}"
                 )
                 and _domain_allowed(r.get("href") or r.get("url") or "", allowed_domains)
+                # 日期欄位必須存在且在 cutoff 內，避免抓到舊聞卻無法判斷
+                and r.get("date") and _is_recent(r.get("date"), cutoff)
             ]
         if results:
             lines = [f"【DDG {i}】{query}"]
@@ -466,7 +469,7 @@ def _fetch_one_ddg(i: int, query: str, use_news: bool) -> str:
                 href = r.get("href") or r.get("url") or ""
                 lines.append(
                     f"  標題：{r.get('title','')}\n"
-                    f"  日期：{r.get('date','')}\n"
+                    f"  日期：{_parse_pub_date(r.get('date',''))}\n"
                     f"  摘要：{body}\n"
                     f"  連結：{href}"
                 )
@@ -502,7 +505,7 @@ def fetch_all_sources_parallel(progress_bar=None, status_text=None) -> tuple[str
             fut = executor.submit(_fetch_one_gnews, source_name, domain, cutoff)
             future_map[fut] = "gnews"
         for i, query, use_news in ddg_jobs:
-            fut = executor.submit(_fetch_one_ddg, i, query, use_news)
+            fut = executor.submit(_fetch_one_ddg, i, query, use_news, cutoff)
             future_map[fut] = "ddg"
 
         try:
@@ -549,7 +552,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 2. **範疇限制**：本報告僅涵蓋「都市軌道交通」（捷運／輕軌／MRT／LRT／地鐵／電車），**不納入**重型鐵路、高鐵、貨運鐵路等非都市軌道系統之新聞，全球範圍皆可納入（不限定國家）
 2.5 **來源限制**：下方原始資料已透過程式碼限定只抓取指定的國際專業鐵道媒體與官方運安調查機構，**不會出現地方新聞、八卦媒體等雜訊來源**；若仍看到非專業來源的內容，直接捨棄
 3. **地區排除（零容忍）**：**不納入中國大陸地區**（北京、上海、廣州、深圳、南京、武漢、成都等）之地鐵／輕軌新聞；**香港、台灣及其餘國際地區皆正常納入**，不在此限
-4. **日期判斷（統一嚴格標準，不分類別）**：「新聞發布日」與「事件/技術發表日」皆須在 {date_range} 內（過去 {lookback_days} 天），**超出一律捨棄，技術新知亦不例外**
+4. **日期判斷（統一嚴格標準，不分類別）**：「新聞發布日」與「事件/技術發表日」皆須在 {date_range} 內（過去 {lookback_days} 天），**超出一律捨棄，技術新知亦不例外**；**禁止使用「具體日期未詳載，屬期限內發布」之類的推測性說法**，原始資料中若沒有明確日期可供判斷，該則直接捨棄，不可納入報告
 5. **禁止舊聞充數**：超過上述天數限制的歷史案例一律捨棄
 6. **無付費牆**：確保 URL 可公開存取，付費牆來源捨棄
 7. **寧缺勿濫**：確實無符合條件者，直接回報「本週無符合條件之重大異動」
