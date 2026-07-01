@@ -244,7 +244,9 @@ with st.sidebar:
 
     # ── 國家地區篩選 (下拉式收合) ──
     st.markdown("### 🌏 重點國家/地區")
-    default_regions = ["日本", "韓國", "新加坡", "香港"]
+    default_regions = [ "日本", "韓國", "新加坡", "香港",
+    "澳洲", "英國", "法國", "德國", "荷蘭",
+    "瑞士", "美國", "加拿大",]
     if "selected_regions_state" not in st.session_state:
         st.session_state["selected_regions_state"] = default_regions.copy()
 
