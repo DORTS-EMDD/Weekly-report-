@@ -14,6 +14,7 @@ import time
 import random
 import smtplib
 import datetime
+import concurrent.futures
 from io import BytesIO
 from html import escape
 import urllib.request
@@ -243,96 +244,105 @@ for region in ADVANCED_REGIONS:
 _NEWS_QUERY_INDICES = set(range(13, len(SEARCH_QUERIES) + 1))
 
 
+def _run_single_ddg_query(i: int, query: str, use_news: bool, news_timelimit: str) -> tuple[int, str]:
+    """執行單一 ddgs 查詢（可安全在背景執行緒平行執行）。"""
+    # 隨機抖動起跑時間，避免多執行緒同時擊中 DDGS 觸發瞬間限速
+    time.sleep(random.uniform(0.1, 0.8))
+    result_block = None
+
+    for backend in ["auto", "bing"]:
+        for attempt in range(1, 3):        # 每個後端最多嘗試 2 次
+            try:
+                with DDGS() as ddgs:
+                    if use_news:
+                        results = ddgs.news(
+                            query, max_results=8,
+                            timelimit=news_timelimit, backend=backend
+                        )
+                    else:
+                        results = ddgs.text(
+                            query, max_results=10,
+                            timelimit="m", backend=backend
+                        )
+
+                if results:
+                    lines = [f"【DDG {i}（{backend}）】{query}"]
+                    for r in results:
+                        body = (
+                            r.get("body")
+                            or r.get("excerpt")
+                            or r.get("description")
+                            or ""
+                        )[:300]
+                        href = r.get("href") or r.get("url") or ""
+                        lines.append(
+                            f"  標題：{r.get('title','')}\n"
+                            f"  日期：{r.get('date','')}\n"
+                            f"  摘要：{body}\n"
+                            f"  連結：{href}"
+                        )
+                    result_block = "\n".join(lines)
+                else:
+                    result_block = (
+                        f"【DDG {i}（{backend}）】{query}\n"
+                        f"  （{backend} 無結果）"
+                    )
+                break   # 成功，跳出 attempt 迴圈
+
+            except Exception as exc:
+                err = str(exc)
+                is_rate = any(
+                    k in err for k in
+                    ("Ratelimit", "429", "403", "vqd", "No results")
+                )
+                wait = attempt * 1.0 + random.uniform(0.5, 1.5)
+                time.sleep(wait)
+                if not is_rate:
+                    result_block = (
+                        f"【DDG {i}】{query}\n"
+                        f"  ⚠️ {type(exc).__name__}: {err[:120]}"
+                    )
+                    break   # 非限速錯誤，不切後端
+
+        if result_block and "無結果" not in result_block and "⚠️" not in result_block:
+            break   # 已取得有效結果，無需切後端
+
+    return i, (
+        result_block
+        or f"【DDG {i}】{query}\n  ⚠️ 兩個後端均無法取得結果，已略過"
+    )
+
+
 def run_duckduckgo_searches() -> str:
     """
-    執行基礎關鍵字與先進國家/地區補充搜尋（ddgs v9 多後端）。
+    平行執行基礎關鍵字與先進國家/地區補充搜尋（ddgs v9 多後端）。
     - 技術類：text()  + backend=auto
     - 事故/爭議類：news() + backend=auto
-    - 限速時自動切換後備後端（bing / yahoo），最多重試 3 次
-    - 每次查詢間隔 2~5 秒（隨機），降低觸發限速機率
+    - 限速時自動切換後備後端（bing），最多重試 2 次
+    - 同時最多 6 條併發，兼顧速度與避免被 DDGS 判定為濫用流量
+    - 相較舊版序列執行（56 組查詢逐一等待，最壞情況可能超過 GitHub Actions
+      15 分鐘 timeout 被強制取消），平行化後總時間大幅縮短。
     """
     total = len(SEARCH_QUERIES)
-    all_blocks: list[str] = []
-    FALLBACK_BACKENDS = ["auto", "bing", "yahoo"]
     news_timelimit = "w" if NEWS_LOOKBACK_DAYS <= 7 else "m"
+    results_map: dict[int, str] = {}
+    max_workers = max(1, min(6, total))
 
-    for i, query in enumerate(SEARCH_QUERIES, 1):
-        use_news = i in _NEWS_QUERY_INDICES
-        search_label = "新聞搜尋" if use_news else "文字搜尋"
-        print(f"[INFO] DDG {i:02d}/{total}（{search_label}）：{query}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _run_single_ddg_query, i, query, i in _NEWS_QUERY_INDICES, news_timelimit
+            ): i
+            for i, query in enumerate(SEARCH_QUERIES, 1)
+        }
+        done_count = 0
+        for future in concurrent.futures.as_completed(futures):
+            i, block = future.result()
+            results_map[i] = block
+            done_count += 1
+            print(f"[INFO] DDG 已完成 {done_count:02d}/{total}")
 
-        result_block = None
-
-        for backend in FALLBACK_BACKENDS:
-            for attempt in range(1, 3):        # 每個後端最多嘗試 2 次
-                try:
-                    with DDGS() as ddgs:
-                        if use_news:
-                            results = ddgs.news(
-                                query, max_results=8,
-                                timelimit=news_timelimit, backend=backend
-                            )
-                        else:
-                            results = ddgs.text(
-                                query, max_results=10,
-                                timelimit="m", backend=backend
-                            )
-
-                    if results:
-                        lines = [f"【DDG {i}（{backend}）】{query}"]
-                        for r in results:
-                            body = (
-                                r.get("body")
-                                or r.get("excerpt")
-                                or r.get("description")
-                                or ""
-                            )[:300]
-                            href = r.get("href") or r.get("url") or ""
-                            lines.append(
-                                f"  標題：{r.get('title','')}\n"
-                                f"  日期：{r.get('date','')}\n"
-                                f"  摘要：{body}\n"
-                                f"  連結：{href}"
-                            )
-                        result_block = "\n".join(lines)
-                    else:
-                        result_block = (
-                            f"【DDG {i}（{backend}）】{query}\n"
-                            f"  （{backend} 無結果）"
-                        )
-                    break   # 成功，跳出 attempt 迴圈
-
-                except Exception as exc:
-                    err = str(exc)
-                    is_rate = any(
-                        k in err for k in
-                        ("Ratelimit", "429", "403", "vqd", "No results")
-                    )
-                    wait = (2 ** attempt) * 3 + random.uniform(1, 4)
-                    print(
-                        f"[WARN] DDG {i} backend={backend} attempt={attempt} "
-                        f"→ {'限速' if is_rate else '錯誤'}，等待 {wait:.1f}s"
-                    )
-                    time.sleep(wait)
-                    if not is_rate:
-                        result_block = (
-                            f"【DDG {i}】{query}\n"
-                            f"  ⚠️ {type(exc).__name__}: {err[:120]}"
-                        )
-                        break   # 非限速錯誤，不切後端
-
-            if result_block and "無結果" not in result_block and "⚠️" not in result_block:
-                break   # 已取得有效結果，無需切後端
-
-        all_blocks.append(
-            result_block
-            or f"【DDG {i}】{query}\n  ⚠️ 三個後端均無法取得結果，已略過"
-        )
-
-        # 每次搜尋後隨機等待 2~5 秒（降低累積限速風險）
-        time.sleep(random.uniform(2.0, 5.0))
-
-    return "\n\n".join(all_blocks)
+    return "\n\n".join(results_map[i] for i in sorted(results_map))
 
 
 # ─────────────────────────────────────────────────────
