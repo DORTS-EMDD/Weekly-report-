@@ -244,9 +244,7 @@ with st.sidebar:
 
     # ── 國家地區篩選 (下拉式收合) ──
     st.markdown("### 🌏 重點國家/地區")
-    default_regions = [ "日本", "韓國", "新加坡", "香港",
-    "澳洲", "英國", "法國", "德國", "荷蘭",
-    "瑞士", "美國", "加拿大",]
+    default_regions = ["日本", "韓國", "新加坡", "香港"]
     if "selected_regions_state" not in st.session_state:
         st.session_state["selected_regions_state"] = default_regions.copy()
 
@@ -368,7 +366,7 @@ RSS_SOURCES = [
 # 每個 tuple：(顯示名稱, 查詢關鍵字, hl 語系, gl 國別, ceid 語言代碼)
 REGION_NEWS_QUERIES: dict[str, list[tuple[str, str, str, str, str]]] = {
     "日本": [("Google News地區代理－日本地下鉄/メトロ",
-             "(地下鉄 OR メトロ OR 新交通システム)", "ja", "JP", "ja")],
+             "(地下鉄 OR メトロ OR 新交通システム) -ゲーム -Steam -スタンプラリー -アニメ", "ja", "JP", "ja")],
     "韓國": [("Google News地區代理－韓國地下鐵",
              "(지하철 OR 도시철도 OR 경전철)", "ko", "KR", "kr")],
     "新加坡": [("Google News地區代理－Singapore MRT",
@@ -382,7 +380,7 @@ REGION_NEWS_QUERIES: dict[str, list[tuple[str, str, str, str, str]]] = {
     "法國": [("Google News地區代理－France Metro",
              "(Metro Paris OR RATP OR Grand Paris Express)", "fr", "FR", "fr")],
     "德國": [("Google News地區代理－Germany U-Bahn",
-             "(U-Bahn OR S-Bahn Metro)", "de", "DE", "de")],
+             "(U-Bahn OR S-Bahn Metro) -Spiel -Kinofilm -Videospiel", "de", "DE", "de")],
     "荷蘭": [("Google News地區代理－Netherlands Metro",
              "(Amsterdam metro OR Rotterdam metro)", "nl", "NL", "nl")],
     "瑞士": [("Google News地區代理－Switzerland Metro/Tram",
@@ -485,8 +483,12 @@ def fetch_rss_feeds(sources: list[tuple[str, str]] | None = None, status_text=No
                         items_found.append((title, link, summ, _parse_pub_date(pub_str)))
 
             if items_found:
-                lines = [f"【RSS來源：{source_name}（共 {len(items_found)} 篇）】"]
-                for t, l, d, dt in items_found[:12]:
+                shown = items_found[:12]
+                if len(items_found) > 12:
+                    lines = [f"【RSS來源：{source_name}（共 {len(items_found)} 篇，僅列出前 {len(shown)} 篇）】"]
+                else:
+                    lines = [f"【RSS來源：{source_name}（共 {len(items_found)} 篇）】"]
+                for t, l, d, dt in shown:
                     lines.append(f"  日期：{dt}\n  標題：{t}\n  摘要：{d}\n  連結：{l}")
                 all_blocks.append("\n".join(lines))
             else:
@@ -651,9 +653,10 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
    - 若同一事件在原始資料中找不到，但你「記得」曾經發生過類似新聞，**一律視為未提供資料**，不要用記憶內容補寫。你只能整理「第一部分」與「第二部分」中實際出現的文字，不能新增任何未出現於原始資料的事實、數字或日期。
    - **來源必須是該則事件本身的具體新聞文章連結**：「資料來源」欄位填入的網址，**必須**是原始資料中該則內容自己標註的「連結：」網址，且該網址指向的必須是報導這件事本身的新聞文章頁面。**嚴禁**引用網站首頁、路網圖、票務頁面、會員名錄、活動總覽頁等非新聞頁面來充當來源，也**嚴禁**在原始資料中找不到對應連結時，挪用同一媒體其他頁面的網址頂替。若某則事件在原始資料中沒有對應的具體文章連結，即使內容看起來合理，也必須**整則捨棄**。
    - 若某新聞類型或國家因日期查核、來源查核後篩到剩下很少則、甚至 0 則，**寧可誠實回報「本期無相關新聞」**，也不要為了湊滿 8–15 則而放寬查核標準。
+6. **【國家範圍與類別規則衝突時，國家範圍優先】**：判斷完新聞類型（技術新知/重大事故/營運爭議/營運政策）之後，**務必**再檢查一次事件發生地是否落在下方「國家/地區限制清單」內。**技術新知類別不是例外**——一則發生在清單外國家（例如瑞典、義大利等未勾選國家）的技術新聞，即使內容再精彩、再有參考價值，也必須捨棄，不得因為它「屬於技術新知類別」就自動視為不受國家限制。
 
-## 國家/地區限制清單
-本報告限定報導以下國家/地區：
+## 國家/地區限制清單（絕對邊界，無例外）
+本報告限定報導以下國家/地區，**沒有任何例外**：即使是「技術新知」類別、即使某則新聞的技術含量再高、即使該供應商/技術也用於清單內國家，只要事件**發生地**（新聞主體所在的城市/系統）不在下方清單中，就必須整則捨棄，**不得**以「技術不分國界」「有參考價值」等理由破例納入：
 {chr(10).join('- ' + r for r in selected_regions)}
 
 ## 輸出格式（每則獨立區塊，目標 8–15 則）
