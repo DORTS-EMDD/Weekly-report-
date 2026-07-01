@@ -1,6 +1,6 @@
 """
 國際捷運技術週報 — Streamlit 展示介面
-- 搜尋一：RSS 訂閱源（涵蓋 12 項權威媒體）
+- 搜尋一：RSS 訂閱源（RSS_SOURCES 清單，每項來源皆已個別查證是否有可訂閱 RSS）
 - 搜尋二：ddgs 多後端（動態精簡關鍵字以加速）
 - 依左側勾選事件篩選各自的新聞 (新增「營運政策」並改為下拉收合選單)
 - 嚴格排除傳統火車/高鐵，優先聚焦捷運、中運量與LRRT系統
@@ -321,21 +321,28 @@ for col, num, label in [
 
 
 # ═══════════════════════════════════════════════════════
-#  RSS 訂閱源（12 項核心權威媒體）
+#  RSS 訂閱源（權威媒體清單，逐一查證是否有可用 RSS）
 # ═══════════════════════════════════════════════════════
+# 註：每一列皆已個別查證是否存在可訂閱的 RSS（2026-07 查證）。
+# 找不到官方 RSS 端點的來源（UITP、RTRI）改用 Google News 的
+# site: 搜尋做為代理 RSS，仍會標明真實來源網域，供 Gemini／人工複查連結是否有效。
 RSS_SOURCES = [
-    ("Railway Gazette International", "https://www.railwaygazette.com/rss/latest"),
+    ("Railway Gazette International（已併入 Metro Report International 都市軌道報導）",
+     "https://www.railwaygazette.com/149.rss"),
     ("International Railway Journal (IRJ)", "https://www.railjournal.com/feed/"),
-    ("Railway Technology", "https://www.railway-technology.com/news/feed/"),
+    ("Railway Technology", "https://www.railway-technology.com/feed/"),
     ("Railway-News", "https://railway-news.com/feed/"),
     ("Global Railway Review", "https://www.globalrailwayreview.com/feed/"),
     ("Intelligent Transport", "https://www.intelligenttransport.com/feed/"),
-    ("UITP – Global Public Transport", "https://www.uitp.org/rss.xml"),
-    ("Mass Transit Network", "https://www.masstransitnetwork.com/feed/"),
-    ("東洋經濟 Online (鐵道)", "https://toyokeizai.net/list/feed/rss"),
-    ("鉄道チャンネル (日本鐵道)", "https://tetsudo-ch.com/feed"),
-    ("乗りものニュース (交通新聞)", "https://trafficnews.jp/feed"),
-    ("Transit Jam (獨立爭議媒體)", "https://transitjam.com/feed/"),
+    ("UITP（無官方RSS，改用Google News代理）",
+     "https://news.google.com/rss/search?q=site:uitp.org&hl=en-US&gl=US&ceid=US:en"),
+    ("Mass Transit Network", "https://masstransit.network/index.rss"),
+    ("Global Mass Transit", "https://www.globalmasstransit.net/feed"),
+    ("東洋經濟 Online（鐵道最前線，全站RSS需自行篩選）", "https://toyokeizai.net/list/feed/rss"),
+    ("乗りものニュース", "https://trafficnews.jp/feed"),
+    ("鉄道総合技術研究所 RTRI（無官方RSS，改用Google News代理）",
+     "https://news.google.com/rss/search?q=site:rtri.or.jp&hl=ja&gl=JP&ceid=JP:ja"),
+    ("Transit Jam", "https://transitjam.com/feed/"),
 ]
 
 def _parse_pub_date(pub_str: str) -> str:
@@ -550,7 +557,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 以下是透過「RSS 訂閱源」與「ddgs 多後端搜尋」蒐集到的原始資料。
 請依照使用者勾選的類型，整理出具參考價值的週報（目標期間：{date_range}）。
 
-## ━━ 第一部分：RSS 訂閱源（涵蓋 12 大媒體）━━
+## ━━ 第一部分：RSS 訂閱源（涵蓋 {len(RSS_SOURCES)} 個媒體，見下方權重清單）━━
 {rss_results}
 
 ## ━━ 第二部分：關鍵字搜尋結果━━
@@ -563,8 +570,15 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
    - **營運爭議**：罷工、預算超支、票價爭議、合約糾紛。
    - **營運政策**：捷運站內安檢新規、乘車規則變動（如禁帶大型鋰電池/滑板車）、安全管理政策。
 2. **最高優先級（專注捷運與LRRT，排除一般鐵路/高鐵）**：本報告是提供給北市府捷運局的國際週報，請**嚴格過濾並排除**傳統客運/貨運鐵路（火車、城際列車）與高速鐵路（HSR）的新聞。請**絕對優先保留並聚焦**於國際上的**「都市捷運系統（Metro / Subway / Underground）」**以及**「中運量 / 輕軌 / 膠輪系統（LRRT / AGT / LRT）」**的新聞，並給予最大篇幅。
-3. **來源權重**：請優先採納來自 12 大權威機構的報導：Railway Gazette, IRJ, UITP, IRSE, Railway Technology, Rail Forum, Global Mass Transit, NTSB/RAIB/TTSB, Transit Jam, Railway-News, 東洋經濟 Online, 交通新聞/乗りものニュース。
-4. **放寬篩選**：只要事件對捷運局具備實務參考價值、或與使用者選擇的國家/地區有關聯，即使日期稍有落差或摘要較短，亦可納入。不需要過度嚴格剃除。
+3. **來源權重**：請優先採納「第一部分：RSS 訂閱源」中實際出現的來源（本次共 {len(RSS_SOURCES)} 個，清單如下），這些是本次真正抓取到的媒體，**不要**引用或想像清單以外的媒體名稱：
+{chr(10).join('   - ' + name for name, _ in RSS_SOURCES)}
+4. **放寬篩選**：只要事件對捷運局具備實務參考價值、或與使用者選擇的國家/地區有關聯，即使摘要較短，亦可納入。不需要過度嚴格剃除主題相關性；但日期真實性規則（見下方第 5 點）沒有彈性空間。
+5. **【絕對禁止腦補、嚴格日期查核】（違反本條視為報告失敗）**：
+   - 每一則新聞的「發布/事件日期」**必須**直接取自原始資料中該則內容本身標註的日期字串（RSS 的「日期：」欄位，或關鍵字搜尋結果摘要中出現的日期）。**禁止**依你自己知識庫中對該事件、公司或專案的既有印象去推測、換算或臆造日期。
+   - 若某則原始資料**沒有**明確可辨識的日期，或日期含糊到無法判斷是哪一天，**直接捨棄該則**，不要用「近期」「今年」等模糊字眼帶過，也不要自行補上一個日期。
+   - 若某則的日期**晚於今天（{today.strftime('%Y-%m-%d')}）**，即為不合理的未來日期，**直接剔除**，不得納入報告、不得嘗試「合理化」或改寫成合理日期。
+   - 若同一事件在原始資料中找不到，但你「記得」曾經發生過類似新聞，**一律視為未提供資料**，不要用記憶內容補寫。你只能整理「第一部分」與「第二部分」中實際出現的文字，不能新增任何未出現於原始資料的事實、數字或日期。
+   - 若某新聞類型或國家因日期查核後篩到剩下很少則、甚至 0 則，**寧可誠實回報「本期無相關新聞」**，也不要為了湊滿 8–15 則而放寬日期查核標準。
 
 ## 國家/地區限制清單
 本報告限定報導以下國家/地區：
@@ -720,7 +734,7 @@ if generate_btn or send_btn:
 
         try:
             # Step 1：RSS 訂閱源 (擴充至 12 個)
-            status_text.text("📡 抓取 12 大權威媒體 RSS 訂閱源...")
+            status_text.text(f"📡 抓取 {len(RSS_SOURCES)} 個權威媒體 RSS 訂閱源...")
             rss_results = fetch_rss_feeds(status_text=status_text)
 
             # Step 2：加速版 ddgs 搜尋
