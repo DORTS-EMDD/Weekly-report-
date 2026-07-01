@@ -16,6 +16,7 @@ import concurrent.futures
 from io import BytesIO
 from html import escape
 import urllib.request
+import urllib.parse
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from email.mime.multipart import MIMEMultipart
@@ -343,14 +344,68 @@ RSS_SOURCES = [
     ("Intelligent Transport", "https://www.intelligenttransport.com/feed/"),
     ("UITP（無官方RSS，改用Google News代理）",
      "https://news.google.com/rss/search?q=site:uitp.org&hl=en-US&gl=US&ceid=US:en"),
-    ("Mass Transit Network", "https://masstransit.network/index.rss"),
+    # 2026-07 查證：masstransit.network 的 RSS 端點實際回傳的是「會員名錄」頁面
+    # （人名列表），不是新聞內容，已移除，改依賴下方已驗證有效的 Global Mass Transit。
     ("Global Mass Transit", "https://www.globalmasstransit.net/feed"),
-    ("東洋經濟 Online（鐵道最前線，全站RSS需自行篩選）", "https://toyokeizai.net/list/feed/rss"),
+    # 東洋經濟原本用全站 RSS，抓到的 20 篇裡沒有一篇是鐵道新聞（全是投資理財/職場/美食）。
+    # 改用 Google News 代理鎖定 site:toyokeizai.net + 鐵道關鍵字，才會是真的鐵道新聞。
+    ("東洋經濟 Online 鐵道（Google News代理，鎖定 site:toyokeizai.net + 鐵道）",
+     "https://news.google.com/rss/search?q=site:toyokeizai.net+%E9%90%B5%E9%81%93&hl=ja&gl=JP&ceid=JP:ja"),
     ("乗りものニュース", "https://trafficnews.jp/feed"),
     ("鉄道総合技術研究所 RTRI（無官方RSS，改用Google News代理）",
      "https://news.google.com/rss/search?q=site:rtri.or.jp&hl=ja&gl=JP&ceid=JP:ja"),
     ("Transit Jam", "https://transitjam.com/feed/"),
 ]
+
+# ═══════════════════════════════════════════════════════
+#  依勾選國家動態產生的 Google News 地區代理來源
+# ═══════════════════════════════════════════════════════
+# 背景：上方 RSS_SOURCES 幾乎都是歐美鐵道媒體，對日韓星港等亞洲市場的
+# 捷運新聞覆蓋率實測為 0（見程式修訂紀錄）。這裡針對使用者勾選的國家，
+# 用當地語言關鍵字動態組出 Google News RSS 代理，補上這塊缺口。
+# 每個 tuple：(顯示名稱, 查詢關鍵字, hl 語系, gl 國別, ceid 語言代碼)
+REGION_NEWS_QUERIES: dict[str, list[tuple[str, str, str, str, str]]] = {
+    "日本": [("Google News地區代理－日本地下鉄/メトロ",
+             "(地下鉄 OR メトロ OR 新交通システム)", "ja", "JP", "ja")],
+    "韓國": [("Google News地區代理－韓國地下鐵",
+             "(지하철 OR 도시철도 OR 경전철)", "ko", "KR", "kr")],
+    "新加坡": [("Google News地區代理－Singapore MRT",
+              "(MRT OR LTA OR SMRT Singapore)", "en-SG", "SG", "en")],
+    "香港": [("Google News地區代理－香港港鐵",
+             "(港鐵 OR MTR 香港)", "zh-HK", "HK", "zh-Hant")],
+    "澳洲": [("Google News地區代理－Australia Metro",
+             "(Sydney Metro OR Melbourne Metro OR Brisbane Metro)", "en-AU", "AU", "en")],
+    "英國": [("Google News地區代理－UK Underground",
+             "(London Underground OR TfL Tube)", "en-GB", "GB", "en")],
+    "法國": [("Google News地區代理－France Metro",
+             "(Metro Paris OR RATP OR Grand Paris Express)", "fr", "FR", "fr")],
+    "德國": [("Google News地區代理－Germany U-Bahn",
+             "(U-Bahn OR S-Bahn Metro)", "de", "DE", "de")],
+    "荷蘭": [("Google News地區代理－Netherlands Metro",
+             "(Amsterdam metro OR Rotterdam metro)", "nl", "NL", "nl")],
+    "瑞士": [("Google News地區代理－Switzerland Metro/Tram",
+             "(Zurich tram OR Lausanne metro)", "de-CH", "CH", "de")],
+    "美國": [("Google News地區代理－US Subway/Metro",
+             "(subway OR metro rail transit) United States", "en-US", "US", "en")],
+    "加拿大": [("Google News地區代理－Canada Metro",
+              "(TTC Toronto OR SkyTrain Vancouver OR REM Montreal)", "en-CA", "CA", "en")],
+}
+
+
+def build_region_news_sources(regions: list[str], days: int) -> list[tuple[str, str]]:
+    """依勾選國家動態組出 Google News 地區代理 RSS 來源清單。"""
+    sources: list[tuple[str, str]] = []
+    days = max(1, min(int(days), 60))
+    for region in regions:
+        for label, keyword, hl, gl, lang in REGION_NEWS_QUERIES.get(region, []):
+            query = f"{keyword} when:{days}d"
+            url = (
+                "https://news.google.com/rss/search?q="
+                f"{urllib.parse.quote(query)}&hl={hl}&gl={gl}&ceid={gl}:{lang}"
+            )
+            sources.append((label, url))
+    return sources
+
 
 def _parse_pub_date(pub_str: str) -> str:
     if not pub_str:
@@ -382,7 +437,12 @@ def _is_recent(pub_str: str, cutoff: datetime.datetime) -> bool:
     except Exception:
         return True
 
-def fetch_rss_feeds(status_text=None) -> str:
+def fetch_rss_feeds(sources: list[tuple[str, str]] | None = None, status_text=None) -> str:
+    """通用 RSS/Atom 抓取函式。sources 為 (顯示名稱, RSS/Atom網址) 清單；
+    不傳入時預設抓固定的 RSS_SOURCES（維持向下相容）。"""
+    if sources is None:
+        sources = RSS_SOURCES
+
     cutoff = (
         datetime.datetime.now(datetime.timezone.utc)
         - datetime.timedelta(days=min(int(lookback_days) * 2, 60))
@@ -391,9 +451,9 @@ def fetch_rss_feeds(status_text=None) -> str:
     headers = {"User-Agent": "Mozilla/5.0 (compatible; MetroWeeklyBot/4.2)"}
     ATOM = "http://www.w3.org/2005/Atom"
 
-    for idx, (source_name, url) in enumerate(RSS_SOURCES, 1):
+    for idx, (source_name, url) in enumerate(sources, 1):
         if status_text:
-            status_text.text(f"📡 RSS {idx}/{len(RSS_SOURCES)}：{source_name}...")
+            status_text.text(f"📡 RSS {idx}/{len(sources)}：{source_name}...")
         try:
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=8) as f:
@@ -550,7 +610,9 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
 
 
 # ── Prompt 建立 ───────────────────────────────────────
-def build_prompt(rss_results: str, ddg_results: str) -> str:
+def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str, str]] | None = None) -> str:
+    if rss_sources is None:
+        rss_sources = RSS_SOURCES
     weekday = ['一','二','三','四','五','六','日'][today.weekday()]
     search_count = len(build_search_queries()[0])
     
@@ -564,7 +626,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 以下是透過「RSS 訂閱源」與「ddgs 多後端搜尋」蒐集到的原始資料。
 請依照使用者勾選的類型，整理出具參考價值的週報（目標期間：{date_range}）。
 
-## ━━ 第一部分：RSS 訂閱源（涵蓋 {len(RSS_SOURCES)} 個媒體，見下方權重清單）━━
+## ━━ 第一部分：RSS 訂閱源（涵蓋 {len(rss_sources)} 個媒體/地區代理，見下方權重清單）━━
 {rss_results}
 
 ## ━━ 第二部分：關鍵字搜尋結果━━
@@ -577,15 +639,16 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
    - **營運爭議**：罷工、預算超支、票價爭議、合約糾紛。
    - **營運政策**：捷運站內安檢新規、乘車規則變動（如禁帶大型鋰電池/滑板車）、安全管理政策。
 2. **最高優先級（專注捷運與LRRT，排除一般鐵路/高鐵）**：本報告是提供給北市府捷運局的國際週報，請**嚴格過濾並排除**傳統客運/貨運鐵路（火車、城際列車）與高速鐵路（HSR）的新聞。請**絕對優先保留並聚焦**於國際上的**「都市捷運系統（Metro / Subway / Underground）」**以及**「中運量 / 輕軌 / 膠輪系統（LRRT / AGT / LRT）」**的新聞，並給予最大篇幅。
-3. **來源權重**：請優先採納「第一部分：RSS 訂閱源」中實際出現的來源（本次共 {len(RSS_SOURCES)} 個，清單如下），這些是本次真正抓取到的媒體，**不要**引用或想像清單以外的媒體名稱：
-{chr(10).join('   - ' + name for name, _ in RSS_SOURCES)}
+3. **來源權重**：請優先採納「第一部分：RSS 訂閱源」中實際出現的來源（本次共 {len(rss_sources)} 個，清單如下），這些是本次真正抓取到的媒體，**不要**引用或想像清單以外的媒體名稱：
+{chr(10).join('   - ' + name for name, _ in rss_sources)}
 4. **放寬篩選**：只要事件對捷運局具備實務參考價值、或與使用者選擇的國家/地區有關聯，即使摘要較短，亦可納入。不需要過度嚴格剃除主題相關性；但日期真實性規則（見下方第 5 點）沒有彈性空間。
-5. **【絕對禁止腦補、嚴格日期查核】（違反本條視為報告失敗）**：
+5. **【絕對禁止腦補、嚴格日期查核與來源查核】（違反本條視為報告失敗）**：
    - 每一則新聞的「發布/事件日期」**必須**直接取自原始資料中該則內容本身標註的日期字串（RSS 的「日期：」欄位，或關鍵字搜尋結果摘要中出現的日期）。**禁止**依你自己知識庫中對該事件、公司或專案的既有印象去推測、換算或臆造日期。
    - 若某則原始資料**沒有**明確可辨識的日期，或日期含糊到無法判斷是哪一天，**直接捨棄該則**，不要用「近期」「今年」等模糊字眼帶過，也不要自行補上一個日期。
-   - 若某則的日期**晚於今天（{today.strftime('%Y-%m-%d')}）**，即為不合理的未來日期，**直接剔除**，不得納入報告、不得嘗試「合理化」或改寫成合理日期。
+   - 判斷「未來日期」時，**只看該則報導本身的發布/刊登日期**是否晚於今天（{today.strftime('%Y-%m-%d')}）；若是，才視為不合理並剔除。**但**如果報導本身發布日期是合理的過去/現在日期，只是內文「引述」了某項政策的未來生效日（例如報導於 6 月底刊出，內容提到「規定將於 7 月 1 日起實施」），這屬於政策內容的一部分，**不可**僅因內文出現未來日期就整則剔除——請保留該則，並在內容中如實寫出「即將於某日起生效」。
    - 若同一事件在原始資料中找不到，但你「記得」曾經發生過類似新聞，**一律視為未提供資料**，不要用記憶內容補寫。你只能整理「第一部分」與「第二部分」中實際出現的文字，不能新增任何未出現於原始資料的事實、數字或日期。
-   - 若某新聞類型或國家因日期查核後篩到剩下很少則、甚至 0 則，**寧可誠實回報「本期無相關新聞」**，也不要為了湊滿 8–15 則而放寬日期查核標準。
+   - **來源必須是該則事件本身的具體新聞文章連結**：「資料來源」欄位填入的網址，**必須**是原始資料中該則內容自己標註的「連結：」網址，且該網址指向的必須是報導這件事本身的新聞文章頁面。**嚴禁**引用網站首頁、路網圖、票務頁面、會員名錄、活動總覽頁等非新聞頁面來充當來源，也**嚴禁**在原始資料中找不到對應連結時，挪用同一媒體其他頁面的網址頂替。若某則事件在原始資料中沒有對應的具體文章連結，即使內容看起來合理，也必須**整則捨棄**。
+   - 若某新聞類型或國家因日期查核、來源查核後篩到剩下很少則、甚至 0 則，**寧可誠實回報「本期無相關新聞」**，也不要為了湊滿 8–15 則而放寬查核標準。
 
 ## 國家/地區限制清單
 本報告限定報導以下國家/地區：
@@ -612,7 +675,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 ## 結尾（必填）
 ---
 📊 **本週統計**：共 N 則 
-🔍 **執行搜尋次數**：RSS {len(RSS_SOURCES)} 源 + ddgs {search_count} 次精簡搜尋
+🔍 **執行搜尋次數**：RSS/地區代理 {len(rss_sources)} 源 + ddgs {search_count} 次精簡搜尋
 ⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
 """
 
@@ -740,9 +803,15 @@ if generate_btn or send_btn:
         status_text  = st.empty()
 
         try:
-            # Step 1：RSS 訂閱源
-            status_text.text(f"📡 抓取 {len(RSS_SOURCES)} 個權威媒體 RSS 訂閱源...")
-            rss_results = fetch_rss_feeds(status_text=status_text)
+            # Step 1：RSS 訂閱源 + 依勾選國家動態產生的地區代理
+            # （西方鐵道媒體對日韓星港等亞洲市場報導量趨近於 0，改用
+            # 地區語言的 Google News 代理補上這塊覆蓋率缺口）
+            region_sources = build_region_news_sources(selected_regions, int(lookback_days))
+            combined_sources = RSS_SOURCES + region_sources
+            status_text.text(
+                f"📡 抓取 {len(RSS_SOURCES)} 個權威媒體 RSS + {len(region_sources)} 個地區代理來源..."
+            )
+            rss_results = fetch_rss_feeds(combined_sources, status_text=status_text)
             st.session_state["latest_rss_raw"] = rss_results
 
             # Step 2：加速版 ddgs 搜尋
@@ -763,7 +832,7 @@ if generate_btn or send_btn:
             client   = genai.Client(api_key=api_key)
             response = client.models.generate_content(
                 model=model_choice,
-                contents=build_prompt(rss_results, ddg_results),
+                contents=build_prompt(rss_results, ddg_results, combined_sources),
                 config=types.GenerateContentConfig(temperature=0.2),
             )
             report_text = extract_text(response)
