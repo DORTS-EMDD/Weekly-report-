@@ -203,6 +203,13 @@ with st.sidebar:
         "新聞搜尋天數", min_value=3, max_value=30, value=7, step=1,
     )
 
+    show_raw_debug = st.checkbox(
+        "🐛 顯示原始搜尋資料（除錯用）",
+        value=False,
+        help="開啟後，產生報告時會另外保留 RSS／ddgs 抓到的原始文字（Gemini 篩選前），"
+             "方便判斷篇數過少是因為「原始資料本來就少」還是「Gemini 篩太嚴」。",
+    )
+
     # ── 新聞類型篩選 (下拉式收合) ──
     st.markdown("### 📑 新聞類型篩選")
     if "selected_types_state" not in st.session_state:
@@ -733,13 +740,22 @@ if generate_btn or send_btn:
         status_text  = st.empty()
 
         try:
-            # Step 1：RSS 訂閱源 (擴充至 12 個)
+            # Step 1：RSS 訂閱源
             status_text.text(f"📡 抓取 {len(RSS_SOURCES)} 個權威媒體 RSS 訂閱源...")
             rss_results = fetch_rss_feeds(status_text=status_text)
+            st.session_state["latest_rss_raw"] = rss_results
 
             # Step 2：加速版 ddgs 搜尋
             status_text.text("🔍 開始執行加速版關鍵字搜尋...")
             ddg_results = run_duckduckgo_searches(progress_bar, status_text)
+            st.session_state["latest_ddg_raw"] = ddg_results
+
+            if show_raw_debug:
+                os.makedirs("reports", exist_ok=True)
+                with open(f"reports/raw_rss_{today.strftime('%Y%m%d')}.txt", "w", encoding="utf-8") as f:
+                    f.write(rss_results)
+                with open(f"reports/raw_ddg_{today.strftime('%Y%m%d')}.txt", "w", encoding="utf-8") as f:
+                    f.write(ddg_results)
 
             # Step 3：Gemini 分析
             progress_bar.progress(1.0)
@@ -820,3 +836,36 @@ else:
     <div class="warn-box">
     📭 尚無報告資料。請點擊上方「立即產生週報」按鈕產生第一份報告。
     </div>""", unsafe_allow_html=True)
+
+# ── 原始搜尋資料（除錯用）────────────────────────────
+raw_rss = st.session_state.get("latest_rss_raw", "")
+raw_ddg = st.session_state.get("latest_ddg_raw", "")
+
+if show_raw_debug and (raw_rss or raw_ddg):
+    st.markdown("---")
+    st.markdown("### 🐛 原始搜尋資料（Gemini 篩選前）")
+    st.caption(
+        "這裡是 RSS／ddgs 實際抓到、丟給 Gemini 的原始文字。"
+        "如果這裡本來就沒什麼內容，代表是搜尋源撈得不夠廣（該檢討天數/國家/關鍵字）；"
+        "如果這裡內容很多，但最終報告篇數很少，代表是 Gemini 的日期查核/篩選規則太嚴（該檢討 prompt）。"
+    )
+
+    rss_no_article = raw_rss.count("（近30天無新文章）")
+    rss_skipped    = raw_rss.count("（略過：無有效訂閱點或超時）")
+    rss_blocks     = raw_rss.count("【RSS來源：")
+    rss_with_data  = rss_blocks - rss_no_article - rss_skipped
+
+    ddg_no_result  = raw_ddg.count("無結果")
+    ddg_skipped    = raw_ddg.count("】略過")
+    ddg_blocks     = raw_ddg.count("【搜尋 ")
+
+    c_d1, c_d2, c_d3, c_d4 = st.columns(4)
+    c_d1.metric("RSS 有抓到內容", f"{rss_with_data}/{rss_blocks}")
+    c_d2.metric("RSS 近30天無文章", rss_no_article)
+    c_d3.metric("ddgs 查詢總數", ddg_blocks)
+    c_d4.metric("ddgs 無結果/略過", ddg_no_result + ddg_skipped)
+
+    with st.expander("📡 RSS 原始資料全文", expanded=False):
+        st.text_area("RSS raw", raw_rss, height=400, label_visibility="collapsed")
+    with st.expander("🔍 ddgs 原始資料全文", expanded=False):
+        st.text_area("ddgs raw", raw_ddg, height=400, label_visibility="collapsed")
