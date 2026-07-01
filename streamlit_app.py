@@ -12,6 +12,7 @@ import time
 import random
 import datetime
 import smtplib
+import concurrent.futures
 from io import BytesIO
 from html import escape
 import urllib.request
@@ -370,7 +371,7 @@ def _is_recent(pub_str: str, cutoff: datetime.datetime) -> bool:
 def fetch_rss_feeds(status_text=None) -> str:
     cutoff = (
         datetime.datetime.now(datetime.timezone.utc)
-        - datetime.timedelta(days=min(int(lookback_days) * 2, 30))
+        - datetime.timedelta(days=min(int(lookback_days) * 2, 60))
     )
     all_blocks: list[str] = []
     headers = {"User-Agent": "Mozilla/5.0 (compatible; MetroWeeklyBot/4.2)"}
@@ -445,78 +446,93 @@ def build_search_queries() -> tuple[list[str], set[int]]:
             f"metro subway transit strike delay controversy {today:%B %Y}",
             f"鉄道 地下鉄 遅延 争議 {today:%Y年%m月}"
         ])
-    if "營運政策與安全" in selected_types:
+    if "營運政策" in selected_types:
         queries.extend([
             f"metro subway policy passenger safety regulation {today:%B %Y}",
             f"鉄道 地下鉄 規則 安全対策 {today:%Y年%m月}"
         ])
 
-    # 2. 地區合併關鍵字（避免每個地區查3次導致耗時過長）
-    for i, region in enumerate(selected_regions[:5]):
+    # 2. 地區合併關鍵字（改為涵蓋所有已勾選國家，不再只取前 5 個）
+    for i, region in enumerate(selected_regions):
         term = REGION_SEARCH_TERMS.get(region, region)
         if "技術新知" in selected_types:
             queries.append(f"{term} metro LRRT subway upgrade press release {today:%B %Y}")
-        
+
         # 將事故、爭議、政策合併為一個查詢字串，精簡發送數量
-        if any(t in selected_types for t in ["重大事故", "營運爭議", "營運政策與安全"]):
+        if any(t in selected_types for t in ["重大事故", "營運爭議", "營運政策"]):
             idx = len(queries)
             queries.append(f"{term} metro subway incident strike policy controversy {today:%B %Y}")
             news_indices.add(idx)
 
-    # 上限控制，保證搜尋速度
-    return queries[:16], news_indices
+    # 上限控制：從固定 16 條放寬為依實際勾選數動態調整（搭配下方平行化執行，維持速度）
+    return queries[:32], news_indices
+
+
+def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -> tuple[int, str]:
+    """執行單一查詢（純運算/網路請求，不觸碰 Streamlit API，可安全在背景執行緒執行）"""
+    # 隨機抖動起跑時間，避免多執行緒同時擊中 DDGS 造成瞬間流量觸發限流
+    time.sleep(random.uniform(0.1, 0.6))
+    result_block = None
+
+    for backend in ["auto", "bing"]:
+        for attempt in range(1, 3):
+            try:
+                with DDGS() as ddgs:
+                    if use_news:
+                        results = ddgs.news(query, max_results=10, timelimit=news_timelimit, backend=backend)
+                    else:
+                        results = ddgs.text(query, max_results=10, timelimit="m", backend=backend)
+                if results:
+                    lines = [f"【搜尋 {i}（{backend}）】{query}"]
+                    for r in results:
+                        body = (r.get("body") or r.get("excerpt") or r.get("description") or "")[:250]
+                        href = r.get("href") or r.get("url") or ""
+                        lines.append(f"  標題：{r.get('title','')}\n  摘要：{body}\n  連結：{href}")
+                    result_block = "\n".join(lines)
+                else:
+                    result_block = f"【搜尋 {i}】無結果"
+                break
+            except Exception as exc:
+                wait = attempt * 1.0 + random.uniform(0.5, 1.5)
+                time.sleep(wait)
+                if not any(k in str(exc) for k in ("Ratelimit", "429", "403")):
+                    break
+
+        if result_block and "無結果" not in result_block:
+            break
+
+    return i, (result_block or f"【搜尋 {i}】略過")
 
 
 def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
-    """執行輕量級的 DDGS 多後端搜尋"""
+    """執行 DDGS 多後端搜尋（平行化版本：查詢數變多但改為併發執行，速度不會被拖慢）"""
     if not selected_types:
         return "未勾選任何新聞類型，略過搜尋。"
 
     search_queries, news_query_indices = build_search_queries()
     total = len(search_queries)
-    all_blocks: list[str] = []
     news_timelimit = "w" if int(lookback_days) <= 7 else "m"
+    results_map: dict[int, str] = {}
+    done_count = 0
 
-    for i, query in enumerate(search_queries, 1):
-        if status_text:
-            status_text.text(f"🔍 搜尋 {i:02d}/{total}：{query[:35]}...")
-        if progress_bar:
-            progress_bar.progress(i / total)
+    # 同時最多 6 條併發，兼顧速度與避免被 DDGS 判定為濫用流量
+    max_workers = max(1, min(6, total))
 
-        use_news = i in news_query_indices
-        result_block = None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_run_single_query, i, query, i in news_query_indices, news_timelimit): i
+            for i, query in enumerate(search_queries, 1)
+        }
+        for future in concurrent.futures.as_completed(futures):
+            i, block = future.result()
+            results_map[i] = block
+            done_count += 1
+            if status_text:
+                status_text.text(f"🔍 已完成搜尋 {done_count:02d}/{total}...")
+            if progress_bar:
+                progress_bar.progress(done_count / total)
 
-        for backend in ["auto", "bing"]:
-            for attempt in range(1, 3):
-                try:
-                    with DDGS() as ddgs:
-                        if use_news:
-                            results = ddgs.news(query, max_results=5, timelimit=news_timelimit, backend=backend)
-                        else:
-                            results = ddgs.text(query, max_results=5, timelimit="m", backend=backend)
-                    if results:
-                        lines = [f"【搜尋 {i}（{backend}）】{query}"]
-                        for r in results:
-                            body = (r.get("body") or r.get("excerpt") or r.get("description") or "")[:250]
-                            href = r.get("href") or r.get("url") or ""
-                            lines.append(f"  標題：{r.get('title','')}\n  摘要：{body}\n  連結：{href}")
-                        result_block = "\n".join(lines)
-                    else:
-                        result_block = f"【搜尋 {i}】無結果"
-                    break
-                except Exception as exc:
-                    wait = attempt * 1.0 + random.uniform(0.5, 1.5)
-                    time.sleep(wait)
-                    if not any(k in str(exc) for k in ("Ratelimit", "429", "403")):
-                        break
-
-            if result_block and "無結果" not in result_block:
-                break
-
-        all_blocks.append(result_block or f"【搜尋 {i}】略過")
-        time.sleep(random.uniform(0.5, 1.5)) # 極大化縮短等待時間
-
-    return "\n\n".join(all_blocks)
+    return "\n\n".join(results_map[i] for i in sorted(results_map))
 
 
 # ── Prompt 建立 ───────────────────────────────────────
@@ -545,7 +561,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
    - **技術新知**：機電、號誌、車輛、土木等工程技術。
    - **重大事故**：出軌、追撞、火災、嚴重系統當機。
    - **營運爭議**：罷工、預算超支、票價爭議、合約糾紛。
-   - **營運政策與安全**：捷運站內安檢新規、乘車規則變動（如禁帶大型鋰電池/滑板車）、安全管理政策。
+   - **營運政策**：捷運站內安檢新規、乘車規則變動（如禁帶大型鋰電池/滑板車）、安全管理政策。
 2. **最高優先級（專注捷運與LRRT，排除一般鐵路/高鐵）**：本報告是提供給北市府捷運局的國際週報，請**嚴格過濾並排除**傳統客運/貨運鐵路（火車、城際列車）與高速鐵路（HSR）的新聞。請**絕對優先保留並聚焦**於國際上的**「都市捷運系統（Metro / Subway / Underground）」**以及**「中運量 / 輕軌 / 膠輪系統（LRRT / AGT / LRT）」**的新聞，並給予最大篇幅。
 3. **來源權重**：請優先採納來自 12 大權威機構的報導：Railway Gazette, IRJ, UITP, IRSE, Railway Technology, Rail Forum, Global Mass Transit, NTSB/RAIB/TTSB, Transit Jam, Railway-News, 東洋經濟 Online, 交通新聞/乗りものニュース。
 4. **放寬篩選**：只要事件對捷運局具備實務參考價值、或與使用者選擇的國家/地區有關聯，即使日期稍有落差或摘要較短，亦可納入。不需要過度嚴格剃除。
@@ -562,7 +578,7 @@ def build_prompt(rss_results: str, ddg_results: str) -> str:
 
 ---
 
-### 🔹 [填入該則所屬之分類：技術新知/重大事故/營運爭議/營運政策與安全] 國家/地區：（一句有力主標題）
+### 🔹 [填入該則所屬之分類：技術新知/重大事故/營運爭議/營運政策] 國家/地區：（一句有力主標題）
 * **發布/事件日期**：（原文發布年月日）
 * **事件摘要**：
   - （列點精要說明，3–5 點）
