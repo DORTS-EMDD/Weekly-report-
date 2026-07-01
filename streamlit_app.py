@@ -204,13 +204,6 @@ with st.sidebar:
         "新聞搜尋天數", min_value=3, max_value=30, value=7, step=1,
     )
 
-    show_raw_debug = st.checkbox(
-        "🐛 顯示原始搜尋資料（除錯用）",
-        value=False,
-        help="開啟後，產生報告時會另外保留 RSS／ddgs 抓到的原始文字（Gemini 篩選前），"
-             "方便判斷篇數過少是因為「原始資料本來就少」還是「Gemini 篩太嚴」。",
-    )
-
     # ── 新聞類型篩選 (下拉式收合) ──
     st.markdown("### 📑 新聞類型篩選")
     if "selected_types_state" not in st.session_state:
@@ -244,7 +237,7 @@ with st.sidebar:
 
     # ── 國家地區篩選 (下拉式收合) ──
     st.markdown("### 🌏 重點國家/地區")
-    default_regions = ["日本", "韓國", "新加坡", "香港"]
+    default_regions = ADVANCED_REGIONS.copy()
     if "selected_regions_state" not in st.session_state:
         st.session_state["selected_regions_state"] = default_regions.copy()
 
@@ -298,7 +291,14 @@ with st.sidebar:
         st.markdown(f"Gemini API Key：{'✅' if api_key else '❌'}")
         st.markdown(f"Gmail 帳號：{'✅' if gmail_user else '❌'}")
         st.markdown(f"Gmail 密碼：{'✅' if gmail_pass else '❌'}")
-        
+
+    show_raw_debug = st.checkbox(
+        "🐛 顯示原始搜尋資料（除錯用）",
+        value=False,
+        help="開啟後，產生報告時會另外保留 RSS／ddgs 抓到的原始文字（Gemini 篩選前），"
+             "方便判斷篇數過少是因為「原始資料本來就少」還是「Gemini 篩太嚴」。",
+    )
+
     st.markdown("---")
     st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統")
 
