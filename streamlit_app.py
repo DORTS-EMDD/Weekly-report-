@@ -325,6 +325,23 @@ BLOCKED_DOMAINS = {
 
 ALLOWED_NEWS_DOMAINS: set[str] = set()
 
+DOMESTIC_EXCLUDED_DOMAINS = {
+    ".tw",
+}
+
+DOMESTIC_EXCLUDED_TERMS = [
+    "台灣", "臺灣", "Taiwan",
+    "台北", "臺北", "Taipei", "Taipei MRT", "北捷",
+    "新北", "New Taipei",
+    "桃園", "Taoyuan", "Taoyuan Metro", "桃捷",
+    "台中", "臺中", "Taichung",
+    "台南", "臺南", "Tainan",
+    "高雄", "Kaohsiung", "Kaohsiung MRT", "高捷",
+    "基隆", "Keelung", "新竹", "Hsinchu", "苗栗", "Miaoli",
+    "宜蘭", "Yilan", "花蓮", "Hualien", "台東", "臺東", "Taitung",
+    "屏東", "Pingtung",
+]
+
 TRANSIT_NEWS_TERMS = '(metro OR subway OR "light rail" OR tram OR LRRT OR LRT)'
 
 # ── 金鑰狀態 ──────────────────────────────────────────
@@ -338,20 +355,6 @@ with st.sidebar:
     st.caption("臺北市政府捷運工程局｜機電系統設計處")
     st.markdown("---")
 
-    st.markdown("### ⚙️ 模型設定")
-    model_choice = st.selectbox(
-        "選擇 Gemini 模型",
-        ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
-        index=0,
-    )
-
-    st.markdown("---")
-    st.markdown("### 🗓️ 搜尋期間")
-    lookback_days = st.number_input(
-        "新聞搜尋天數", min_value=3, max_value=30, value=7, step=1,
-    )
-
-    st.markdown("---")
     st.markdown("### 📑 新聞類型篩選")
     if "selected_types_state" not in st.session_state:
         st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
@@ -392,6 +395,7 @@ with st.sidebar:
         index=0,
         help="全球模式不以國家刪除新聞；指定模式才套用下方先進國家/地區清單。",
     )
+    st.caption("國際週報固定排除台灣及國內捷運新聞。")
     if "selected_regions_state" not in st.session_state:
         st.session_state["selected_regions_state"] = DEFAULT_REGIONS.copy()
 
@@ -425,6 +429,12 @@ with st.sidebar:
         st.warning("請至少選擇一個國家/地區。")
 
     st.markdown("---")
+    st.markdown("### 🗓️ 搜尋期間")
+    lookback_days = st.number_input(
+        "新聞搜尋天數", min_value=3, max_value=30, value=7, step=1,
+    )
+
+    st.markdown("---")
     st.markdown("### 📚 規範更新追蹤")
     standard_count = sum(len(v) for v in STANDARDS_WATCHLIST.values())
     if standards_enabled:
@@ -434,6 +444,14 @@ with st.sidebar:
                 st.markdown(f"**{category}**：{', '.join(standards)}")
     else:
         st.caption("勾選「規範更新」後，才會啟用 Google News RSS 與 ddgs 規範搜尋。")
+
+    st.markdown("---")
+    st.markdown("### ⚙️ 模型設定")
+    model_choice = st.selectbox(
+        "選擇 Gemini 模型",
+        ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
+        index=0,
+    )
 
     st.markdown("---")
     st.markdown("### 📬 收件設定")
@@ -828,6 +846,18 @@ def _is_blocked_host(host: str) -> bool:
     return any(host.endswith(suffix) for suffix in BLOCKED_DOMAINS)
 
 
+def _is_domestic_taiwan_host(host: str) -> bool:
+    host = host.lower().strip(".")
+    if not host:
+        return False
+    return any(host.endswith(suffix) for suffix in DOMESTIC_EXCLUDED_DOMAINS)
+
+
+def _contains_taiwan_reference(text: str) -> bool:
+    text_lower = (text or "").casefold()
+    return any(term.casefold() in text_lower for term in DOMESTIC_EXCLUDED_TERMS)
+
+
 def _is_allowed_host(host: str) -> bool:
     if not ALLOWED_NEWS_DOMAINS:
         return True
@@ -859,6 +889,8 @@ def _is_valid_news_url(url: str, source_href: str = "") -> tuple[bool, str]:
     host = _domain_from_url(safety_url)
     if _is_blocked_host(host):
         return False, "被安全規則排除"
+    if _is_domestic_taiwan_host(host):
+        return False, "排除台灣來源"
     if not _is_allowed_host(host):
         return False, "不在來源白名單"
     return True, ""
@@ -940,9 +972,13 @@ def _items_from_parsed_feed(parsed_feed, cutoff: datetime.datetime, seen_titles:
         if not title or not _is_recent(pub_str, cutoff):
             continue
 
+        if _contains_taiwan_reference(f"{title} {desc} {link} {source_href}"):
+            blocked_count += 1
+            continue
+
         is_valid, reason = _is_valid_news_url(link, source_href=source_href)
         if not is_valid:
-            if reason == "被安全規則排除":
+            if reason in ("被安全規則排除", "排除台灣來源"):
                 blocked_count += 1
             else:
                 invalid_count += 1
@@ -1020,9 +1056,9 @@ def fetch_rss_feeds(
 
         method = _method_for_url(url)
         valid_source, source_reason = _is_valid_news_url(url)
-        if not valid_source and source_reason == "被安全規則排除":
-            source_statuses.append(_status_record(source_name, method, "被安全規則排除", 0, source_reason))
-            all_blocks.append(f"【RSS來源：{source_name}】（被安全規則排除）")
+        if not valid_source and source_reason in ("被安全規則排除", "排除台灣來源"):
+            source_statuses.append(_status_record(source_name, method, source_reason, 0, source_reason))
+            all_blocks.append(f"【RSS來源：{source_name}】（{source_reason}）")
             continue
 
         try:
@@ -1147,6 +1183,8 @@ def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -
                         title = (r.get("title") or "").strip()
                         if not title:
                             continue
+                        if _contains_taiwan_reference(f"{title} {body} {href}"):
+                            continue
                         is_valid, reason = _is_valid_news_url(href)
                         if not is_valid:
                             continue
@@ -1244,13 +1282,13 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
     if is_global_scope:
         scope_instruction = (
             "本次採全球模式：不得用國家/地區清單刪除新聞。仍須套用來源安全規則、有效 URL 規則，"
-            "並聚焦都市捷運、地下鐵、中運量、輕軌、AGT、LRRT/LRT。"
+            "並聚焦都市捷運、地下鐵、中運量、輕軌、AGT、LRRT/LRT；台灣及國內捷運新聞一律排除。"
         )
-        scope_list = "全球（安全白名單來源）；不套用 ADVANCED_REGIONS 國家邊界。"
+        scope_list = "全球（安全白名單來源）；不套用 ADVANCED_REGIONS 國家邊界；仍排除台灣。"
     else:
         scope_instruction = (
             "本次採指定先進國家/地區模式：完成主題判斷後，必須再確認事件發生地或標準公告主體"
-            "落在指定清單內；不在清單內者不得納入正式新聞。"
+            "落在指定清單內；不在清單內者不得納入正式新聞；台灣及國內捷運新聞一律排除。"
         )
         scope_list = "\n".join("- " + r for r in active_regions)
 
@@ -1308,6 +1346,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
     - 不得為了湊數引用無具體新聞頁、首頁、社群頁、會員頁、活動首頁或模型記憶。
 6. **數量要求**：正式報告目標至少 {MIN_REPORT_ITEMS} 則。若高信度新聞不足，請另設「候補觀察」區，只收錄原始資料中存在但信心較低或日期/範圍需追蹤的候選，不得捏造。若最後正式新聞仍不足 {MIN_REPORT_ITEMS} 則，必須在結尾列明不足原因，例如：來源不足、日期不明、非捷運、來源不合格。
 7. **國家/地區規則**：{scope_instruction}
+8. **國際新聞邊界**：本系統為國際捷運週報，台灣、臺灣、Taiwan、Taipei、台北/臺北捷運、北捷、新北、桃園/桃捷、台中、台南、高雄/高捷等國內新聞或國內案例，不得列入正式新聞或候補觀察；若原始資料出現，請視為不合格來源或非本報告範圍。
 
 ## 國家/地區範圍
 {scope_list}
@@ -1597,6 +1636,7 @@ def status_badge(status: str) -> str:
         "403": "badge-error",
         "parse error": "badge-error",
         "被安全規則排除": "badge-blocked",
+        "排除台灣來源": "badge-blocked",
     }.get(status, "badge-neutral")
     label = {
         "成功": "✅ 成功",
@@ -1606,6 +1646,7 @@ def status_badge(status: str) -> str:
         "403": "403",
         "parse error": "parse error",
         "被安全規則排除": "安全排除",
+        "排除台灣來源": "排除台灣",
     }.get(status, status)
     return f'<span class="status-badge {class_name}">{escape(label)}</span>'
 
@@ -1616,7 +1657,7 @@ def render_source_health_dashboard(statuses: list[dict]) -> None:
         return
 
     st.markdown('<div class="section-title">來源健康儀表板</div>', unsafe_allow_html=True)
-    status_order = ["成功", "fallback 成功", "無文章", "timeout", "403", "parse error", "被安全規則排除"]
+    status_order = ["成功", "fallback 成功", "無文章", "timeout", "403", "parse error", "被安全規則排除", "排除台灣來源"]
     counts = {status: sum(1 for row in statuses if row.get("status") == status) for status in status_order}
     healthy_count = counts["成功"] + counts["fallback 成功"]
     issue_count = counts["timeout"] + counts["403"] + counts["parse error"]
