@@ -763,6 +763,73 @@ def markdown_to_pdf_bytes(md: str) -> bytes:
     return buffer.getvalue()
 
 
+def _soft_wrap_long_tokens(text: str, chunk: int = 45) -> str:
+    """在超長無空白字串（如 Google News 長網址）中每隔 chunk 字元插入零寬空白，
+    讓 reportlab 能夠換行、不會爆出版面；零寬空白不影響複製貼上後的文字內容。"""
+    words = text.split(" ")
+    out = []
+    for w in words:
+        if len(w) > chunk:
+            w = "\u200b".join(w[i:i + chunk] for i in range(0, len(w), chunk))
+        out.append(w)
+    return " ".join(out)
+
+
+def raw_debug_to_pdf_bytes(raw_rss: str, raw_ddg: str) -> bytes:
+    """把「原始搜尋資料（Gemini 篩選前）」的純文字內容轉成 PDF，
+    方便使用者下載保存，不用再從網頁手動複製。"""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+    pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36,
+    )
+    styles = getSampleStyleSheet()
+    for style_name in ("Title", "Heading2", "BodyText"):
+        styles[style_name].fontName = "MSung-Light"
+        styles[style_name].leading = max(styles[style_name].leading, 13)
+    styles["BodyText"].fontSize = 8.5
+    styles["BodyText"].leading = 12
+
+    def _section(title: str, content: str, story: list):
+        story.append(Paragraph(escape(title), styles["Title"]))
+        story.append(Spacer(1, 10))
+        if not content.strip():
+            story.append(Paragraph("（無資料）", styles["BodyText"]))
+            return
+        for raw_line in content.splitlines():
+            line = raw_line.rstrip()
+            if not line:
+                story.append(Spacer(1, 4))
+                continue
+            wrapped = _soft_wrap_long_tokens(line)
+            if line.startswith("【"):
+                story.append(Spacer(1, 6))
+                story.append(Paragraph(escape(wrapped), styles["Heading2"]))
+            else:
+                story.append(Paragraph(escape(wrapped), styles["BodyText"]))
+
+    story: list = []
+    _section(f"📡 RSS 原始資料（{today.strftime('%Y-%m-%d')}）", raw_rss, story)
+    story.append(PageBreak())
+    _section(f"🔍 ddgs 原始資料（{today.strftime('%Y-%m-%d')}）", raw_ddg, story)
+
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def try_raw_debug_to_pdf_bytes(raw_rss: str, raw_ddg: str) -> bytes | None:
+    try:
+        return raw_debug_to_pdf_bytes(raw_rss, raw_ddg)
+    except ModuleNotFoundError:
+        return None
+
+
 def try_markdown_to_pdf_bytes(md: str) -> bytes | None:
     try:
         return markdown_to_pdf_bytes(md)
@@ -938,6 +1005,17 @@ if show_raw_debug and (raw_rss or raw_ddg):
     c_d2.metric("RSS 近30天無文章", rss_no_article)
     c_d3.metric("ddgs 查詢總數", ddg_blocks)
     c_d4.metric("ddgs 無結果/略過", ddg_no_result + ddg_skipped)
+
+    raw_pdf_bytes = try_raw_debug_to_pdf_bytes(raw_rss, raw_ddg)
+    if raw_pdf_bytes:
+        st.download_button(
+            "📄 下載原始資料 PDF（RSS + ddgs 全文）",
+            data=raw_pdf_bytes,
+            file_name=f"raw_search_data_{today.strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+        )
+    else:
+        st.caption("⚠️ PDF 產生功能需要 reportlab 套件，目前環境未安裝，暫時只能用下方文字框複製。")
 
     with st.expander("📡 RSS 原始資料全文", expanded=False):
         st.text_area("RSS raw", raw_rss, height=400, label_visibility="collapsed")
