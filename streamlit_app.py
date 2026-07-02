@@ -90,6 +90,20 @@ st.markdown("""
   }
   [data-testid="stSidebar"] hr {
     border-color: rgba(255,255,255,0.22) !important;
+    margin: .45rem 0 .55rem !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+    font-size: 1rem !important;
+    margin: .35rem 0 .15rem !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+    margin-bottom: .25rem !important;
+  }
+  [data-testid="stSidebar"] .stRadio,
+  [data-testid="stSidebar"] .stSelectbox,
+  [data-testid="stSidebar"] .stNumberInput,
+  [data-testid="stSidebar"] .stTextArea {
+    margin-bottom: .35rem !important;
   }
   [data-testid="stSidebar"] input,
   [data-testid="stSidebar"] textarea {
@@ -227,6 +241,13 @@ st.markdown("""
     border-top: 1px solid #e5edf5; padding: 9px 10px; vertical-align: top;
   }
   .source-health-table tr:nth-child(even) td { background: #f8fbfd; }
+  .source-summary-card {
+    background: #ffffff; border: 1px solid #dbe4ee; border-radius: 8px;
+    padding: 13px 14px; min-height: 88px; box-shadow: 0 4px 14px rgba(15,45,74,.06);
+  }
+  .source-summary-num { font-size: 1.55rem; font-weight: 800; color: #12385b; line-height: 1.15; }
+  .source-summary-label { font-size: .86rem; color: #334155; font-weight: 800; margin-top: 3px; }
+  .source-summary-note { font-size: .76rem; color: #64748b; margin-top: 4px; }
 
   div.stButton > button[kind="primary"] {
     background: #12385b !important; border-color: #12385b !important;
@@ -364,7 +385,7 @@ with st.sidebar:
     standards_enabled = "規範更新" in selected_types
 
     st.markdown("---")
-    st.markdown("### 🌏 國家/地區篩選")
+    st.markdown("### 🌏 國家篩選")
     scope_mode = st.radio(
         "報導範圍",
         ["指定先進國家/地區", "全球（安全白名單來源）"],
@@ -619,7 +640,7 @@ def build_standards_news_sources(days: int) -> list[tuple[str, str]]:
     return sources
 
 
-def render_main_dashboard(source_count: int, standards_count: int) -> None:
+def render_main_dashboard(source_count: int, standards_count: int) -> bool:
     selected_regions_note = "全球模式" if is_global_scope else f"{len(selected_regions)} / {len(ADVANCED_REGIONS)}"
     st.markdown(
         f"""
@@ -633,6 +654,18 @@ def render_main_dashboard(source_count: int, standards_count: int) -> None:
             <span class="hero-pill">模型：{model_choice}</span>
             <span class="hero-pill">範圍：{scope_mode}</span>
           </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="section-title">報告產出</div>', unsafe_allow_html=True)
+    cta_col, cta_note = st.columns([3, 5])
+    generate_clicked = cta_col.button("🚀 產生國際捷運 AI 週報", type="primary", use_container_width=True)
+    cta_note.markdown(
+        """
+        <div class="kpi-note" style="padding-top: .65rem;">
+        先確認左側條件，再啟動 RSS / Google News / ddgs 蒐集與 Gemini 摘要。
         </div>
         """,
         unsafe_allow_html=True,
@@ -661,6 +694,8 @@ def render_main_dashboard(source_count: int, standards_count: int) -> None:
             unsafe_allow_html=True,
         )
 
+    return generate_clicked
+
     st.markdown('<div class="section-title">系統流程</div>', unsafe_allow_html=True)
     workflow_items = [
         ("01", "蒐集候選資料", "RSS / Google News / ddgs"),
@@ -685,7 +720,7 @@ def render_main_dashboard(source_count: int, standards_count: int) -> None:
 
 initial_region_sources = build_region_news_sources(active_regions, int(lookback_days))
 initial_standard_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
-render_main_dashboard(
+generate_btn = render_main_dashboard(
     source_count=len(RSS_SOURCES) + len(initial_region_sources) + len(initial_standard_sources),
     standards_count=sum(len(v) for v in STANDARDS_WATCHLIST.values()),
 )
@@ -1364,6 +1399,7 @@ def markdown_to_html(md: str) -> str:
 
 
 def markdown_fragment_to_html(md: str) -> str:
+    md = compact_report_urls(md)
     h = escape(md)
     h = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", h)
     h = re.sub(r"\[(.+?)\]\((https?://[^\s\)]+)\)", r'<a href="\2" target="_blank">\1</a>', h)
@@ -1376,6 +1412,121 @@ def markdown_fragment_to_html(md: str) -> str:
         else:
             lines.append(line)
     return "<br>".join(lines)
+
+
+def short_url_label(url: str) -> str:
+    host = _domain_from_url(url) or "來源"
+    if "news.google.com" in host:
+        return "來源連結（Google News）"
+    return f"來源連結（{host}）"
+
+
+def compact_report_urls(text: str) -> str:
+    """正式報告只顯示短連結文字；完整 URL 保留在 raw debug。"""
+    placeholders: list[str] = []
+
+    def _replace_markdown_link(match: re.Match) -> str:
+        label, url = match.group(1), match.group(2)
+        if len(url) < 72 and "news.google.com" not in url:
+            replacement = match.group(0)
+        else:
+            replacement = f"[{label or short_url_label(url)}]({url})"
+        placeholders.append(replacement)
+        return f"__REPORT_LINK_{len(placeholders) - 1}__"
+
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^\s\)]+)\)", _replace_markdown_link, text)
+
+    def _replace_plain_url(match: re.Match) -> str:
+        url = match.group(0).rstrip("。；;,，)")
+        suffix = match.group(0)[len(url):]
+        return f"{short_url_label(url)}{suffix}"
+
+    text = re.sub(r"https?://[^\s\)\]]+", _replace_plain_url, text)
+    for idx, original in enumerate(placeholders):
+        text = text.replace(f"__REPORT_LINK_{idx}__", original)
+    return text
+
+
+def compact_report_line_for_pdf(line: str) -> str:
+    line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
+    line = re.sub(
+        r"\[(.+?)\]\((https?://[^\)]+)\)",
+        lambda m: f"{m.group(1)}（{short_url_label(m.group(2))}）",
+        line,
+    )
+    return compact_report_urls(line)
+
+
+def register_pdf_fonts() -> tuple[str, str]:
+    """Register Microsoft JhengHei for CJK and Times New Roman for Latin text when available."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    def _is_registered(font_name: str) -> bool:
+        try:
+            pdfmetrics.getFont(font_name)
+            return True
+        except Exception:
+            return False
+
+    def _register_ttf(font_name: str, paths: list[str]) -> str | None:
+        if _is_registered(font_name):
+            return font_name
+        for path in paths:
+            if not os.path.exists(path):
+                continue
+            try:
+                pdfmetrics.registerFont(TTFont(font_name, path, subfontIndex=0))
+                return font_name
+            except Exception:
+                try:
+                    pdfmetrics.registerFont(TTFont(font_name, path))
+                    return font_name
+                except Exception:
+                    continue
+        return None
+
+    cjk_font = _register_ttf("MicrosoftJhengHei", [
+        r"C:\Windows\Fonts\msjh.ttc",
+        r"C:\Windows\Fonts\msjh.ttf",
+        r"C:\Windows\Fonts\msjhl.ttc",
+    ])
+    if not cjk_font:
+        if not _is_registered("MSung-Light"):
+            pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
+        cjk_font = "MSung-Light"
+
+    latin_font = _register_ttf("TimesNewRoman", [
+        r"C:\Windows\Fonts\times.ttf",
+        r"C:\Windows\Fonts\timesbd.ttf",
+        r"C:\Windows\Fonts\timesi.ttf",
+    ]) or "Times-Roman"
+
+    return cjk_font, latin_font
+
+
+def pdf_rich_text(text: str, cjk_font: str, latin_font: str) -> str:
+    chunks: list[str] = []
+    current: list[str] = []
+    current_is_latin: bool | None = None
+
+    for char in text:
+        is_latin = ord(char) < 128
+        if current and is_latin != current_is_latin:
+            chunk = escape("".join(current), quote=False)
+            font_name = latin_font if current_is_latin else cjk_font
+            chunks.append(f'<font name="{font_name}">{chunk}</font>')
+            current = []
+        current.append(char)
+        current_is_latin = is_latin
+
+    if current:
+        chunk = escape("".join(current), quote=False)
+        font_name = latin_font if current_is_latin else cjk_font
+        chunks.append(f'<font name="{font_name}">{chunk}</font>')
+
+    return "".join(chunks)
 
 
 def category_badge_class(category: str) -> str:
@@ -1411,12 +1562,12 @@ def has_candidate_observations(report_md: str) -> bool:
 def render_report_cards(report_md: str) -> None:
     parts = re.split(r"(?m)^###\s+", report_md)
     if len(parts) <= 1:
-        st.markdown(report_md)
+        st.markdown(compact_report_urls(report_md))
         return
 
     intro = parts[0].strip()
     if intro:
-        st.markdown(intro)
+        st.markdown(compact_report_urls(intro))
 
     for part in parts[1:]:
         if not part.strip():
@@ -1467,9 +1618,27 @@ def render_source_health_dashboard(statuses: list[dict]) -> None:
     st.markdown('<div class="section-title">來源健康儀表板</div>', unsafe_allow_html=True)
     status_order = ["成功", "fallback 成功", "無文章", "timeout", "403", "parse error", "被安全規則排除"]
     counts = {status: sum(1 for row in statuses if row.get("status") == status) for status in status_order}
-    metric_cols = st.columns(7)
-    for idx, status in enumerate(status_order):
-        metric_cols[idx].metric(status, counts[status])
+    healthy_count = counts["成功"] + counts["fallback 成功"]
+    issue_count = counts["timeout"] + counts["403"] + counts["parse error"]
+    total_candidates = sum(int(row.get("item_count", 0) or 0) for row in statuses)
+    summary_items = [
+        ("可用來源", healthy_count, f"成功 {counts['成功']}｜fallback {counts['fallback 成功']}"),
+        ("無文章來源", counts["無文章"], "保留追蹤，但本期未產出候選"),
+        ("需注意來源", issue_count, f"timeout {counts['timeout']}｜403 {counts['403']}｜parse {counts['parse error']}"),
+        ("候選資料", total_candidates, "已通過 URL 與安全規則"),
+    ]
+    cols = st.columns(4)
+    for idx, (label, num, note) in enumerate(summary_items):
+        cols[idx].markdown(
+            f"""
+            <div class="source-summary-card">
+              <div class="source-summary-num">{escape(str(num))}</div>
+              <div class="source-summary-label">{escape(label)}</div>
+              <div class="source-summary-note">{escape(note)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     rows = []
     for row in statuses:
@@ -1487,24 +1656,24 @@ def render_source_health_dashboard(statuses: list[dict]) -> None:
         "<thead><tr><th>來源</th><th>方法</th><th>狀態</th><th>候選數</th><th>訊息</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
-    st.markdown(table, unsafe_allow_html=True)
+    with st.expander("查看每個來源詳細狀態", expanded=False):
+        st.caption("這裡保留完整稽核資訊，展示時可收合，承辦檢查時再展開。")
+        st.markdown(table, unsafe_allow_html=True)
 
 
 def markdown_to_pdf_bytes(md: str) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
-    pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
+    cjk_font, latin_font = register_pdf_fonts()
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36,
     )
     styles = getSampleStyleSheet()
     for style_name in ("Title", "Heading1", "Heading2", "Heading3", "BodyText"):
-        styles[style_name].fontName = "MSung-Light"
+        styles[style_name].fontName = cjk_font
         styles[style_name].leading = max(styles[style_name].leading, 16)
     styles["BodyText"].fontSize = 10.5
 
@@ -1515,15 +1684,14 @@ def markdown_to_pdf_bytes(md: str) -> bytes:
             story.append(Spacer(1, 8))
             continue
         if line.startswith("# "):
-            story.append(Paragraph(escape(line[2:]), styles["Title"]))
+            story.append(Paragraph(pdf_rich_text(line[2:], cjk_font, latin_font), styles["Title"]))
         elif line.startswith("## "):
-            story.append(Paragraph(escape(line[3:]), styles["Heading2"]))
+            story.append(Paragraph(pdf_rich_text(line[3:], cjk_font, latin_font), styles["Heading2"]))
         elif line.startswith("### "):
-            story.append(Paragraph(escape(line[4:]), styles["Heading3"]))
+            story.append(Paragraph(pdf_rich_text(line[4:], cjk_font, latin_font), styles["Heading3"]))
         else:
-            line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
-            line = re.sub(r"\[(.+?)\]\((https?://[^\)]+)\)", r"\1：\2", line)
-            story.append(Paragraph(escape(line), styles["BodyText"]))
+            line = compact_report_line_for_pdf(line)
+            story.append(Paragraph(pdf_rich_text(line, cjk_font, latin_font), styles["BodyText"]))
     doc.build(story)
     return buffer.getvalue()
 
@@ -1546,26 +1714,24 @@ def raw_debug_to_pdf_bytes(raw_rss: str, raw_ddg: str) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
-    pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
+    cjk_font, latin_font = register_pdf_fonts()
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36,
     )
     styles = getSampleStyleSheet()
     for style_name in ("Title", "Heading2", "BodyText"):
-        styles[style_name].fontName = "MSung-Light"
+        styles[style_name].fontName = cjk_font
         styles[style_name].leading = max(styles[style_name].leading, 13)
     styles["BodyText"].fontSize = 8.5
     styles["BodyText"].leading = 12
 
     def _section(title: str, content: str, story: list):
-        story.append(Paragraph(escape(title), styles["Title"]))
+        story.append(Paragraph(pdf_rich_text(title, cjk_font, latin_font), styles["Title"]))
         story.append(Spacer(1, 10))
         if not content.strip():
-            story.append(Paragraph("（無資料）", styles["BodyText"]))
+            story.append(Paragraph(pdf_rich_text("（無資料）", cjk_font, latin_font), styles["BodyText"]))
             return
         for raw_line in content.splitlines():
             line = raw_line.rstrip()
@@ -1575,9 +1741,9 @@ def raw_debug_to_pdf_bytes(raw_rss: str, raw_ddg: str) -> bytes:
             wrapped = _soft_wrap_long_tokens(line)
             if line.startswith("【"):
                 story.append(Spacer(1, 6))
-                story.append(Paragraph(escape(wrapped), styles["Heading2"]))
+                story.append(Paragraph(pdf_rich_text(wrapped, cjk_font, latin_font), styles["Heading2"]))
             else:
-                story.append(Paragraph(escape(wrapped), styles["BodyText"]))
+                story.append(Paragraph(pdf_rich_text(wrapped, cjk_font, latin_font), styles["BodyText"]))
 
     story: list = []
     _section(f"📡 RSS 原始資料（{today.strftime('%Y-%m-%d')}）", raw_rss, story)
@@ -1624,11 +1790,6 @@ def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: st
         return False
 
 
-# ── 立即產生報告 ──────────────────────────────────────
-st.markdown('<div class="section-title">報告產出</div>', unsafe_allow_html=True)
-st.markdown('<div class="primary-action"></div>', unsafe_allow_html=True)
-col_b1, _ = st.columns([3, 5])
-generate_btn = col_b1.button("🚀 產生國際捷運 AI 週報", type="primary", use_container_width=True)
 send_btn = False
 
 if generate_btn or send_btn:
