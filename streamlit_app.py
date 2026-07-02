@@ -276,6 +276,14 @@ MIN_REPORT_ITEMS = 15
 MAX_ITEMS_PER_SOURCE = 25
 DDGS_MAX_RESULTS = 25
 LOOKBACK_OPTIONS = [7, 14, 30, 90, 180, 365]
+REPORT_TARGET_BY_DAYS = {
+    7: 15,
+    14: 20,
+    30: 25,
+    90: 35,
+    180: 45,
+    365: 60,
+}
 REPORT_PERIOD_LABELS = {
     7: "週報",
     14: "雙周報",
@@ -408,7 +416,6 @@ with st.sidebar:
             label_visibility="collapsed",
             help="全球模式不以國家刪除新聞；指定模式才套用下方先進國家/地區清單。",
         )
-    st.caption("國際週報固定排除台灣及國內捷運新聞。")
     if "selected_regions_state" not in st.session_state:
         st.session_state["selected_regions_state"] = DEFAULT_REGIONS.copy()
 
@@ -517,7 +524,9 @@ with st.sidebar:
 week_start = today - datetime.timedelta(days=int(lookback_days))
 date_range = f"{week_start.strftime('%Y年%m月%d日')} 至 {today.strftime('%Y年%m月%d日')}"
 report_period_label = REPORT_PERIOD_LABELS.get(int(lookback_days), "週報")
-report_title = f"【{today.strftime('%Y/%m/%d')}】國際捷運技術新知、重大事件{report_period_label}"
+min_report_items = REPORT_TARGET_BY_DAYS.get(int(lookback_days), MIN_REPORT_ITEMS)
+selected_report_topic = "、".join(selected_types) if selected_types else "技術趨勢"
+report_title = f"【{today.strftime('%Y/%m/%d')}】國際捷運{selected_report_topic}{report_period_label}"
 is_global_scope = scope_mode == "全球（安全白名單來源）"
 active_regions = [] if is_global_scope else selected_regions
 
@@ -713,7 +722,7 @@ def render_main_dashboard(source_count: int, standards_count: int) -> bool:
         ("🌏", selected_regions_note, "預設/選取國家數", "指定模式套用國家邊界"),
         ("🗓️", f"{lookback_days} 天", f"新聞搜尋期間（{report_period_label}）", date_range),
         ("📡", source_count, "RSS/代理來源數", "含官方與 Google News 代理"),
-        ("🎯", f">= {MIN_REPORT_ITEMS}", "AI 報告目標篇數", "不足時列明原因"),
+        ("🎯", f">= {min_report_items}", "AI 報告目標篇數", f"{report_period_label}最低目標"),
         ("📚", standards_count if standards_enabled else "未啟用", "規範追蹤數量", "勾選規範更新後啟用"),
     ]
     cols = st.columns(3)
@@ -908,7 +917,7 @@ def _is_valid_news_url(url: str, source_href: str = "") -> tuple[bool, str]:
     if _is_blocked_host(host):
         return False, "被安全規則排除"
     if _is_domestic_taiwan_host(host):
-        return False, "排除台灣來源"
+        return False, "範圍排除"
     if not _is_allowed_host(host):
         return False, "不在來源白名單"
     return True, ""
@@ -996,7 +1005,7 @@ def _items_from_parsed_feed(parsed_feed, cutoff: datetime.datetime, seen_titles:
 
         is_valid, reason = _is_valid_news_url(link, source_href=source_href)
         if not is_valid:
-            if reason in ("被安全規則排除", "排除台灣來源"):
+            if reason in ("被安全規則排除", "範圍排除"):
                 blocked_count += 1
             else:
                 invalid_count += 1
@@ -1074,7 +1083,7 @@ def fetch_rss_feeds(
 
         method = _method_for_url(url)
         valid_source, source_reason = _is_valid_news_url(url)
-        if not valid_source and source_reason in ("被安全規則排除", "排除台灣來源"):
+        if not valid_source and source_reason in ("被安全規則排除", "範圍排除"):
             source_statuses.append(_status_record(source_name, method, source_reason, 0, source_reason))
             all_blocks.append(f"【RSS來源：{source_name}】（{source_reason}）")
             continue
@@ -1322,17 +1331,19 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
     search_count = len(build_search_queries()[0])
     selected_types_str = "、".join(selected_types) if selected_types else "無"
     report_order = "、".join(ADVANCED_TYPES)
+    selected_section_headings = "\n".join(f"## {t}" for t in ADVANCED_TYPES if t in selected_types)
+    allowed_heading_options = "/".join(t for t in ADVANCED_TYPES if t in selected_types)
     source_names = "\n".join("   - " + name for name, _ in rss_sources)
     if is_global_scope:
         scope_instruction = (
             "本次採全球模式：不得用國家/地區清單刪除新聞。仍須套用來源安全規則、有效 URL 規則，"
-            "並聚焦都市捷運、地下鐵、中運量、輕軌、AGT、LRRT/LRT；台灣及國內捷運新聞一律排除。"
+            "並聚焦都市捷運、地下鐵、中運量、輕軌、AGT、LRRT/LRT。"
         )
-        scope_list = "全球（安全白名單來源）；不套用 ADVANCED_REGIONS 國家邊界；仍排除台灣。"
+        scope_list = "全球（安全白名單來源）；不套用 ADVANCED_REGIONS 國家邊界。"
     else:
         scope_instruction = (
             "本次採指定先進國家/地區模式：完成主題判斷後，必須再確認事件發生地或標準公告主體"
-            "落在指定清單內；不在清單內者不得納入正式新聞；台灣及國內捷運新聞一律排除。"
+            "落在指定清單內；不在清單內者不得納入正式新聞。"
         )
         scope_list = "\n".join("- " + r for r in active_regions)
 
@@ -1380,7 +1391,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
 2. **最高優先級（專注捷運與LRRT，排除一般鐵路/高鐵）**：本報告是提供給北市府捷運局的國際週報，請**嚴格過濾並排除**傳統客運/貨運鐵路（火車、城際列車）與高速鐵路（HSR）的新聞。請**絕對優先保留並聚焦**於國際上的**「都市捷運系統（Metro / Subway / Underground）」**以及**「中運量 / 輕軌 / 膠輪系統（LRRT / AGT / LRT）」**的新聞，並給予最大篇幅。
 3. **來源權重**：請優先採納「第一部分：RSS 訂閱源」中實際出現的來源（本次共 {len(rss_sources)} 個，清單如下），這些是本次真正抓取到的媒體，**不要**引用或想像清單以外的媒體名稱：
 {source_names}
-4. **報告排序固定**：正式報告必須依序輸出：{report_order}。未勾選的類型不要出現；已勾選但無合格資料者，該類別寫「本期無合格資料」。
+4. **報告排序固定**：正式報告必須依序輸出已勾選類型，順序參照：{report_order}。**未勾選的類型絕對不得出現在章節標題、每則標題、正式新聞、候補觀察、統計或結尾文字**。若只勾選「技術新知」，整份報告只能有「技術新知」類新聞。
 5. **【絕對禁止腦補、嚴格日期查核與來源查核】（違反本條視為報告失敗）**：
    - 每一則新聞的「發布/事件日期」**必須**直接取自原始資料中該則內容本身標註的日期字串（RSS 的「日期：」欄位，或關鍵字搜尋結果摘要中出現的日期）。**禁止**依你自己知識庫中對該事件、公司或專案的既有印象去推測、換算或臆造日期。
    - 若某則原始資料**沒有**明確可辨識的日期，或日期含糊到無法判斷是哪一天，**直接捨棄該則**，不要用「近期」「今年」等模糊字眼帶過，也不要自行補上一個日期。
@@ -1389,16 +1400,16 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
    - **來源必須是該則事件本身的具體新聞文章連結**：「資料來源」欄位填入的網址，**必須**是原始資料中該則內容自己標註的「連結：」網址，且該網址指向的必須是報導這件事本身的新聞文章頁面。**嚴禁**引用網站首頁、路網圖、票務頁面、會員名錄、活動總覽頁等非新聞頁面來充當來源，也**嚴禁**在原始資料中找不到對應連結時，挪用同一媒體其他頁面的網址頂替。若某則事件在原始資料中沒有對應的具體文章連結，即使內容看起來合理，也必須**整則捨棄**。
    - Google News RSS 的 `news.google.com/rss/articles/...` 連結若搭配原始資料中的「原始來源」或標題來源，可視為可追查來源連結；不要僅因其為 Google News 轉址而剔除。
     - 不得為了湊數引用無具體新聞頁、首頁、社群頁、會員頁、活動首頁或模型記憶。
-6. **數量要求**：正式報告目標至少 {MIN_REPORT_ITEMS} 則。若高信度新聞不足，請優先納入中信度但來源、日期、都市軌道關聯明確的候選；不要因摘要較短或連結為 Google News 轉址而過度剔除。仍不足時，請另設「候補觀察」區，只收錄原始資料中存在但信心較低或日期/範圍需追蹤的候選，不得捏造。若最後正式新聞仍不足 {MIN_REPORT_ITEMS} 則，必須在結尾列明不足原因，例如：來源不足、日期不明、非捷運、來源不合格。
+6. **數量要求**：本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，請優先納入中信度但來源、日期、都市軌道關聯明確的候選；不要因摘要較短或連結為 Google News 轉址而過度剔除。仍不足時，請另設「候補觀察」區，只收錄原始資料中存在但信心較低或日期/範圍需追蹤的候選，不得捏造。若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，例如：來源不足、日期不明、非捷運、來源不合格。
 7. **國家/地區規則**：{scope_instruction}
-8. **國際新聞邊界**：本系統為國際捷運週報，台灣、臺灣、Taiwan、Taipei、台北/臺北捷運、北捷、新北、桃園/桃捷、台中、台南、高雄/高捷等國內新聞或國內案例，不得列入正式新聞或候補觀察；若原始資料出現，請視為不合格來源或非本報告範圍。
+8. **內部國際新聞邊界**：台灣、臺灣、Taiwan、Taipei、台北/臺北捷運、北捷、新北、桃園/桃捷、台中、台南、高雄/高捷等國內新聞或國內案例，不得列入正式新聞或候補觀察。這是內部篩選條件，報告中不得呈現本條內容或其原因。
 
 ## 國家/地區範圍
 {scope_list}
 
 {standards_instruction}
 
-## 輸出格式（每則獨立區塊，正式報告至少 {MIN_REPORT_ITEMS} 則）
+## 輸出格式（每則獨立區塊，正式報告至少 {min_report_items} 則）
 
 # {report_title}
 > 資料涵蓋期間：{date_range} 
@@ -1407,13 +1418,9 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
 
 ---
 
-## 技術新知
-## 重大事故
-## 營運政策
-## 營運爭議
-## 規範更新
+{selected_section_headings}
 
-### [填入該則所屬之分類：技術新知/重大事故/營運政策/營運爭議/規範更新] 國家/地區或標準編號：（一句有力主標題）
+### [填入該則所屬之分類：{allowed_heading_options}] 國家/地區或標準編號：（一句有力主標題）
 * **發布/事件日期**：（原文發布年月日）
 * **國家/地區**：（全球模式仍需標示；規範更新可填公告機構/標準體系）
 * **相關機電系統**：車輛/號誌/通訊/供電/月臺門/機廠設備/系統整合/資安/土建界面
@@ -1436,9 +1443,35 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
 ## 結尾（必填）
 ---
 📊 **本週統計**：共 N 則 
-⚠️ **不足 {MIN_REPORT_ITEMS} 則原因**：（若正式新聞少於 {MIN_REPORT_ITEMS} 則必填；若達標可寫「已達標」）
+⚠️ **不足 {min_report_items} 則原因**：（若正式新聞少於 {min_report_items} 則必填；若達標可寫「已達標」）
 🔍 **執行搜尋次數**：RSS/地區代理 {len(rss_sources)} 源 + ddgs {search_count} 次精簡搜尋
 ⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
+"""
+
+
+def build_revision_prompt(
+    rss_results: str,
+    ddg_results: str,
+    previous_report: str,
+    previous_count: int,
+    rss_sources: list[tuple[str, str]] | None = None,
+) -> str:
+    allowed_types = "、".join(selected_types)
+    return f"""
+{build_prompt(rss_results, ddg_results, rss_sources)}
+
+# 上一版報告需要修正
+上一版正式新聞只有 {previous_count} 則，或混入未勾選分類，未符合本期 {report_period_label} 目標。
+
+## 必須修正
+1. 請重寫「完整報告」，不是只補充差額。
+2. 本次只允許下列分類：{allowed_types}。
+3. 未勾選分類不得出現在章節、標題、正文、候補觀察與統計。
+4. 正式新聞至少 {min_report_items} 則；若仍不足，結尾必須具體說明候選資料不足的原因。
+5. 僅能使用 raw RSS/ddgs 候選資料，不得補腦。
+
+## 上一版報告
+{previous_report}
 """
 
 
@@ -1529,6 +1562,15 @@ def compact_report_urls(text: str) -> str:
     for idx, original in enumerate(placeholders):
         text = text.replace(f"__REPORT_LINK_{idx}__", original)
     return text
+
+
+def sanitize_report_text(text: str) -> str:
+    return (
+        text.replace("全球（排除台灣）", "全球（安全白名單來源）")
+        .replace("全球(排除台灣)", "全球（安全白名單來源）")
+        .replace("（排除台灣）", "")
+        .replace("(排除台灣)", "")
+    )
 
 
 def compact_report_line_for_pdf(line: str) -> str:
@@ -1634,9 +1676,17 @@ def count_report_items(report_md: str) -> int:
     count = 0
     for match in re.finditer(r"^###\s+(.+)$", report_md, flags=re.MULTILINE):
         heading = match.group(1)
-        if any(category in heading for category in ADVANCED_TYPES):
+        if any(category in heading for category in selected_types):
             count += 1
     return count
+
+
+def report_has_unselected_types(report_md: str) -> bool:
+    unselected = [category for category in ADVANCED_TYPES if category not in selected_types]
+    for category in unselected:
+        if re.search(rf"(?m)^(##|###)\s+.*{re.escape(category)}", report_md):
+            return True
+    return False
 
 
 def has_candidate_observations(report_md: str) -> bool:
@@ -1681,7 +1731,7 @@ def status_badge(status: str) -> str:
         "403": "badge-error",
         "parse error": "badge-error",
         "被安全規則排除": "badge-blocked",
-        "排除台灣來源": "badge-blocked",
+        "範圍排除": "badge-blocked",
     }.get(status, "badge-neutral")
     label = {
         "成功": "✅ 成功",
@@ -1691,7 +1741,7 @@ def status_badge(status: str) -> str:
         "403": "403",
         "parse error": "parse error",
         "被安全規則排除": "安全排除",
-        "排除台灣來源": "排除台灣",
+        "範圍排除": "範圍排除",
     }.get(status, status)
     return f'<span class="status-badge {class_name}">{escape(label)}</span>'
 
@@ -1702,7 +1752,7 @@ def render_source_health_dashboard(statuses: list[dict]) -> None:
         return
 
     st.markdown('<div class="section-title">來源健康儀表板</div>', unsafe_allow_html=True)
-    status_order = ["成功", "fallback 成功", "無文章", "timeout", "403", "parse error", "被安全規則排除", "排除台灣來源"]
+    status_order = ["成功", "fallback 成功", "無文章", "timeout", "403", "parse error", "被安全規則排除", "範圍排除"]
     counts = {status: sum(1 for row in statuses if row.get("status") == status) for status in status_order}
     healthy_count = counts["成功"] + counts["fallback 成功"]
     issue_count = counts["timeout"] + counts["403"] + counts["parse error"]
@@ -1927,6 +1977,31 @@ if generate_btn or send_btn:
                 config=types.GenerateContentConfig(temperature=0.2),
             )
             report_text = extract_text(response)
+            formal_count = count_report_items(report_text)
+            needs_revision = (
+                formal_count < min_report_items
+                or report_has_unselected_types(report_text)
+                or "排除台灣" in report_text
+            )
+            if needs_revision:
+                status_text.text(
+                    f"🤖 初稿 {formal_count} 則或分類不符，正在自動重寫補足 {min_report_items} 則..."
+                )
+                revision_response = client.models.generate_content(
+                    model=model_choice,
+                    contents=build_revision_prompt(
+                        rss_results,
+                        ddg_results,
+                        report_text,
+                        formal_count,
+                        combined_sources,
+                    ),
+                    config=types.GenerateContentConfig(temperature=0.2),
+                )
+                report_text = extract_text(revision_response)
+                formal_count = count_report_items(report_text)
+            report_text = sanitize_report_text(report_text)
+            formal_count = count_report_items(report_text)
 
             os.makedirs("reports", exist_ok=True)
             with open("reports/latest.md", "w", encoding="utf-8") as f:
@@ -1935,7 +2010,6 @@ if generate_btn or send_btn:
                 f.write(report_text)
 
             st.session_state["latest_report"] = report_text
-            formal_count = count_report_items(report_text)
             st.session_state["latest_report_summary"] = {
                 "formal_count": formal_count,
                 "has_candidate_observations": has_candidate_observations(report_text),
@@ -1981,6 +2055,7 @@ if not report_to_show:
             report_to_show = f.read()
     except FileNotFoundError:
         pass
+report_to_show = sanitize_report_text(report_to_show)
 
 if report_to_show:
     tab1, tab2 = st.tabs(["📋 分類卡片", "📝 原始文字"])
