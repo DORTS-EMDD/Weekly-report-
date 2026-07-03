@@ -65,9 +65,11 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-  :root {
+:root {
     --metro-blue: #12385b;
     --metro-blue-2: #1d5f8f;
+    --dorts-blue: #005bac;
+    --dorts-cyan: #00a3d9;
     --rail-gray: #475569;
     --paper: #ffffff;
     --soft-blue: #e8f3fb;
@@ -312,12 +314,12 @@ st.markdown("""
   .hero-card {
     background: #ffffff !important;
     border: 1px solid #e5e7eb !important;
-    border-left: 5px solid #315f8a !important;
+    border-left: 5px solid var(--dorts-blue) !important;
     border-radius: 8px !important;
     box-shadow: none !important;
     padding: 32px 34px !important;
   }
-  .hero-eyebrow { color: #315f8a !important; font-weight: 800; }
+  .hero-eyebrow { color: var(--dorts-blue) !important; font-weight: 800; }
   .hero-title { color: #111827 !important; font-size: 2.35rem !important; line-height: 1.18 !important; }
   .hero-subtitle { color: #4b5563 !important; max-width: 860px !important; }
   .hero-pill {
@@ -337,10 +339,10 @@ st.markdown("""
     background: #ffffff !important;
   }
   .kpi-card { padding: 14px !important; min-height: 102px !important; }
-  .kpi-icon { color: #315f8a !important; }
+  .kpi-icon { color: var(--dorts-blue) !important; }
   .kpi-num { color: #111827 !important; font-size: 1.65rem !important; }
-  .workflow-card { border-left: 2px solid #315f8a !important; min-height: 96px !important; }
-  .workflow-step { color: #315f8a !important; }
+  .workflow-card { border-left: 2px solid var(--dorts-blue) !important; min-height: 96px !important; }
+  .workflow-step { color: var(--dorts-blue) !important; }
   .report-card {
     border: 1px solid #e5e7eb !important;
     box-shadow: none !important;
@@ -660,7 +662,7 @@ with st.sidebar:
         st.session_state["recipients_text"] = default_recipients
 
     recipient_input = st.text_area(
-        "公務信箱",
+        "收件人 Email",
         key="recipients_text",
         placeholder="每行一個信箱",
         height=58,
@@ -682,12 +684,11 @@ with st.sidebar:
         st.markdown(f"feedparser 套件：{'✅' if feedparser else '❌'}")
 
     st.markdown("---")
-    st.markdown("### 🔧 除錯模式")
+    st.markdown("### 🔧 進階檢查")
     show_raw_debug = st.checkbox(
-        "顯示原始搜尋資料",
+        "在網頁顯示原始資料",
         value=False,
-        help="開啟後，產生報告時會另外保留 RSS／ddgs 抓到的原始文字（Gemini 篩選前），"
-             "方便判斷篇數過少是因為「原始資料本來就少」還是「Gemini 篩太嚴」。",
+        help="只控制網頁下方是否展開 raw 文字；原始資料 PDF 仍會在產生報告後提供下載。",
     )
 
     st.markdown("---")
@@ -882,7 +883,7 @@ def render_main_dashboard(source_count: int, standards_count: int) -> bool:
     cta_note.markdown(
         """
         <div class="kpi-note" style="padding-top: .65rem;">
-        先確認左側條件，再啟動 RSS / Google News / ddgs 蒐集與 Gemini 摘要。
+        國際都市軌道資訊蒐集、AI 摘要與 PDF/Email 輸出集中於同一流程。
         </div>
         """,
         unsafe_allow_html=True,
@@ -1678,9 +1679,9 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
 
 ## 報告摘要（必填）
 ---
-📊 **本週統計**：共 N 則 
-⚠️ **不足 {min_report_items} 則原因**：（若正式新聞少於 {min_report_items} 則必填；若達標可寫「已達標」）
-⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
+**本週統計**：共 N 則 
+**不足 {min_report_items} 則原因**：（僅正式新聞少於 {min_report_items} 則時輸出；若達標，整行不要出現）
+**報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
 """
 
 
@@ -1824,6 +1825,7 @@ def strip_internal_report_fields(text: str) -> str:
         r"(?:\*\*)?\s*[：:].*$"
     )
     search_count_pattern = re.compile(r"^\s*(?:🔍\s*)?(?:\*\*)?執行搜尋次數")
+    achieved_shortfall_pattern = re.compile(r"^\s*(?:⚠️\s*)?(?:\*\*)?不足\s*\d+\s*則原因(?:\*\*)?\s*[：:]\s*(?:已達標|無|無。)\s*$")
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -1834,7 +1836,7 @@ def strip_internal_report_fields(text: str) -> str:
             continue
 
         if skip_candidate_section:
-            if section_title.startswith(("報告摘要", "結尾")) or line.startswith(("📊", "⚠️", "⏰")):
+            if section_title.startswith(("報告摘要", "結尾")) or line.startswith(("📊", "⚠️", "⏰", "**本週統計", "本週統計", "**不足", "不足", "**報告產出時間", "報告產出時間")):
                 skip_candidate_section = False
             else:
                 continue
@@ -1842,6 +1844,8 @@ def strip_internal_report_fields(text: str) -> str:
         if internal_field_pattern.match(line):
             continue
         if search_count_pattern.match(line):
+            continue
+        if achieved_shortfall_pattern.match(line):
             continue
         if section_title in {"結尾", "結尾（必填）"}:
             continue
@@ -1907,6 +1911,16 @@ def register_pdf_fonts() -> tuple[str, str]:
         r"C:\Windows\Fonts\msjh.ttc",
         r"C:\Windows\Fonts\msjh.ttf",
         r"C:\Windows\Fonts\msjhl.ttc",
+        r"C:\Windows\Fonts\mingliu.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJKtc-Regular.otf",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc",
     ])
     if not cjk_font:
         if not _is_registered("MSung-Light"):
@@ -2186,9 +2200,9 @@ def raw_debug_to_pdf_bytes(raw_rss: str, raw_ddg: str) -> bytes:
                 story.append(Paragraph(pdf_rich_text(wrapped, cjk_font, latin_font), styles["BodyText"]))
 
     story: list = []
-    _section(f"📡 RSS 原始資料（{today.strftime('%Y-%m-%d')}）", raw_rss, story)
+    _section(f"RSS 原始資料（{today.strftime('%Y-%m-%d')}）", raw_rss, story)
     story.append(PageBreak())
-    _section(f"🔍 ddgs 原始資料（{today.strftime('%Y-%m-%d')}）", raw_ddg, story)
+    _section(f"ddgs 原始資料（{today.strftime('%Y-%m-%d')}）", raw_ddg, story)
 
     doc.build(story)
     return buffer.getvalue()
