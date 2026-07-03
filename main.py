@@ -495,6 +495,73 @@ def _extract_maiagent_text(data) -> str:
     raise ValueError("MaiAgent 回應無文字內容")
 
 
+def _maiagent_endpoint_candidates(base_url: str, chatbot_id: str) -> list[str]:
+    """
+    MaiAgent 文件中的 completions 端點目前以 /api/chatbots/{id}/completions/ 為準。
+    但不同環境可能仍保留 /api/v1/...，因此保留 fallback。
+    """
+    base_url = base_url.rstrip("/")
+    candidates: list[str] = []
+
+    if base_url.endswith("/api/v1"):
+        candidates.append(f"{base_url}/chatbots/{chatbot_id}/completions/")
+        candidates.append(f"{base_url[:-3]}/chatbots/{chatbot_id}/completions/")
+    elif base_url.endswith("/api"):
+        candidates.append(f"{base_url}/chatbots/{chatbot_id}/completions/")
+        candidates.append(f"{base_url}/v1/chatbots/{chatbot_id}/completions/")
+    else:
+        candidates.append(f"{base_url}/api/chatbots/{chatbot_id}/completions/")
+        candidates.append(f"{base_url}/api/v1/chatbots/{chatbot_id}/completions/")
+
+    # 去重但保留順序
+    seen = set()
+    unique = []
+    for url in candidates:
+        if url not in seen:
+            unique.append(url)
+            seen.add(url)
+    return unique
+
+
+def _extract_maiagent_response_text(response: requests.Response) -> str:
+    """
+    MaiAgent completions 可能回 JSON，也可能回串流文字。
+    這裡同時支援 JSON 與 data: {...} 的 SSE 形式。
+    """
+    content_type = (response.headers.get("Content-Type") or "").lower()
+
+    if "application/json" in content_type:
+        return _extract_maiagent_text(response.json())
+
+    raw = response.text.strip()
+    if not raw:
+        return ""
+
+    # 嘗試解析 SSE: data: {"content": "..."}
+    chunks = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload in {"[DONE]", "DONE"}:
+            continue
+        try:
+            import json
+            obj = json.loads(payload)
+            text = _extract_maiagent_text(obj)
+            if text:
+                chunks.append(text)
+        except Exception:
+            if payload:
+                chunks.append(payload)
+
+    if chunks:
+        return "\n".join(chunks).strip()
+
+    return raw
+
+
 def call_maiagent_cloud(prompt: str) -> str:
     """呼叫 MaiAgent 雲端 Chatbot completions API 產生報告。"""
     if not MAIAGENT_API_KEY:
@@ -502,25 +569,34 @@ def call_maiagent_cloud(prompt: str) -> str:
     if not MAIAGENT_CHATBOT_ID:
         raise RuntimeError("未設定 MAIAGENT_CHATBOT_ID")
 
-    base_url = MAIAGENT_API_BASE.rstrip("/")
-    endpoint = f"{base_url}/api/v1/chatbots/{MAIAGENT_CHATBOT_ID}/completions"
     headers = {
         "Authorization": f"Api-Key {MAIAGENT_API_KEY}",
         "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Accept": "application/json, text/event-stream, text/plain",
     }
+
+    # 官方文件使用 is_streaming；保留 isStreaming 作為相容 fallback。
     payloads = [
-        {"message": {"content": prompt}, "isStreaming": False},
         {"message": {"content": prompt}, "is_streaming": False},
+        {"message": {"content": prompt}, "isStreaming": False},
+        {"message": {"content": prompt}, "is_streaming": True},
     ]
-    endpoints = [endpoint, endpoint + "/"]
+
+    endpoints = _maiagent_endpoint_candidates(MAIAGENT_API_BASE, MAIAGENT_CHATBOT_ID)
     last_error = None
 
     for url in endpoints:
         for payload in payloads:
             try:
-                print(f"[INFO] 送出 MaiAgent API：timeout={MAIAGENT_TIMEOUT_SECONDS}s，endpoint={url}")
-                response = requests.post(url, headers=headers, json=payload, timeout=MAIAGENT_TIMEOUT_SECONDS)
+                safe_url = url.replace(MAIAGENT_API_BASE.rstrip("/"), "***").replace(MAIAGENT_CHATBOT_ID, "***")
+                print(f"[INFO] 送出 MaiAgent API：timeout={MAIAGENT_TIMEOUT_SECONDS}s，endpoint={safe_url}")
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=MAIAGENT_TIMEOUT_SECONDS,
+                    allow_redirects=False,
+                )
             except requests.exceptions.Timeout as exc:
                 raise RuntimeError(
                     f"MaiAgent API 超過 {MAIAGENT_TIMEOUT_SECONDS}s 未回應；"
@@ -530,18 +606,29 @@ def call_maiagent_cloud(prompt: str) -> str:
                 last_error = exc
                 continue
 
-            if response.status_code in (400, 404, 422):
-                last_error = RuntimeError(f"MaiAgent API 回應 {response.status_code}: {response.text[:500]}")
+            # 301/302/307/308：通常是少了或多了尾斜線，不讓 requests 自動把 POST 轉成 GET。
+            if response.status_code in (301, 302, 307, 308):
+                last_error = RuntimeError(
+                    f"MaiAgent API 重新導向 {response.status_code}：{response.headers.get('Location', '')}"
+                )
                 continue
+
+            # 405 很常見於端點版本錯誤或 POST 被 redirect 成 GET；繼續試下一個 endpoint。
+            if response.status_code in (400, 404, 405, 422):
+                last_error = RuntimeError(
+                    f"MaiAgent API 回應 {response.status_code}: {response.text[:500]}"
+                )
+                print(f"[WARN] {last_error}")
+                continue
+
             response.raise_for_status()
-            try:
-                data = response.json()
-            except ValueError:
-                return response.text.strip()
-            return _extract_maiagent_text(data)
+            text = _extract_maiagent_response_text(response)
+            if text:
+                return text
+
+            last_error = RuntimeError("MaiAgent API 回應成功但未解析到文字內容")
 
     raise RuntimeError(f"MaiAgent API 呼叫失敗：{last_error}")
-
 
 def generate_report() -> str:
     print(f"[INFO] AI：{AI_PROVIDER_LABEL}")
