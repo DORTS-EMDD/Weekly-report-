@@ -971,7 +971,7 @@ def build_standards_news_sources(days: int) -> list[tuple[str, str]]:
     return sources
 
 
-def render_main_dashboard(source_count: int, standards_count: int) -> bool:
+def render_main_dashboard(source_count: int, standards_count: int):
     selected_regions_note = "全球模式" if is_global_scope else f"{len(selected_regions)} / {len(ADVANCED_REGIONS)}"
     st.markdown(
         f"""
@@ -992,6 +992,8 @@ def render_main_dashboard(source_count: int, standards_count: int) -> bool:
 
     st.markdown('<div class="section-title">報告產出</div>', unsafe_allow_html=True)
     generate_clicked = st.button(f"🚀 產生國際捷運 AI {report_period_label}", type="primary", use_container_width=True)
+    progress_placeholder = st.empty()
+    status_placeholder = st.empty()
 
     st.markdown('<div class="section-title">關鍵指標</div>', unsafe_allow_html=True)
     kpi_items = [
@@ -1037,12 +1039,12 @@ def render_main_dashboard(source_count: int, standards_count: int) -> bool:
             unsafe_allow_html=True,
         )
 
-    return generate_clicked
+    return generate_clicked, progress_placeholder, status_placeholder
 
 
 initial_region_sources = build_region_news_sources(active_regions, int(lookback_days))
 initial_standard_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
-generate_btn = render_main_dashboard(
+generate_btn, progress_placeholder, status_placeholder = render_main_dashboard(
     source_count=len(RSS_SOURCES) + len(initial_region_sources) + len(initial_standard_sources),
     standards_count=sum(len(v) for v in STANDARDS_WATCHLIST.values()),
 )
@@ -2418,16 +2420,26 @@ send_btn = False
 
 if generate_btn or send_btn:
     if not api_key:
-        st.error("❌ Gemini API Key 未設定，請至 Streamlit Cloud App Settings → Secrets 填入")
+        status_placeholder.error("❌ Gemini API Key 未設定，請至 Streamlit Cloud App Settings → Secrets 填入")
     elif genai is None or types is None:
-        st.error("❌ google-genai 套件未安裝，請確認 requirements.txt 已包含 google-genai。")
+        status_placeholder.error("❌ google-genai 套件未安裝，請確認 requirements.txt 已包含 google-genai。")
     elif not selected_types:
-        st.error("❌ 尚未勾選新聞類型，請至左側選單勾選想要搜尋的主題。")
+        status_placeholder.error("❌ 尚未勾選新聞類型，請至左側選單勾選想要搜尋的主題。")
     elif not is_global_scope and not active_regions:
-        st.error("❌ 指定先進國家/地區模式下，請至少勾選一個國家/地區。")
+        status_placeholder.error("❌ 指定先進國家/地區模式下，請至少勾選一個國家/地區。")
     else:
-        progress_bar = st.progress(0)
-        status_text  = st.empty()
+        progress_bar = progress_placeholder.progress(0.10)
+        status_text = status_placeholder
+
+        class ProgressRange:
+            def __init__(self, progress_bar_obj, start: float, end: float):
+                self.progress_bar_obj = progress_bar_obj
+                self.start = start
+                self.end = end
+
+            def progress(self, value: float):
+                value = max(0.0, min(1.0, float(value)))
+                self.progress_bar_obj.progress(self.start + (self.end - self.start) * value)
 
         try:
             # Step 1：RSS 訂閱源 + 指定模式地區代理 + 規範更新代理
@@ -2435,18 +2447,24 @@ if generate_btn or send_btn:
             standards_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
             combined_sources = RSS_SOURCES + region_sources + standards_sources
             status_text.text(
-                f"📡 抓取 {len(combined_sources)} 個 RSS / Google News 代理來源..."
+                f"🔎 正在蒐集 RSS / Google News / ddgs 候選資料……（共 {len(combined_sources)} 個來源）"
             )
             rss_results, source_statuses = fetch_rss_feeds(
                 combined_sources, status_text=status_text, return_status=True
             )
+            progress_bar.progress(0.30)
+            status_text.text("🛡️ 正在進行來源安全檢查與去重……")
             st.session_state["latest_rss_raw"] = rss_results
             st.session_state["latest_source_statuses"] = source_statuses
 
             # Step 2：加速版 ddgs 搜尋
-            status_text.text("🔍 開始執行加速版關鍵字搜尋...")
-            ddg_results = run_duckduckgo_searches(progress_bar, status_text)
+            status_text.text("🔍 正在蒐集 ddgs 候選資料……")
+            ddg_progress = ProgressRange(progress_bar, 0.30, 0.50)
+            ddg_results = run_duckduckgo_searches(ddg_progress, status_text)
+            progress_bar.progress(0.50)
             st.session_state["latest_ddg_raw"] = ddg_results
+            status_text.text("🚇 正在篩選都會軌道相關新聞……")
+            progress_bar.progress(0.65)
 
             if show_raw_debug:
                 os.makedirs("reports", exist_ok=True)
@@ -2456,8 +2474,7 @@ if generate_btn or send_btn:
                     f.write(ddg_results)
 
             # Step 3：Gemini 分析
-            progress_bar.progress(1.0)
-            status_text.text(f"🤖 {model_choice} 正在進行智慧過濾整理（約 15–40 秒）...")
+            status_text.text(f"🤖 正在交由 Gemini 產生{report_period_label}……（{model_choice}）")
             client   = genai.Client(api_key=api_key)
             response = client.models.generate_content(
                 model=model_choice,
@@ -2474,7 +2491,7 @@ if generate_btn or send_btn:
             )
             if needs_revision:
                 status_text.text(
-                    f"🤖 初稿 {formal_count} 則、分類或都市軌道範圍需修正，正在自動重寫..."
+                    f"🤖 初稿 {formal_count} 則、分類或都市軌道範圍需修正，正在自動重寫……"
                 )
                 revision_response = client.models.generate_content(
                     model=model_choice,
@@ -2489,6 +2506,8 @@ if generate_btn or send_btn:
                 )
                 report_text = extract_text(revision_response)
                 formal_count = count_report_items(report_text)
+            progress_bar.progress(0.85)
+            status_text.text("📄 正在產製 PDF / Email 輸出準備……")
             report_text = sanitize_report_text(report_text)
             formal_count = count_report_items(report_text)
 
@@ -2503,25 +2522,25 @@ if generate_btn or send_btn:
                 "formal_count": formal_count,
                 "has_standards": "規範更新" in report_text,
             }
-            progress_bar.empty()
-            status_text.empty()
+            progress_bar.progress(0.95)
             summary = st.session_state["latest_report_summary"]
-            st.markdown(
+            progress_bar.progress(1.0)
+            status_text.markdown(
                 f"""
                 <div class="notice-success">
                   <strong>✅ 報告已完成</strong><br>
+                  可於下方查看正式{report_period_label}、下載 PDF 或寄送 Email。<br>
                   正式新聞：{formal_count} 則｜
                   規範更新：{'包含' if summary['has_standards'] else '未包含'}｜
-                  可下載 PDF，也可寄送 Email。
+                  PDF / Email 已準備完成。
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
         except Exception as e:
-            progress_bar.empty()
-            status_text.empty()
-            st.error(f"❌ 發生錯誤：{e}")
+            progress_placeholder.empty()
+            status_text.error(f"❌ 發生錯誤：{e}")
             st.info("請確認 Gemini API Key 正確，且帳號配額未超限")
 
 # ── 報告顯示區 ──────────────────────────────────────
@@ -2583,12 +2602,16 @@ if report_to_show:
         if send_latest_btn:
             recipients = [r.strip() for r in recipient_input.splitlines() if r.strip()]
             if not recipients:
-                st.warning("⚠️ 請在左側填入收件信箱")
+                status_placeholder.warning("⚠️ 請在左側填入收件信箱")
             elif not gmail_user or not gmail_pass:
-                st.warning("⚠️ GMAIL_USER 或 GMAIL_APP_PASS 未在 Secrets 中設定")
+                status_placeholder.warning("⚠️ GMAIL_USER 或 GMAIL_APP_PASS 未在 Secrets 中設定")
             else:
+                email_progress = progress_placeholder.progress(0.95)
+                status_placeholder.text("📧 正在寄送 Email 至公務信箱……")
                 ok = send_email_func(report_to_show, recipients, gmail_user, gmail_pass)
                 if ok:
+                    email_progress.progress(1.0)
+                    status_placeholder.success("✅ Email 已寄送完成。")
                     st.success(f"📧 已成功寄送至：{', '.join(recipients)}")
 else:
     st.markdown(f"""
