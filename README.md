@@ -12,7 +12,7 @@
 Weekly-report/
 ├── main.py                        # 主程式（產報告 + 寄信）
 ├── streamlit_app.py               # 競賽展示介面
-├── requirements.txt               # 套件：google-genai, streamlit
+├── requirements.txt               # 套件：requests, ddgs, streamlit
 ├── .streamlit/
 │   └── config.toml                # Streamlit 主題設定
 └── .github/
@@ -30,7 +30,9 @@ Repository → **Settings** → **Secrets and variables** → **Actions** → **
 
 | Secret 名稱 | 說明 | 範例 |
 |---|---|---|
-| `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) 取得 | `AIzaSy...` |
+| `MAIAGENT_API_KEY` | 本局 MaiAgent 雲端 API Key | `maia_...` |
+| `MAIAGENT_CHATBOT_ID` | 本局 MaiAgent Chatbot ID | `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` |
+| `MAIAGENT_API_BASE` | MaiAgent API Base；未填時程式預設 `https://api.maiagent.ai` | `https://api.maiagent.ai` |
 | `GMAIL_USER` | 用來寄信的 Gmail 帳號 | `name@gmail.com` |
 | `GMAIL_APP_PASS` | Gmail 應用程式密碼（16碼） | `abcd efgh ijkl mnop` |
 | `RECIPIENTS` | 收件人，逗號分隔 | `pe9875@gov.taipei,10983@gov.taipei` |
@@ -58,7 +60,9 @@ Repository → **Actions** → **每週捷運技術週報自動寄送** → **Ru
 3. **Advanced settings → Secrets** 填入：
 
 ```toml
-GEMINI_API_KEY = "AIzaSy..."
+MAIAGENT_API_KEY = "maia_..."
+MAIAGENT_CHATBOT_ID = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+MAIAGENT_API_BASE = "https://api.maiagent.ai"
 GMAIL_USER = "name@gmail.com"
 GMAIL_APP_PASS = "abcd efgh ijkl mnop"
 DEFAULT_RECIPIENTS = "pe9875@gov.taipei\n10983@gov.taipei"
@@ -87,8 +91,7 @@ DEFAULT_RECIPIENTS = "pe9875@gov.taipei\n10983@gov.taipei"
 | 服務 | 免費額度 | 本系統用量 |
 |---|---|---|
 | GitHub Actions | 2,000 分鐘/月 | 約 5–10 分鐘/週 |
-| Gemini API | 每日免費配額 | 約 1 次/週 |
-| Google Search Grounding | 5,000 次/月 | 約 12 次/週 |
+| MaiAgent 雲端 API | 依本局雲端服務設定 | 約 1 次/週 |
 | Gmail SMTP | 無限制 | 1 封/週 |
 | Streamlit Cloud | 免費公開部署 | — |
 
@@ -99,6 +102,6 @@ DEFAULT_RECIPIENTS = "pe9875@gov.taipei\n10983@gov.taipei"
 | 問題 | 解法 |
 |---|---|
 | Actions 今天沒自動執行 | 手動 Run workflow；排程在每週一 00:00 UTC 觸發，新建的 repo 會等下週 |
-| 429 配額超限 | workflow 已內建重試（最多 3 次）；或換新的 API Key |
+| 雲端 API 暫時失敗 | workflow 已內建重試（最多 3 次）；請確認 MaiAgent API Key、Chatbot ID 與 API Base |
 | 信件未收到 | 確認 GMAIL_APP_PASS 是 16 碼應用程式密碼；公務信箱請將寄件 Gmail 加入白名單 |
-| Streamlit 金鑰顯示未設定 | 至 Streamlit Cloud App Settings → Secrets 填入金鑰 |
+| Streamlit MaiAgent 金鑰顯示未設定 | 至 Streamlit Cloud App Settings → Secrets 填入金鑰 |
