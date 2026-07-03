@@ -33,13 +33,6 @@ except ModuleNotFoundError:
     DDGS = None
 
 try:
-    from google import genai
-    from google.genai import types
-except (ModuleNotFoundError, ImportError):
-    genai = None
-    types = None
-
-try:
     import feedparser
 except ModuleNotFoundError:
     feedparser = None
@@ -2005,18 +1998,6 @@ def build_revision_prompt(
 ## 上一版報告
 {previous_report}
 """
-
-
-def extract_text(response) -> str:
-    # 保留原本 Gemini 解析函式，避免其他舊流程引用時發生錯誤。
-    if response.text:
-        return response.text
-    candidates = response.candidates or []
-    if candidates and candidates[0].content and candidates[0].content.parts:
-        texts = [p.text for p in candidates[0].content.parts if getattr(p, "text", None)]
-        if texts:
-            return "\n".join(texts)
-    raise ValueError("Gemini 回應無文字內容")
 
 
 def _extract_maiagent_text(data) -> str:
