@@ -1864,9 +1864,6 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
     standards_instruction = ""
     if "規範更新" in selected_types:
         standards_instruction = f"""
-    standards_instruction = ""
-    if "規範更新" in selected_types:
-        standards_instruction = f"""
 ## 規範更新特別規則
 
 1. 「規範更新」只可列入本期確實發生之標準版本、草案、修訂、勘誤、撤回、取代、公告或公開徵詢事件。
