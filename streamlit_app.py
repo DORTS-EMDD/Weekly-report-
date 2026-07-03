@@ -1076,21 +1076,16 @@ def render_main_dashboard(source_count: int, standards_count: int):
     )
 
     with st.expander("查看詳細關鍵指標", expanded=False):
-        st.markdown(
-            "<div class=\"compact-detail-grid\">"
-            + "".join(
-                f"""
-                <div class="compact-detail-card">
-                  <div class="compact-detail-value">{escape(str(icon))} {escape(str(num))}</div>
-                  <div class="compact-detail-label">{escape(str(label))}</div>
-                  <div class="compact-detail-note">{escape(str(note))}</div>
-                </div>
-                """
-                for icon, num, label, note in kpi_items
+        detail_cols = st.columns(3)
+        for idx, (icon, num, label, note) in enumerate(kpi_items):
+            detail_cols[idx % 3].markdown(
+                f'<div class="compact-detail-card">'
+                f'<div class="compact-detail-value">{escape(str(icon))} {escape(str(num))}</div>'
+                f'<div class="compact-detail-label">{escape(str(label))}</div>'
+                f'<div class="compact-detail-note">{escape(str(note))}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
             )
-            + "</div>",
-            unsafe_allow_html=True,
-        )
 
     workflow_items = [
         ("01", "蒐集候選資料", "RSS / Google News / ddgs"),
@@ -1107,13 +1102,11 @@ def render_main_dashboard(source_count: int, standards_count: int):
         wcols = st.columns(5)
         for idx, (step, title, desc) in enumerate(workflow_items):
             wcols[idx].markdown(
-                f"""
-                <div class="workflow-card">
-                  <div class="workflow-step">STEP {step}</div>
-                  <div class="workflow-title">{escape(title)}</div>
-                  <div class="workflow-desc">{escape(desc)}</div>
-                </div>
-                """,
+                f'<div class="workflow-card">'
+                f'<div class="workflow-step">STEP {escape(step)}</div>'
+                f'<div class="workflow-title">{escape(title)}</div>'
+                f'<div class="workflow-desc">{escape(desc)}</div>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
