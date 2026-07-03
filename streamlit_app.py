@@ -410,22 +410,25 @@ ADVANCED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議"
 MIN_REPORT_ITEMS = 15
 MAX_ITEMS_PER_SOURCE = 25
 DDGS_MAX_RESULTS = 25
-LOOKBACK_OPTIONS = [7, 14, 30, 90, 180, 365]
+NORMAL_LOOKBACK_OPTIONS = [7, 14, 30]
+ADVANCED_LOOKBACK_OPTIONS = [90, 180, 365]
 REPORT_TARGET_BY_DAYS = {
     7: 15,
     14: 20,
     30: 25,
-    90: 35,
-    180: 45,
-    365: 60,
+}
+LONG_TERM_TARGET_LABELS = {
+    90: "趨勢回顧",
+    180: "半年回顧",
+    365: "年度回顧",
 }
 REPORT_PERIOD_LABELS = {
     7: "週報",
     14: "雙周報",
     30: "月報",
     90: "季報",
-    180: "半年報",
-    365: "年報",
+    180: "半年回顧",
+    365: "年度回顧",
 }
 
 ADVANCED_REGIONS = [
@@ -600,7 +603,6 @@ gmail_pass = get_secret("GMAIL_APP_PASS")
 with st.sidebar:
     st.markdown("## 🚇 國際捷運 AI 週報")
     st.caption("臺北市政府捷運工程局｜機電系統設計處")
-    st.markdown("---")
 
     st.markdown("### 📬 收件設定")
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
@@ -614,119 +616,122 @@ with st.sidebar:
         height=52,
         help="需要新增收件人時，直接換行輸入。",
     )
-    st.markdown("---")
 
-    st.markdown("### 📑 新聞類型篩選")
+    st.markdown("### 📋 報告設定")
     if "selected_types_state" not in st.session_state:
         st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
+    if "long_term_mode" not in st.session_state:
+        st.session_state["long_term_mode"] = False
+    if "lookback_days_state" not in st.session_state:
+        st.session_state["lookback_days_state"] = NORMAL_LOOKBACK_OPTIONS[0]
+
+    available_lookback_options = NORMAL_LOOKBACK_OPTIONS + (
+        ADVANCED_LOOKBACK_OPTIONS if st.session_state["long_term_mode"] else []
+    )
+    if st.session_state["lookback_days_state"] not in available_lookback_options:
+        st.session_state["lookback_days_state"] = NORMAL_LOOKBACK_OPTIONS[0]
+
+    lookback_days = st.selectbox(
+        "報告期間",
+        available_lookback_options,
+        key="lookback_days_state",
+        format_func=lambda d: f"{d} 天（{REPORT_PERIOD_LABELS.get(int(d), '報告')}）",
+    )
+    if int(lookback_days) in ADVANCED_LOOKBACK_OPTIONS:
+        st.info("長期回顧適合趨勢分析、事故彙整與規範更新追蹤；不建議作為一般新聞週報使用，系統將提高去重與來源審查標準。")
 
     col_t_all, col_t_clear = st.columns(2)
-    if col_t_all.button("全選", use_container_width=True):
+    if col_t_all.button("全選類型", use_container_width=True):
         st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
-        for t in ADVANCED_TYPES:
-            st.session_state[f"type_{t}"] = True
         st.rerun()
 
-    if col_t_clear.button("清除全選", use_container_width=True):
+    if col_t_clear.button("清除類型", use_container_width=True):
         st.session_state["selected_types_state"] = []
-        for t in ADVANCED_TYPES:
-            st.session_state[f"type_{t}"] = False
         st.rerun()
 
-    selected_types = []
-    with st.expander("選擇新聞類型", expanded=False):
-        for t in ADVANCED_TYPES:
-            checked = t in st.session_state["selected_types_state"]
-            if st.checkbox(t, value=checked, key=f"type_{t}"):
-                selected_types.append(t)
-
-    st.session_state["selected_types_state"] = selected_types
+    selected_types = st.multiselect(
+        "新聞類型",
+        ADVANCED_TYPES,
+        key="selected_types_state",
+        help="正式報告只會輸出已選類型，並依固定順序排序。",
+    )
     if not selected_types:
         st.warning("⚠️ 請至少選擇一種新聞類型。")
 
     standards_enabled = "規範更新" in selected_types
+    standard_count = sum(len(v) for v in STANDARDS_WATCHLIST.values())
+    selected_target = REPORT_TARGET_BY_DAYS.get(int(lookback_days))
+    target_summary = f"目標至少 {selected_target} 則" if selected_target else LONG_TERM_TARGET_LABELS.get(int(lookback_days), "趨勢回顧")
+    st.caption(f"已選 {len(selected_types)} 種類型｜{target_summary}")
+    if standards_enabled:
+        st.caption(f"📚 規範追蹤：已啟用，{standard_count} 項標準")
+        with st.expander("查看規範追蹤清單", expanded=False):
+            for category, standards in STANDARDS_WATCHLIST.items():
+                st.markdown(f"**{category}**：{', '.join(standards)}")
 
-    st.markdown("---")
-    st.markdown("### 🌏 國家篩選")
-    scope_label_col, scope_input_col = st.columns([0.8, 2.2])
-    scope_label_col.markdown("報導範圍")
-    with scope_input_col:
-        scope_mode = st.radio(
-            "報導範圍",
-            ["指定先進國家/地區", "全球（安全白名單來源）"],
-            index=0,
-            horizontal=True,
-            label_visibility="collapsed",
-            help="全球模式不以國家刪除新聞；指定模式才套用下方先進國家/地區清單。",
-        )
+    st.markdown("### 🌏 追蹤範圍")
+    scope_mode = st.radio(
+        "報導範圍",
+        ["指定先進國家/地區", "全球（安全白名單來源）"],
+        index=0,
+        horizontal=False,
+        help="全球模式不以國家刪除新聞；指定模式才套用下方先進國家/地區清單。",
+    )
     if "selected_regions_state" not in st.session_state:
         st.session_state["selected_regions_state"] = DEFAULT_REGIONS.copy()
 
-    col_all, col_clear = st.columns(2)
-    if col_all.button("全選", use_container_width=True, key="select_all_regions"):
-        st.session_state["selected_regions_state"] = ADVANCED_REGIONS.copy()
-        for region in ADVANCED_REGIONS:
-            st.session_state[f"region_{region}"] = True
-        st.rerun()
-
-    if col_clear.button("清除全選", use_container_width=True, key="clear_all_regions"):
-        st.session_state["selected_regions_state"] = []
-        for region in ADVANCED_REGIONS:
-            st.session_state[f"region_{region}"] = False
-        st.rerun()
-
     selected_regions = []
-    with st.expander("選擇國家", expanded=False):
-        for region in ADVANCED_REGIONS:
+    if scope_mode == "全球（安全白名單來源）":
+        selected_regions = st.session_state["selected_regions_state"]
+        st.caption("報導範圍：全球模式")
+    else:
+        st.caption(f"已選 {len(st.session_state['selected_regions_state'])} / {len(ADVANCED_REGIONS)} 個國家")
+
+    with st.expander("展開選擇國家", expanded=False):
+        col_all, col_clear = st.columns(2)
+        if col_all.button("全選國家", use_container_width=True, key="select_all_regions"):
+            st.session_state["selected_regions_state"] = ADVANCED_REGIONS.copy()
+            for region in ADVANCED_REGIONS:
+                st.session_state[f"region_{region}"] = True
+            st.rerun()
+
+        if col_clear.button("清除全選", use_container_width=True, key="clear_all_regions"):
+            st.session_state["selected_regions_state"] = []
+            for region in ADVANCED_REGIONS:
+                st.session_state[f"region_{region}"] = False
+            st.rerun()
+
+        region_cols = st.columns(2)
+        for idx, region in enumerate(ADVANCED_REGIONS):
             checked = region in st.session_state["selected_regions_state"]
-            if st.checkbox(region, value=checked, key=f"region_{region}"):
+            if region_cols[idx % 2].checkbox(region, value=checked, key=f"region_{region}"):
                 selected_regions.append(region)
 
     st.session_state["selected_regions_state"] = selected_regions
-    if scope_mode != "全球（安全白名單來源）" and selected_regions:
-        st.caption(f"已選 {len(selected_regions)} 個國家")
-    elif scope_mode != "全球（安全白名單來源）":
+    if scope_mode != "全球（安全白名單來源）" and not selected_regions:
         st.warning("請至少選擇一個國家/地區。")
 
-    st.markdown("---")
-    st.markdown("### 🗓️ 搜尋期間")
-    lookback_days = st.selectbox(
-        "新聞搜尋天數",
-        LOOKBACK_OPTIONS,
-        index=0,
-        format_func=lambda d: f"{d} 天（{REPORT_PERIOD_LABELS.get(int(d), '報告')}）",
-    )
-
-    st.markdown("---")
-    st.markdown("### 📚 規範更新追蹤")
-    standard_count = sum(len(v) for v in STANDARDS_WATCHLIST.values())
-    if standards_enabled:
-        st.success(f"已啟用規範更新追蹤：{standard_count} 項標準")
-        with st.expander("追蹤清單", expanded=False):
-            for category, standards in STANDARDS_WATCHLIST.items():
-                st.markdown(f"**{category}**：{', '.join(standards)}")
-    else:
-        st.caption("勾選「規範更新」後，才會啟用 Google News RSS 與 ddgs 規範搜尋。")
-
-    st.markdown("---")
-    st.markdown("### ⚙️ 模型設定")
-    model_label_col, model_input_col = st.columns([0.8, 2.2])
-    model_label_col.markdown("模型")
-    with model_input_col:
+    with st.expander("⚙️ 進階設定", expanded=False):
+        st.markdown("**Gemini 模型設定**")
         model_choice = st.selectbox(
             "選擇 Gemini 模型",
             ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
             index=0,
-            label_visibility="collapsed",
         )
 
-    st.markdown("---")
-    st.markdown("### 📅 排程說明")
-    st.caption("每週一 08:00｜GitHub Actions｜自動寄送")
+        st.markdown("**長期趨勢 / 規範追蹤模式**")
+        long_term_mode = st.checkbox(
+            "啟用長期趨勢 / 規範追蹤模式",
+            key="long_term_mode",
+            help="啟用後，報告期間可選 90、180、365 天。",
+        )
+        if not standards_enabled:
+            st.caption("規範更新未勾選；目前僅執行一般新聞追蹤。")
 
-    st.markdown("---")
-    st.markdown("### 🟢 系統狀態")
-    with st.expander("🔑 系統狀態", expanded=False):
+        st.markdown("**排程說明**")
+        st.caption("每週一 08:00｜GitHub Actions｜自動寄送")
+
+        st.markdown("**系統狀態**")
         st.markdown(f"Gemini API Key：{'✅' if api_key else '❌'}")
         st.markdown(f"Gmail 帳號：{'✅' if gmail_user else '❌'}")
         st.markdown(f"Gmail 密碼：{'✅' if gmail_pass else '❌'}")
@@ -734,21 +739,33 @@ with st.sidebar:
         st.markdown(f"ddgs 套件：{'✅' if DDGS else '❌'}")
         st.markdown(f"feedparser 套件：{'✅' if feedparser else '❌'}")
 
-    st.markdown("---")
-    st.markdown("### 🔧 進階檢查")
-    show_raw_debug = st.checkbox(
-        "在網頁顯示原始資料",
-        value=False,
-        help="只控制網頁下方是否展開 raw 文字；原始資料 PDF 仍會在產生報告後提供下載。",
-    )
+        st.markdown("**原始資料除錯模式**")
+        show_raw_debug = st.checkbox(
+            "在網頁顯示原始資料",
+            value=False,
+            help="只控制網頁下方是否展開 raw 文字；原始資料 PDF 仍會在產生報告後提供下載。",
+        )
 
-    st.markdown("---")
     st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統")
 
 week_start = today - datetime.timedelta(days=int(lookback_days))
 date_range = f"{week_start.strftime('%Y年%m月%d日')} 至 {today.strftime('%Y年%m月%d日')}"
-report_period_label = REPORT_PERIOD_LABELS.get(int(lookback_days), "週報")
-min_report_items = REPORT_TARGET_BY_DAYS.get(int(lookback_days), MIN_REPORT_ITEMS)
+lookback_int = int(lookback_days)
+report_period_label = REPORT_PERIOD_LABELS.get(lookback_int, "週報")
+target_is_enforced = lookback_int in REPORT_TARGET_BY_DAYS
+min_report_items = REPORT_TARGET_BY_DAYS.get(lookback_int, 0)
+report_target_display = f"至少 {min_report_items} 則" if target_is_enforced else LONG_TERM_TARGET_LABELS.get(lookback_int, "趨勢回顧")
+report_output_requirement = f"正式報告至少 {min_report_items} 則" if target_is_enforced else f"{report_target_display}，不強制篇數"
+report_quantity_instruction = (
+    f"本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，請優先納入中信度但來源、日期、都市軌道關聯明確的候選；不要因摘要較短或連結為 Google News 轉址而過度剔除。若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，例如：都市軌道來源不足、日期不明、非捷運/非輕軌、來源不合格。**品質優先於數量；不得為了湊滿數量，把高鐵、一般鐵路、公車、長途運輸、事故、政策、爭議或一般專案消息升格為技術新知。**"
+    if target_is_enforced
+    else f"本期為 {report_period_label}，屬長期趨勢 / 規範追蹤模式，不強制篇數。請以趨勢分析、事故彙整、規範更新追蹤、來源品質與去重為優先；不得為了增加篇數納入低關聯、重複、非都市軌道或來源不合格新聞。若有效候選有限，請在報告摘要說明原因。"
+)
+report_shortfall_summary_line = (
+    f"**不足 {min_report_items} 則原因**：（僅正式新聞少於 {min_report_items} 則時輸出；若達標，整行不要出現）"
+    if target_is_enforced
+    else "**長期回顧說明**：（簡述本期趨勢、去重後有效候選品質與來源限制）"
+)
 selected_report_topic = "、".join(selected_types) if selected_types else "技術趨勢"
 report_title = f"【{today.strftime('%Y/%m/%d')}】國際捷運{selected_report_topic}{report_period_label}"
 is_global_scope = scope_mode == "全球（安全白名單來源）"
@@ -937,7 +954,7 @@ def render_main_dashboard(source_count: int, standards_count: int) -> bool:
         ("🌏", selected_regions_note, "預設/選取國家數", "指定模式套用國家邊界"),
         ("🗓️", f"{lookback_days} 天", f"新聞搜尋期間（{report_period_label}）", date_range),
         ("📡", source_count, "RSS/代理來源數", "含官方與 Google News 代理"),
-        ("🎯", f">= {min_report_items}", "AI 報告目標篇數", f"{report_period_label}最低目標"),
+        ("🎯", report_target_display, "AI 報告目標", f"{report_period_label}輸出模式"),
         ("📚", standards_count if standards_enabled else "未啟用", "規範追蹤數量", "勾選規範更新後啟用"),
     ]
     cols = st.columns(3)
@@ -953,8 +970,6 @@ def render_main_dashboard(source_count: int, standards_count: int) -> bool:
             """,
             unsafe_allow_html=True,
         )
-
-    return generate_clicked
 
     st.markdown('<div class="section-title">系統流程</div>', unsafe_allow_html=True)
     workflow_items = [
@@ -976,6 +991,8 @@ def render_main_dashboard(source_count: int, standards_count: int) -> bool:
             """,
             unsafe_allow_html=True,
         )
+
+    return generate_clicked
 
 
 initial_region_sources = build_region_news_sources(active_regions, int(lookback_days))
@@ -1709,7 +1726,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
    - **來源必須是該則事件本身的具體新聞文章連結**：「資料來源」欄位填入的網址，**必須**是原始資料中該則內容自己標註的「連結：」網址，且該網址指向的必須是報導這件事本身的新聞文章頁面。**嚴禁**引用網站首頁、路網圖、票務頁面、會員名錄、活動總覽頁等非新聞頁面來充當來源，也**嚴禁**在原始資料中找不到對應連結時，挪用同一媒體其他頁面的網址頂替。若某則事件在原始資料中沒有對應的具體文章連結，即使內容看起來合理，也必須**整則捨棄**。
    - Google News RSS 的 `news.google.com/rss/articles/...` 連結若搭配原始資料中的「原始來源」或標題來源，可視為可追查來源連結；不要僅因其為 Google News 轉址而剔除。
     - 不得為了湊數引用無具體新聞頁、首頁、社群頁、會員頁、活動首頁或模型記憶。
-6. **數量要求**：本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，請優先納入中信度但來源、日期、都市軌道關聯明確的候選；不要因摘要較短或連結為 Google News 轉址而過度剔除。若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，例如：都市軌道來源不足、日期不明、非捷運/非輕軌、來源不合格。**品質優先於數量；不得為了湊滿數量，把高鐵、一般鐵路、公車、長途運輸、事故、政策、爭議或一般專案消息升格為技術新知。**
+6. **數量要求**：{report_quantity_instruction}
 7. **國家/地區規則**：{scope_instruction}
 8. **內部國際新聞邊界**：台灣、臺灣、Taiwan、Taipei、台北/臺北捷運、北捷、新北、桃園/桃捷、台中、台南、高雄/高捷等國內新聞或國內案例，不得列入正式新聞或候補觀察。這是內部篩選條件，報告中不得呈現本條內容或其原因。
 
@@ -1718,7 +1735,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
 
 {standards_instruction}
 
-## 輸出格式（每則獨立區塊，正式報告至少 {min_report_items} 則）
+## 輸出格式（每則獨立區塊，{report_output_requirement}）
 
 # {report_title}
 > 資料涵蓋期間：{date_range} 
@@ -1746,7 +1763,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
 ## 報告摘要（必填）
 ---
 **本週統計**：共 N 則 
-**不足 {min_report_items} 則原因**：（僅正式新聞少於 {min_report_items} 則時輸出；若達標，整行不要出現）
+{report_shortfall_summary_line}
 **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
 """
 
@@ -1769,7 +1786,7 @@ def build_revision_prompt(
 1. 請重寫「完整報告」，不是只補充差額。
 2. 本次只允許下列分類：{allowed_types}。
 3. 未勾選分類不得出現在章節、標題、正文與統計。
-4. 正式新聞至少 {min_report_items} 則；若仍不足，結尾必須具體說明候選資料不足的原因。
+4. {report_quantity_instruction}
 5. 僅能使用 raw RSS/ddgs 候選資料，不得補腦。
 6. 正式新聞只允許都市捷運/MRT/metro/subway/LRRT/LRT/light rail/tram/AGT/people mover；高鐵、新幹線、台鐵/國鐵、城際/區域/通勤鐵路、貨運鐵路、公車/客運/長途公路運輸不得用來補足正式新聞數。
 7. 若上一版曾納入 ETCS/FRMCS/GSM-R、電池列車、混合動力列車、一般鐵路資產管理、主線事故、bus strike 等非都市軌道題材，請移除正式新聞；除非 raw 明確寫出該事件發生在 metro/subway/light rail/tram 等都市軌道系統。
@@ -2405,7 +2422,7 @@ if generate_btn or send_btn:
             report_text = extract_text(response)
             formal_count = count_report_items(report_text)
             needs_revision = (
-                formal_count < min_report_items
+                (target_is_enforced and formal_count < min_report_items)
                 or report_has_unselected_types(report_text)
                 or report_has_non_urban_formal_items(report_text)
                 or "排除台灣" in report_text
