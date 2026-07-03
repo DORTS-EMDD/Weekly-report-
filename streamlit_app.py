@@ -191,6 +191,51 @@ st.markdown("""
   .kpi-num { font-size: 1.9rem; font-weight: 800; color: var(--metro-blue); line-height: 1.1; }
   .kpi-label { color: #334155; font-size: .9rem; font-weight: 700; margin-top: 4px; }
   .kpi-note { color: #64748b; font-size: .78rem; margin-top: 4px; }
+  .compact-kpi-bar {
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    align-items: center;
+    font-size: .9rem;
+    margin: 12px 0 6px;
+  }
+  .compact-kpi-item {
+    white-space: nowrap;
+    color: #111827;
+    font-weight: 700;
+  }
+  .compact-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .compact-detail-card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .compact-detail-value {
+    color: #111827;
+    font-size: 1.08rem;
+    font-weight: 800;
+    line-height: 1.25;
+  }
+  .compact-detail-label {
+    color: #334155;
+    font-size: .84rem;
+    font-weight: 700;
+    margin-top: 3px;
+  }
+  .compact-detail-note {
+    color: #64748b;
+    font-size: .76rem;
+    margin-top: 2px;
+  }
 
   .workflow-card {
     background: #f8fbfd; border: 1px solid #dbe4ee; border-left: 4px solid var(--metro-blue-2);
@@ -199,6 +244,17 @@ st.markdown("""
   .workflow-step { color: var(--gold); font-weight: 800; font-size: .82rem; }
   .workflow-title { color: var(--metro-blue); font-weight: 800; margin-top: 4px; }
   .workflow-desc { color: #475569; font-size: .84rem; margin-top: 4px; }
+  .flow-summary {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-left: 4px solid var(--dorts-blue);
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: #374151;
+    font-size: .9rem;
+    font-weight: 700;
+    margin: 8px 0 4px;
+  }
 
   .notice-success {
     background: #eef8f1; border: 1px solid #b9dfc6; border-left: 5px solid #2f855a;
@@ -995,7 +1051,6 @@ def render_main_dashboard(source_count: int, standards_count: int):
     progress_placeholder = st.empty()
     status_placeholder = st.empty()
 
-    st.markdown('<div class="section-title">關鍵指標</div>', unsafe_allow_html=True)
     kpi_items = [
         ("📑", len(selected_types), "追蹤主題數", "固定依報告排序輸出"),
         ("🌏", selected_regions_note, "預設/選取國家數", "指定模式套用國家邊界"),
@@ -1004,21 +1059,39 @@ def render_main_dashboard(source_count: int, standards_count: int):
         ("🎯", report_target_display, "AI 報告目標", f"{report_period_label}輸出模式"),
         ("📚", standards_count if standards_enabled else "未啟用", "規範追蹤數量", "勾選規範更新後啟用"),
     ]
-    cols = st.columns(3)
-    for idx, (icon, num, label, note) in enumerate(kpi_items):
-        cols[idx % 3].markdown(
-            f"""
-            <div class="kpi-card">
-              <div class="kpi-icon">{icon}</div>
-              <div class="kpi-num">{escape(str(num))}</div>
-              <div class="kpi-label">{escape(label)}</div>
-              <div class="kpi-note">{escape(str(note))}</div>
-            </div>
-            """,
+    compact_standards = f"規範 {standards_count} 項" if standards_enabled else "規範 未啟用"
+    compact_kpi_items = [
+        f"📑 追蹤 {len(selected_types)} 類型",
+        f"🌏 {selected_regions_note} 國家" if not is_global_scope else "🌏 全球模式",
+        f"🗓️ {lookback_days} 天{report_period_label}",
+        f"📡 {source_count} 來源",
+        f"🎯 {report_target_display}",
+        f"📚 {compact_standards}",
+    ]
+    st.markdown(
+        "<div class=\"compact-kpi-bar\">"
+        + "".join(f"<span class=\"compact-kpi-item\">{escape(str(item))}</span>" for item in compact_kpi_items)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("查看詳細關鍵指標", expanded=False):
+        st.markdown(
+            "<div class=\"compact-detail-grid\">"
+            + "".join(
+                f"""
+                <div class="compact-detail-card">
+                  <div class="compact-detail-value">{escape(str(icon))} {escape(str(num))}</div>
+                  <div class="compact-detail-label">{escape(str(label))}</div>
+                  <div class="compact-detail-note">{escape(str(note))}</div>
+                </div>
+                """
+                for icon, num, label, note in kpi_items
+            )
+            + "</div>",
             unsafe_allow_html=True,
         )
 
-    st.markdown('<div class="section-title">系統流程</div>', unsafe_allow_html=True)
     workflow_items = [
         ("01", "蒐集候選資料", "RSS / Google News / ddgs"),
         ("02", "安全與連結過濾", "排除高風險來源與無效 URL"),
@@ -1026,18 +1099,23 @@ def render_main_dashboard(source_count: int, standards_count: int):
         ("04", "形成機設處啟示", "可能影響系統、可參考作法、追蹤建議"),
         ("05", "輸出與寄送", "下載 PDF 或寄送公務信箱"),
     ]
-    wcols = st.columns(5)
-    for idx, (step, title, desc) in enumerate(workflow_items):
-        wcols[idx].markdown(
-            f"""
-            <div class="workflow-card">
-              <div class="workflow-step">STEP {step}</div>
-              <div class="workflow-title">{escape(title)}</div>
-              <div class="workflow-desc">{escape(desc)}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        '<div class="flow-summary">蒐集候選資料 → 安全與連結過濾 → AI 分類與摘要 → 形成機設處啟示 → 輸出與寄送</div>',
+        unsafe_allow_html=True,
+    )
+    with st.expander("查看系統流程", expanded=False):
+        wcols = st.columns(5)
+        for idx, (step, title, desc) in enumerate(workflow_items):
+            wcols[idx].markdown(
+                f"""
+                <div class="workflow-card">
+                  <div class="workflow-step">STEP {step}</div>
+                  <div class="workflow-title">{escape(title)}</div>
+                  <div class="workflow-desc">{escape(desc)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
     return generate_clicked, progress_placeholder, status_placeholder
 
