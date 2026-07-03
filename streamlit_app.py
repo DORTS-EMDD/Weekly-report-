@@ -305,19 +305,19 @@ DEFAULT_REGIONS = [
 ]
 
 REGION_SEARCH_TERMS = {
-    "日本": "Japan Tokyo Osaka subway metro operator",
-    "韓國": "Korea Seoul metro subway operator",
+    "日本": "Japan Tokyo Metro Osaka Metro subway new transit system",
+    "韓國": "Korea Seoul Metro subway urban rail light rail",
     "新加坡": "Singapore MRT LTA SMRT",
-    "香港": "Hong Kong MTR",
+    "香港": "Hong Kong MTR light rail metro",
     "美國": "United States New York subway Washington Metro Chicago CTA",
     "加拿大": "Canada Toronto TTC Vancouver SkyTrain Montreal REM",
-    "英國": "United Kingdom London Underground Transport for London",
+    "英國": "United Kingdom London Underground DLR tram Transport for London",
     "法國": "France Paris Metro RATP Grand Paris Express",
     "德國": "Germany Berlin U-Bahn Munich U-Bahn Hamburg U-Bahn",
-    "西班牙": "Spain Madrid Metro Barcelona Metro CAF SENER Ineco light rail",
+    "西班牙": "Spain Madrid Metro Barcelona Metro tranvia light rail metro project",
     "荷蘭": "Netherlands Amsterdam metro Rotterdam metro",
     "瑞士": "Switzerland Zurich tram Lausanne metro",
-    "澳洲": "Australia Sydney Metro Melbourne Metro Brisbane rail",
+    "澳洲": "Australia Sydney Metro Melbourne Metro Brisbane Metro light rail",
     "義大利": "Italy Milan Metro Rome Metro Turin tram light rail",
     "瑞典": "Sweden Stockholm metro Gothenburg tram light rail",
     "奧地利": "Austria Vienna U-Bahn Wiener Linien tram metro",
@@ -360,7 +360,71 @@ DOMESTIC_EXCLUDED_TERMS = [
     "屏東", "Pingtung",
 ]
 
-TRANSIT_NEWS_TERMS = '(metro OR subway OR "light rail" OR tram OR LRRT OR LRT)'
+TRANSIT_NEWS_TERMS = (
+    '("urban rail" OR metro OR subway OR underground OR "mass rapid transit" OR MRT OR '
+    '"light rail" OR tram OR tramway OR streetcar OR LRRT OR LRT OR AGT OR '
+    '"automated guideway transit" OR "people mover") '
+    '-"high-speed rail" -"high speed rail" -HSR -Shinkansen -"bullet train" '
+    '-intercity -"regional rail" -freight -locomotive -bus -coach -highway'
+)
+
+URBAN_RAIL_MODE_TERMS = [
+    "metro", "subway", "underground", "tube", "metrorail", "mass rapid transit", "mrt",
+    "light rail", "tram", "tramway", "streetcar", "lrrt", "lrt",
+    "urban rail", "urban metro", "rapid transit", "people mover", "automated guideway transit",
+    "agt", "monorail", "u-bahn", "stadtbahn", "skytrain", "dlr", "mover",
+    "地下鉄", "メトロ", "新交通システム", "都市鉄道", "路面電車", "トラム",
+    "지하철", "도시철도", "경전철",
+    "地鐵", "港鐵", "輕軌", "轻轨", "都市軌道", "捷運",
+]
+
+URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS = [
+    term for term in URBAN_RAIL_MODE_TERMS
+    if term not in {"metro"}
+]
+
+URBAN_RAIL_OPERATOR_TERMS = [
+    "tokyo metro", "seoul metro", "mtr", "lta", "smrt", "tfl", "transport for london",
+    "ratp", "wmata", "ttc", "translink", "mta", "nyct", "cta", "bart",
+    "metro de madrid", "madrid metro", "barcelona metro", "wiener linien",
+    "stockholm metro", "sporveien", "copenhagen metro", "rta dubai",
+    "東京メトロ", "서울교통공사", "港鐵", "巴黎地鐵",
+]
+
+SOURCE_NAME_NOISE_TERMS = [
+    "metro magazine", "metro report international", "urban transport magazine",
+    "mass transit", "railway gazette international", "international railway journal",
+    "railway age", "railway-news", "railway news", "railway technology",
+    "global railway review", "intelligent transport",
+]
+
+NON_URBAN_TRANSPORT_TERMS = [
+    "high-speed rail", "high speed rail", "high-speed train", "high speed train",
+    "hsr", "shinkansen", "bullet train", "tgv", "ice train", "renfe high speed",
+    "intercity", "inter-city", "long-distance", "long distance", "regional rail",
+    "commuter rail", "national rail", "mainline", "main line", "heavy haul",
+    "freight", "locomotive", "rail freight", "passenger rail", "railway contract",
+    "railway contracts", "railway procurement", "lirr", "long island rail road",
+    "amtrak", "korail", "network rail", "east midlands railway", "regiojet",
+    "battery train", "hybrid train", "diesel-hybrid", "gsm-r outage",
+    "bus", "coach", "highway", "intercity bus", "long-distance coach", "brt",
+    "高速鐵路", "高速铁路", "高鐵", "高铁", "新幹線", "新干线",
+    "台鐵", "臺鐵", "台湾鉄路", "台灣鐵路", "在来線", "特急",
+    "貨運", "貨物列車", "客運鐵路", "城際鐵路", "區域鐵路", "通勤鐵路",
+    "公路", "高速公路", "長途巴士", "客運",
+    "高速鉄道", "高速バス", "バス", "貨物鉄道", "在来線",
+]
+
+NON_URBAN_HARD_EXCLUDE_TERMS = [
+    term for term in NON_URBAN_TRANSPORT_TERMS
+    if term not in {"passenger rail", "railway contract", "railway contracts", "railway procurement"}
+]
+
+NON_URBAN_QUERY_EXCLUSIONS = (
+    '-"high-speed rail" -"high speed rail" -HSR -Shinkansen -"bullet train" '
+    '-intercity -"regional rail" -"commuter rail" -freight -locomotive '
+    '-Amtrak -Korail -RegioJet -bus -coach -highway'
+)
 
 # ── 金鑰狀態 ──────────────────────────────────────────
 api_key    = get_secret("GEMINI_API_KEY")
@@ -557,54 +621,54 @@ RSS_SOURCES = [
     ("Railway Gazette International（已併入 Metro Report International 都市軌道報導）",
      "https://www.railwaygazette.com/149.rss"),
     ("Railway Gazette Urban rail（Google News代理）",
-     google_news_site_proxy_url("railwaygazette.com", int(lookback_days), '("urban rail" OR metro OR tram OR "light rail")')),
+     google_news_site_proxy_url("railwaygazette.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
     ("International Railway Journal (IRJ)", "https://www.railjournal.com/feed/"),
     ("IRJ metro / light rail（Google News代理）",
-     google_news_site_proxy_url("railjournal.com", int(lookback_days), '(metro OR "light rail" OR tram OR LRRT)')),
+     google_news_site_proxy_url("railjournal.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
     ("Railway Technology", "https://www.railway-technology.com/feed/"),
     ("Railway-News", "https://railway-news.com/feed/"),
     ("Global Railway Review", "https://www.globalrailwayreview.com/feed/"),
     ("Intelligent Transport", "https://www.intelligenttransport.com/feed/"),
     ("Urban Transport Magazine（Google News代理）",
-     google_news_site_proxy_url("urban-transport-magazine.com", int(lookback_days))),
+     google_news_site_proxy_url("urban-transport-magazine.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
     ("Mass Transit Magazine", "https://www.masstransitmag.com/rss"),
     ("METRO Magazine Rail（Google News代理）",
-     google_news_site_proxy_url("metro-magazine.com", int(lookback_days), '(rail OR metro OR "light rail" OR tram)')),
+     google_news_site_proxy_url("metro-magazine.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
     ("Smart Cities Dive Transportation（Google News代理）",
-     google_news_site_proxy_url("smartcitiesdive.com", int(lookback_days), '(transportation OR transit OR metro OR "light rail")')),
-    ("Railway Age light rail / passenger rail（Google News代理）",
-     google_news_site_proxy_url("railwayage.com", int(lookback_days), '("light rail" OR "passenger rail" OR metro OR transit)')),
+     google_news_site_proxy_url("smartcitiesdive.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
+    ("Railway Age urban rail / light rail（Google News代理）",
+     google_news_site_proxy_url("railwayage.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
     ("UITP（無官方RSS，改用Google News代理）",
-     google_news_site_proxy_url("uitp.org", int(lookback_days))),
+     google_news_site_proxy_url("uitp.org", int(lookback_days), TRANSIT_NEWS_TERMS)),
     # 2026-07 查證：masstransit.network 的 RSS 端點實際回傳的是「會員名錄」頁面
     # （人名列表），不是新聞內容，已移除，改依賴下方已驗證有效的 Global Mass Transit。
     ("Global Mass Transit", "https://www.globalmasstransit.net/feed"),
     # 東洋經濟原本用全站 RSS，抓到的 20 篇裡沒有一篇是鐵道新聞（全是投資理財/職場/美食）。
     # 改用 Google News 代理鎖定 site:toyokeizai.net + 鐵道關鍵字，才會是真的鐵道新聞。
     ("東洋經濟 Online 鐵道（Google News代理，鎖定 site:toyokeizai.net + 鐵道）",
-     "https://news.google.com/rss/search?q=site:toyokeizai.net+%E9%90%B5%E9%81%93&hl=ja&gl=JP&ceid=JP:ja"),
+     google_news_site_proxy_url("toyokeizai.net", int(lookback_days), '(地下鉄 OR メトロ OR 新交通システム OR 都市鉄道 OR 路面電車) -新幹線 -JR -在来線 -バス', "ja", "JP", "ja")),
     ("乗りものニュース", "https://trafficnews.jp/feed"),
     ("鉄道総合技術研究所 RTRI（無官方RSS，改用Google News代理）",
-     google_news_site_proxy_url("rtri.or.jp", int(lookback_days), '(鉄道 OR 地下鉄 OR 新交通システム)', "ja", "JP", "ja")),
+     google_news_site_proxy_url("rtri.or.jp", int(lookback_days), '(地下鉄 OR メトロ OR 新交通システム OR 都市鉄道 OR 軌道) -新幹線 -在来線 -貨物鉄道', "ja", "JP", "ja")),
     ("Transit Jam", "https://transitjam.com/feed/"),
     ("TfL 官方新聞（Google News代理）",
-     google_news_site_proxy_url("tfl.gov.uk", int(lookback_days), '(Tube OR Underground OR Elizabeth Line OR tram OR DLR)', "en-GB", "GB", "en")),
+     google_news_site_proxy_url("tfl.gov.uk", int(lookback_days), '(Tube OR Underground OR tram OR DLR OR "London Overground") -bus -coach', "en-GB", "GB", "en")),
     ("MTA 官方新聞（Google News代理）",
      google_news_site_proxy_url("mta.info", int(lookback_days), '(subway OR metro OR signal OR accessibility OR safety)')),
     ("WMATA 官方新聞（Google News代理）",
-     google_news_site_proxy_url("wmata.com", int(lookback_days), '(Metro OR Metrorail OR rail OR safety)')),
+     google_news_site_proxy_url("wmata.com", int(lookback_days), '(Metro OR Metrorail OR subway OR station OR railcar) -bus')),
     ("TTC 官方新聞（Google News代理）",
      google_news_site_proxy_url("ttc.ca", int(lookback_days), '(subway OR streetcar OR signal OR fleet OR safety)', "en-CA", "CA", "en")),
     ("TransLink 官方新聞（Google News代理）",
-     google_news_site_proxy_url("translink.ca", int(lookback_days), '(SkyTrain OR rail OR transit OR safety)', "en-CA", "CA", "en")),
+     google_news_site_proxy_url("translink.ca", int(lookback_days), '(SkyTrain OR "Canada Line" OR rail transit OR station) -bus', "en-CA", "CA", "en")),
     ("RATP 官方新聞（Google News代理）",
-     google_news_site_proxy_url("ratp.fr", int(lookback_days), '(metro OR tramway OR RER OR automatisation OR securite)', "fr", "FR", "fr")),
+     google_news_site_proxy_url("ratp.fr", int(lookback_days), '(metro OR tramway OR automatisation OR securite) -bus -RER', "fr", "FR", "fr")),
     ("Société des grands projets 官方新聞（Google News代理）",
      google_news_site_proxy_url("societedesgrandsprojets.fr", int(lookback_days), '("Grand Paris Express" OR metro OR gare)', "fr", "FR", "fr")),
     ("LTA 官方新聞（Google News代理）",
-     google_news_site_proxy_url("lta.gov.sg", int(lookback_days), '(MRT OR LRT OR rail OR Thomson-East Coast Line)', "en-SG", "SG", "en")),
+     google_news_site_proxy_url("lta.gov.sg", int(lookback_days), '(MRT OR LRT OR "Thomson-East Coast Line" OR "rail transit") -bus', "en-SG", "SG", "en")),
     ("MTR 官方新聞（Google News代理）",
-     google_news_site_proxy_url("mtr.com.hk", int(lookback_days), '(MTR OR railway OR metro OR signalling)', "zh-HK", "HK", "zh-Hant")),
+     google_news_site_proxy_url("mtr.com.hk", int(lookback_days), '(MTR OR 港鐵 OR 地鐵 OR 輕鐵 OR signalling) -bus', "zh-HK", "HK", "zh-Hant")),
     ("Seoul Metro 官方新聞（Google News代理）",
      google_news_site_proxy_url("seoulmetro.co.kr", int(lookback_days), '(지하철 OR 도시철도 OR 안전 OR 열차)', "ko", "KR", "kr")),
     ("Tokyo Metro 官方新聞（Google News代理）",
@@ -620,7 +684,7 @@ RSS_SOURCES = [
 # 每個 tuple：(顯示名稱, 查詢關鍵字, hl 語系, gl 國別, ceid 語言代碼)
 REGION_NEWS_QUERIES: dict[str, list[tuple[str, str, str, str, str]]] = {
     "日本": [("Google News地區代理－日本地下鉄/メトロ",
-             "(地下鉄 OR メトロ OR 新交通システム) -ゲーム -Steam -スタンプラリー -アニメ", "ja", "JP", "ja")],
+             "(地下鉄 OR メトロ OR 新交通システム OR 都市鉄道 OR 路面電車) -新幹線 -JR -在来線 -高速バス -ゲーム -Steam -スタンプラリー -アニメ", "ja", "JP", "ja")],
     "韓國": [("Google News地區代理－韓國地下鐵",
              "(지하철 OR 도시철도 OR 경전철)", "ko", "KR", "kr")],
     "新加坡": [("Google News地區代理－Singapore MRT",
@@ -628,23 +692,23 @@ REGION_NEWS_QUERIES: dict[str, list[tuple[str, str, str, str, str]]] = {
     "香港": [("Google News地區代理－香港港鐵",
              "(港鐵 OR MTR 香港)", "zh-HK", "HK", "zh-Hant")],
     "澳洲": [("Google News地區代理－Australia Metro",
-             "(Sydney Metro OR Melbourne Metro OR Brisbane Metro)", "en-AU", "AU", "en")],
+             "(Sydney Metro OR Melbourne Metro OR Brisbane Metro OR light rail) -bus -coach -highway", "en-AU", "AU", "en")],
     "英國": [("Google News地區代理－UK Underground",
-             "(London Underground OR TfL Tube)", "en-GB", "GB", "en")],
+             "(London Underground OR TfL Tube OR DLR OR tram) -bus -coach -highway -National Rail", "en-GB", "GB", "en")],
     "法國": [("Google News地區代理－France Metro",
              "(Metro Paris OR RATP OR Grand Paris Express)", "fr", "FR", "fr")],
     "德國": [("Google News地區代理－Germany U-Bahn",
-             "(U-Bahn OR S-Bahn Metro) -Spiel -Kinofilm -Videospiel", "de", "DE", "de")],
+             "(U-Bahn OR Stadtbahn OR tram OR Straßenbahn) -ICE -DB -Fernverkehr -Spiel -Kinofilm -Videospiel", "de", "DE", "de")],
     "西班牙": [("Google News地區代理－Spain Metro/Light Rail",
-              "(Madrid Metro OR Barcelona Metro OR CAF OR SENER OR Ineco OR tranvia)", "es", "ES", "es")],
+              "(Madrid Metro OR Barcelona Metro OR Metro de Madrid OR tranvia OR tranvía OR light rail) -AVE -alta velocidad -autobus", "es", "ES", "es")],
     "荷蘭": [("Google News地區代理－Netherlands Metro",
              "(Amsterdam metro OR Rotterdam metro)", "nl", "NL", "nl")],
     "瑞士": [("Google News地區代理－Switzerland Metro/Tram",
              "(Zurich tram OR Lausanne metro)", "de-CH", "CH", "de")],
     "美國": [("Google News地區代理－US Subway/Metro",
-             "(subway OR metro rail transit) United States", "en-US", "US", "en")],
+             "(subway OR Metrorail OR light rail OR streetcar OR people mover) United States -Amtrak -intercity -bus -coach -highway", "en-US", "US", "en")],
     "加拿大": [("Google News地區代理－Canada Metro",
-              "(TTC Toronto OR SkyTrain Vancouver OR REM Montreal)", "en-CA", "CA", "en")],
+              "(TTC subway OR SkyTrain Vancouver OR REM Montreal OR light rail) -bus -coach -highway", "en-CA", "CA", "en")],
     "義大利": [("Google News地區代理－Italy Metro/Tram",
               "(Milan Metro OR Rome Metro OR tram OR metropolitana)", "it", "IT", "it")],
     "瑞典": [("Google News地區代理－Sweden Metro/Tram",
@@ -885,6 +949,57 @@ def _contains_taiwan_reference(text: str) -> bool:
     return any(term.casefold() in text_lower for term in DOMESTIC_EXCLUDED_TERMS)
 
 
+def _contains_any_term(text: str, terms: list[str]) -> bool:
+    text_lower = (text or "").casefold()
+    for term in terms:
+        term_lower = term.casefold()
+        if re.fullmatch(r"[a-z0-9][a-z0-9\s/&.\-]*", term_lower):
+            if re.search(rf"(?<![a-z0-9]){re.escape(term_lower)}(?![a-z0-9])", text_lower):
+                return True
+        elif term_lower in text_lower:
+            return True
+    return False
+
+
+def _strip_source_name_noise(text: str) -> str:
+    cleaned = text or ""
+    for term in SOURCE_NAME_NOISE_TERMS:
+        cleaned = re.sub(re.escape(term), " ", cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
+def _is_standards_source(source_name: str) -> bool:
+    return (source_name or "").startswith("規範更新代理")
+
+
+def _is_standard_update_query(query: str) -> bool:
+    query_lower = (query or "").casefold()
+    return any(
+        standard.casefold() in query_lower
+        for standards in STANDARDS_WATCHLIST.values()
+        for standard in standards
+    )
+
+
+def _is_urban_rail_candidate(text: str, source_name: str = "") -> bool:
+    """正式新聞候選須直接連到都會軌道；標準更新另由規範規則處理。"""
+    if _is_standards_source(source_name):
+        return True
+
+    topic_text = _strip_source_name_noise(text)
+    has_mode = _contains_any_term(topic_text, URBAN_RAIL_MODE_TERMS)
+    has_unambiguous_mode = _contains_any_term(topic_text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS)
+    has_operator = _contains_any_term(f"{source_name} {topic_text}", URBAN_RAIL_OPERATOR_TERMS)
+    has_non_urban = _contains_any_term(topic_text, NON_URBAN_TRANSPORT_TERMS)
+    has_hard_non_urban = _contains_any_term(topic_text, NON_URBAN_HARD_EXCLUDE_TERMS)
+
+    if has_hard_non_urban and not has_unambiguous_mode:
+        return False
+    if has_non_urban and not has_mode:
+        return False
+    return has_mode or has_operator
+
+
 def _is_allowed_host(host: str) -> bool:
     if not ALLOWED_NEWS_DOMAINS:
         return True
@@ -983,11 +1098,18 @@ def _fetch_feed(session: requests.Session, url: str):
     return parsed
 
 
-def _items_from_parsed_feed(parsed_feed, cutoff: datetime.datetime, seen_titles: set[str], seen_urls: set[str]) -> tuple[list[dict], int, int, int]:
+def _items_from_parsed_feed(
+    parsed_feed,
+    cutoff: datetime.datetime,
+    seen_titles: set[str],
+    seen_urls: set[str],
+    source_name: str = "",
+) -> tuple[list[dict], int, int, int, int]:
     items: list[dict] = []
     invalid_count = 0
     blocked_count = 0
     duplicate_count = 0
+    topic_filtered_count = 0
 
     for entry in getattr(parsed_feed, "entries", []):
         title = (entry.get("title") or "").strip()
@@ -1001,6 +1123,10 @@ def _items_from_parsed_feed(parsed_feed, cutoff: datetime.datetime, seen_titles:
 
         if _contains_taiwan_reference(f"{title} {desc} {link} {source_href}"):
             blocked_count += 1
+            continue
+
+        if not _is_urban_rail_candidate(f"{title} {desc} {link} {source_href}", source_name):
+            topic_filtered_count += 1
             continue
 
         is_valid, reason = _is_valid_news_url(link, source_href=source_href)
@@ -1027,7 +1153,7 @@ def _items_from_parsed_feed(parsed_feed, cutoff: datetime.datetime, seen_titles:
             "source_href": source_href,
         })
 
-    return items, invalid_count, blocked_count, duplicate_count
+    return items, invalid_count, blocked_count, duplicate_count, topic_filtered_count
 
 
 def _status_record(source_name: str, method: str, status: str, item_count: int, error_message: str = "") -> dict:
@@ -1090,15 +1216,15 @@ def fetch_rss_feeds(
 
         try:
             parsed_feed = _fetch_feed(session, url)
-            items_found, invalid_count, blocked_count, duplicate_count = _items_from_parsed_feed(
-                parsed_feed, cutoff, seen_titles, seen_urls
+            items_found, invalid_count, blocked_count, duplicate_count, topic_filtered_count = _items_from_parsed_feed(
+                parsed_feed, cutoff, seen_titles, seen_urls, source_name
             )
             if items_found:
                 all_blocks.append(_format_items_block(source_name, items_found))
                 source_statuses.append(_status_record(source_name, method, "成功", min(len(items_found), MAX_ITEMS_PER_SOURCE)))
             else:
-                status = "被安全規則排除" if blocked_count and not invalid_count else "無文章"
-                message = f"無有效候選；無效連結 {invalid_count}、安全排除 {blocked_count}、重複 {duplicate_count}"
+                status = "非都市軌道" if topic_filtered_count and not (invalid_count or blocked_count) else "被安全規則排除" if blocked_count and not invalid_count else "無文章"
+                message = f"無有效候選；非都市軌道 {topic_filtered_count}、無效連結 {invalid_count}、安全排除 {blocked_count}、重複 {duplicate_count}"
                 all_blocks.append(f"【RSS來源：{source_name}】（{status}）")
                 source_statuses.append(_status_record(source_name, method, status, 0, message))
         except FeedFetchError as exc:
@@ -1106,8 +1232,8 @@ def fetch_rss_feeds(
             if fallback_url:
                 try:
                     parsed_feed = _fetch_feed(session, fallback_url)
-                    items_found, invalid_count, blocked_count, duplicate_count = _items_from_parsed_feed(
-                        parsed_feed, cutoff, seen_titles, seen_urls
+                    items_found, invalid_count, blocked_count, duplicate_count, topic_filtered_count = _items_from_parsed_feed(
+                        parsed_feed, cutoff, seen_titles, seen_urls, f"{source_name}（fallback Google News）"
                     )
                     if items_found:
                         all_blocks.append(_format_items_block(f"{source_name}（fallback Google News）", items_found))
@@ -1115,8 +1241,8 @@ def fetch_rss_feeds(
                             _status_record(source_name, "Google News fallback", "fallback 成功", min(len(items_found), MAX_ITEMS_PER_SOURCE), f"官方 RSS 失敗：{exc.message}")
                         )
                     else:
-                        status = "被安全規則排除" if blocked_count and not invalid_count else "無文章"
-                        message = f"官方 RSS 失敗：{exc.message}；fallback 無有效候選；無效連結 {invalid_count}、安全排除 {blocked_count}、重複 {duplicate_count}"
+                        status = "非都市軌道" if topic_filtered_count and not (invalid_count or blocked_count) else "被安全規則排除" if blocked_count and not invalid_count else "無文章"
+                        message = f"官方 RSS 失敗：{exc.message}；fallback 無有效候選；非都市軌道 {topic_filtered_count}、無效連結 {invalid_count}、安全排除 {blocked_count}、重複 {duplicate_count}"
                         all_blocks.append(f"【RSS來源：{source_name}】（{status}）")
                         source_statuses.append(_status_record(source_name, "Google News fallback", status, 0, message))
                 except FeedFetchError as fallback_exc:
@@ -1145,47 +1271,47 @@ def build_search_queries() -> tuple[list[str], set[int]]:
     # 1. 核心通用關鍵字（只查有勾的）
     if "技術新知" in selected_types:
         queries.extend([
-            f"metro LRRT automated guideway transit technology {today:%Y}",
-            f"metro subway CBTC GoA4 driverless {today:%Y}",
-            f"鉄道 新交通システム 地下鉄 技術 {today:%Y}"
+            f"metro subway MRT LRRT LRT light rail automated guideway transit technology {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+            f"metro subway CBTC GoA4 driverless platform screen doors {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+            f"地下鉄 メトロ 新交通システム 都市鉄道 技術 {today:%Y} -新幹線 -JR -在来線 -高速バス"
         ])
     if "重大事故" in selected_types:
         queries.extend([
-            f"metro subway train derailment collision incident {today:%B %Y}",
-            f"鉄道 地下鉄 事故 脱線 運休 {today:%Y年%m月}"
+            f"metro subway light rail LRT tram derailment collision incident {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+            f"地下鉄 メトロ 新交通システム 路面電車 事故 脱線 運休 {today:%Y年%m月} -新幹線 -JR -在来線 -高速バス"
         ])
     if "營運政策" in selected_types:
         queries.extend([
-            f"metro subway policy passenger safety regulation {today:%B %Y}",
-            f"鉄道 地下鉄 規則 安全対策 {today:%Y年%m月}"
+            f"metro subway MRT light rail passenger safety fare accessibility regulation {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+            f"地下鉄 メトロ 新交通システム 規則 安全対策 {today:%Y年%m月} -新幹線 -JR -在来線 -高速バス"
         ])
     if "營運爭議" in selected_types:
         queries.extend([
-            f"metro subway transit strike delay controversy {today:%B %Y}",
-            f"鉄道 地下鉄 遅延 争議 {today:%Y年%m月}"
+            f"metro subway light rail LRT tram strike delay controversy fare dispute {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+            f"地下鉄 メトロ 新交通システム 路面電車 遅延 争議 {today:%Y年%m月} -新幹線 -JR -在来線 -高速バス"
         ])
 
     if is_global_scope:
         if "技術新知" in selected_types:
             queries.extend([
-                f"urban rail metro light rail rolling stock signalling power supply project {today:%Y}",
-                f"metro subway platform screen doors CBTC communications cybersecurity upgrade {today:%Y}",
-                f"tram LRT LRRT automated depot maintenance system integration {today:%Y}",
+                f"urban rail metro subway light rail rolling stock signalling power supply project {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+                f"metro subway MRT platform screen doors CBTC communications cybersecurity upgrade {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+                f"tram LRT LRRT automated depot maintenance system integration {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
             ])
         if "重大事故" in selected_types:
             queries.extend([
-                f"metro subway LRT derailment collision fire service suspended investigation {today:%Y}",
-                f"urban rail tram light rail accident signalling power outage passengers evacuated {today:%Y}",
+                f"metro subway LRT light rail derailment collision fire service suspended investigation {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+                f"urban rail tram light rail accident signalling power outage passengers evacuated {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
             ])
         if "營運政策" in selected_types:
             queries.extend([
-                f"metro subway transit safety policy fare policy accessibility regulation {today:%Y}",
-                f"urban rail light rail operator policy ridership service frequency procurement {today:%Y}",
+                f"metro subway MRT transit safety policy fare accessibility regulation {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+                f"urban rail light rail tram operator policy ridership service frequency procurement {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
             ])
         if "營運爭議" in selected_types:
             queries.extend([
-                f"metro subway light rail strike delay dispute budget overrun contract dispute {today:%Y}",
-                f"urban rail transit public controversy service disruption fare protest {today:%Y}",
+                f"metro subway light rail tram strike delay dispute budget overrun contract dispute {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+                f"urban rail metro light rail public controversy service disruption fare protest {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
             ])
 
     if "規範更新" in selected_types:
@@ -1200,12 +1326,12 @@ def build_search_queries() -> tuple[list[str], set[int]]:
     for i, region in enumerate(active_regions):
         term = REGION_SEARCH_TERMS.get(region, region)
         if "技術新知" in selected_types:
-            queries.append(f"{term} metro LRRT subway upgrade press release {today:%B %Y}")
+            queries.append(f"{term} metro subway MRT LRRT LRT light rail tram upgrade press release {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}")
 
         # 將事故、政策、爭議合併為一個查詢字串，精簡發送數量
         if any(t in selected_types for t in ["重大事故", "營運政策", "營運爭議"]):
             idx = len(queries) + 1
-            queries.append(f"{term} metro subway incident strike policy controversy {today:%B %Y}")
+            queries.append(f"{term} metro subway light rail incident strike policy controversy {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}")
             news_indices.add(idx)
 
     return queries, news_indices
@@ -1235,6 +1361,8 @@ def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -
                         if not title:
                             continue
                         if _contains_taiwan_reference(f"{title} {body} {href}"):
+                            continue
+                        if not _is_standard_update_query(query) and not _is_urban_rail_candidate(f"{title} {body} {href}"):
                             continue
                         is_valid, reason = _is_valid_news_url(href)
                         if not is_valid:
@@ -1337,7 +1465,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
     if is_global_scope:
         scope_instruction = (
             "本次採全球模式：不得用國家/地區清單刪除新聞。仍須套用來源安全規則、有效 URL 規則，"
-            "並聚焦都市捷運、地下鐵、中運量、輕軌、AGT、LRRT/LRT。"
+            "並嚴格聚焦都市捷運、地下鐵、中運量、輕軌、AGT、LRRT/LRT。"
         )
         scope_list = "全球（安全白名單來源）；不套用 ADVANCED_REGIONS 國家邊界。"
     else:
@@ -1388,7 +1516,12 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
    - **營運政策**：捷運站內安檢新規、乘車規則變動（如禁帶大型鋰電池/滑板車）、安全管理政策。
    - **營運爭議**：罷工、預算超支、票價爭議、合約糾紛、服務品質爭議。
    - **規範更新**：標準版本、修訂、勘誤、草案、徵詢、公告、撤回、取代等公開狀態。
-2. **最高優先級（專注捷運與LRRT，排除一般鐵路/高鐵）**：本報告是提供給北市府捷運局的國際週報，請**嚴格過濾並排除**傳統客運/貨運鐵路（火車、城際列車）與高速鐵路（HSR）的新聞。請**絕對優先保留並聚焦**於國際上的**「都市捷運系統（Metro / Subway / Underground）」**以及**「中運量 / 輕軌 / 膠輪系統（LRRT / AGT / LRT）」**的新聞，並給予最大篇幅。
+2. **最高優先級（只收都會軌道，不以一般鐵路湊數）**：
+   - 正式新聞必須直接屬於都市軌道系統：Metro / Subway / Underground / MRT / Metrorail、LRRT / LRT / Light Rail / Tram / Tramway / Streetcar、AGT / Automated Guideway Transit / People Mover、都市單軌或其他明確城市大眾捷運系統。
+   - 只有「事件本身」發生於上述系統，或新聞明確寫出技術/設備將用於上述系統時，才可列為正式新聞。不能因為 ETCS、FRMCS、GSM-R、CBTC、車輛、供電、維修、AI、資產管理等技術「理論上可參考」就列入正式新聞。
+   - 明確排除正式新聞：高速鐵路/HSR/Shinkansen/新幹線/高鐵、台鐵/臺鐵/TRA/JR一般鐵路、城際鐵路、區域鐵路、通勤鐵路、國鐵/主線鐵路、貨運鐵路、機車/客車、長途公路運輸、公車/客運/coach/highway/BRT，以及只談一般鐵路供應鏈或國家鐵路政策的新聞。
+   - London Underground、Tokyo Metro、Seoul Metro、MTR、LTA MRT/LRT、WMATA Metrorail、TTC subway/streetcar、Vancouver SkyTrain、RATP metro/tram、Madrid/Barcelona Metro 等官方都市軌道系統可優先；但同一機構若新聞主體是公車、長途鐵路或一般通勤鐵路，仍不得列入正式新聞。
+   - 高鐵、主線鐵路或公車新聞最多只能在「候補觀察」中一行點出，而且必須說明「非都市軌道，僅作背景追蹤」；不得計入正式新聞數。
 3. **來源權重**：請優先採納「第一部分：RSS 訂閱源」中實際出現的來源（本次共 {len(rss_sources)} 個，清單如下），這些是本次真正抓取到的媒體，**不要**引用或想像清單以外的媒體名稱：
 {source_names}
 4. **報告排序固定**：正式報告必須依序輸出已勾選類型，順序參照：{report_order}。**未勾選的類型絕對不得出現在章節標題、每則標題、正式新聞、候補觀察、統計或結尾文字**。若只勾選「技術新知」，整份報告只能有「技術新知」類新聞。
@@ -1397,10 +1530,11 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
    - 若某則原始資料**沒有**明確可辨識的日期，或日期含糊到無法判斷是哪一天，**直接捨棄該則**，不要用「近期」「今年」等模糊字眼帶過，也不要自行補上一個日期。
    - 判斷「未來日期」時，**只看該則報導本身的發布/刊登日期**是否晚於今天（{today.strftime('%Y-%m-%d')}）；若是，才視為不合理並剔除。**但**如果報導本身發布日期是合理的過去/現在日期，只是內文「引述」了某項政策的未來生效日（例如報導於 6 月底刊出，內容提到「規定將於 7 月 1 日起實施」），這屬於政策內容的一部分，**不可**僅因內文出現未來日期就整則剔除——請保留該則，並在內容中如實寫出「即將於某日起生效」。
    - 若同一事件在原始資料中找不到，但你「記得」曾經發生過類似新聞，**一律視為未提供資料**，不要用記憶內容補寫。你只能整理「第一部分」與「第二部分」中實際出現的文字，不能新增任何未出現於原始資料的事實、數字或日期。
+   - 若原始資料只有標題，事件摘要只能重述標題可確認的事實；不得自行補上「旨在提升效率、改善乘客體驗、提升容量、降低成本」等目的、成效、數字或技術細節。這類推論若必要，只能放在「臺北捷運局啟示」並明確寫成建議，不可當作新聞事實。
    - **來源必須是該則事件本身的具體新聞文章連結**：「資料來源」欄位填入的網址，**必須**是原始資料中該則內容自己標註的「連結：」網址，且該網址指向的必須是報導這件事本身的新聞文章頁面。**嚴禁**引用網站首頁、路網圖、票務頁面、會員名錄、活動總覽頁等非新聞頁面來充當來源，也**嚴禁**在原始資料中找不到對應連結時，挪用同一媒體其他頁面的網址頂替。若某則事件在原始資料中沒有對應的具體文章連結，即使內容看起來合理，也必須**整則捨棄**。
    - Google News RSS 的 `news.google.com/rss/articles/...` 連結若搭配原始資料中的「原始來源」或標題來源，可視為可追查來源連結；不要僅因其為 Google News 轉址而剔除。
     - 不得為了湊數引用無具體新聞頁、首頁、社群頁、會員頁、活動首頁或模型記憶。
-6. **數量要求**：本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，請優先納入中信度但來源、日期、都市軌道關聯明確的候選；不要因摘要較短或連結為 Google News 轉址而過度剔除。仍不足時，請另設「候補觀察」區，只收錄原始資料中存在但信心較低或日期/範圍需追蹤的候選，不得捏造。若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，例如：來源不足、日期不明、非捷運、來源不合格。
+6. **數量要求**：本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，請優先納入中信度但來源、日期、都市軌道關聯明確的候選；不要因摘要較短或連結為 Google News 轉址而過度剔除。仍不足時，請另設「候補觀察」區，只收錄原始資料中存在、日期仍在本期範圍內、但信心較低或範圍需追蹤的候選，不得捏造。若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，例如：都市軌道來源不足、日期不明、非捷運/非輕軌、來源不合格。**不得為了湊滿數量，把高鐵、一般鐵路、公車或長途運輸新聞升格為正式新聞。**
 7. **國家/地區規則**：{scope_instruction}
 8. **內部國際新聞邊界**：台灣、臺灣、Taiwan、Taipei、台北/臺北捷運、北捷、新北、桃園/桃捷、台中、台南、高雄/高捷等國內新聞或國內案例，不得列入正式新聞或候補觀察。這是內部篩選條件，報告中不得呈現本條內容或其原因。
 
@@ -1438,7 +1572,8 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
 ---
 
 ## 候補觀察（必要時）
-- 僅可列入原始資料中存在、但信心水準較低或仍需查證的候選；必須標示不足原因。
+- 僅可列入原始資料中存在、日期在本期範圍內、但信心水準較低或仍需查證的候選；必須標示不足原因。
+- 若候補屬一般鐵路、高鐵、公車或長途運輸，不得包裝成捷運新聞，且必須明確標示「非都市軌道，僅作背景追蹤」。
 
 ## 結尾（必填）
 ---
@@ -1469,6 +1604,8 @@ def build_revision_prompt(
 3. 未勾選分類不得出現在章節、標題、正文、候補觀察與統計。
 4. 正式新聞至少 {min_report_items} 則；若仍不足，結尾必須具體說明候選資料不足的原因。
 5. 僅能使用 raw RSS/ddgs 候選資料，不得補腦。
+6. 正式新聞只允許都市捷運/MRT/metro/subway/LRRT/LRT/light rail/tram/AGT/people mover；高鐵、新幹線、台鐵/國鐵、城際/區域/通勤鐵路、貨運鐵路、公車/客運/長途公路運輸不得用來補足正式新聞數。
+7. 若上一版曾納入 ETCS/FRMCS/GSM-R、電池列車、混合動力列車、一般鐵路資產管理、主線事故、bus strike 等非都市軌道題材，請移除正式新聞；除非 raw 明確寫出該事件發生在 metro/subway/light rail/tram 等都市軌道系統。
 
 ## 上一版報告
 {previous_report}
@@ -1689,6 +1826,16 @@ def report_has_unselected_types(report_md: str) -> bool:
     return False
 
 
+def report_has_non_urban_formal_items(report_md: str) -> bool:
+    formal_area = report_md.split("## 候補觀察", 1)[0]
+    for block in re.split(r"(?m)^###\s+", formal_area)[1:]:
+        if "[規範更新]" in block:
+            continue
+        if not _is_urban_rail_candidate(block):
+            return True
+    return False
+
+
 def has_candidate_observations(report_md: str) -> bool:
     return "候補觀察" in report_md and not re.search(r"候補觀察[^\n]*\n\s*(?:無|本期無)", report_md)
 
@@ -1732,6 +1879,7 @@ def status_badge(status: str) -> str:
         "parse error": "badge-error",
         "被安全規則排除": "badge-blocked",
         "範圍排除": "badge-blocked",
+        "非都市軌道": "badge-neutral",
     }.get(status, "badge-neutral")
     label = {
         "成功": "✅ 成功",
@@ -1742,6 +1890,7 @@ def status_badge(status: str) -> str:
         "parse error": "parse error",
         "被安全規則排除": "安全排除",
         "範圍排除": "範圍排除",
+        "非都市軌道": "非都市軌道",
     }.get(status, status)
     return f'<span class="status-badge {class_name}">{escape(label)}</span>'
 
@@ -1752,14 +1901,14 @@ def render_source_health_dashboard(statuses: list[dict]) -> None:
         return
 
     st.markdown('<div class="section-title">來源健康儀表板</div>', unsafe_allow_html=True)
-    status_order = ["成功", "fallback 成功", "無文章", "timeout", "403", "parse error", "被安全規則排除", "範圍排除"]
+    status_order = ["成功", "fallback 成功", "無文章", "非都市軌道", "timeout", "403", "parse error", "被安全規則排除", "範圍排除"]
     counts = {status: sum(1 for row in statuses if row.get("status") == status) for status in status_order}
     healthy_count = counts["成功"] + counts["fallback 成功"]
     issue_count = counts["timeout"] + counts["403"] + counts["parse error"]
     total_candidates = sum(int(row.get("item_count", 0) or 0) for row in statuses)
     summary_items = [
         ("可用來源", healthy_count, f"成功 {counts['成功']}｜fallback {counts['fallback 成功']}"),
-        ("無文章來源", counts["無文章"], "保留追蹤，但本期未產出候選"),
+        ("無文章來源", counts["無文章"], f"非都市軌道 {counts['非都市軌道']}｜本期無候選"),
         ("需注意來源", issue_count, f"timeout {counts['timeout']}｜403 {counts['403']}｜parse {counts['parse error']}"),
         ("候選資料", total_candidates, "已通過 URL 與安全規則"),
     ]
@@ -1981,11 +2130,12 @@ if generate_btn or send_btn:
             needs_revision = (
                 formal_count < min_report_items
                 or report_has_unselected_types(report_text)
+                or report_has_non_urban_formal_items(report_text)
                 or "排除台灣" in report_text
             )
             if needs_revision:
                 status_text.text(
-                    f"🤖 初稿 {formal_count} 則或分類不符，正在自動重寫補足 {min_report_items} 則..."
+                    f"🤖 初稿 {formal_count} 則、分類或都市軌道範圍需修正，正在自動重寫..."
                 )
                 revision_response = client.models.generate_content(
                     model=model_choice,
