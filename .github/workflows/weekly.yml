@@ -8,14 +8,6 @@ on:
   # 手動觸發（競賽展示用）
   workflow_dispatch:
     inputs:
-      use_powerful_model:
-        description: '使用較強模型 gemini-3.5-flash（否則用 gemini-3.1-flash-lite）'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
       news_lookback_days:
         description: '新聞搜尋天數（排程預設 30 天；技術新知也會納入近 30 天）'
         required: false
@@ -30,7 +22,7 @@ on:
 jobs:
   generate-and-send:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: 📥 取得程式碼
@@ -46,23 +38,20 @@ jobs:
 
       - name: 🤖 產生報告並寄信（含自動重試）
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MAIAGENT_API_KEY: ${{ secrets.MAIAGENT_API_KEY }}
+          MAIAGENT_CHATBOT_ID: ${{ secrets.MAIAGENT_CHATBOT_ID }}
+          MAIAGENT_API_BASE: ${{ secrets.MAIAGENT_API_BASE || 'https://api.maiagent.ai' }}
           GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           RECIPIENTS:     ${{ secrets.RECIPIENTS }}
           NEWS_LOOKBACK_DAYS: ${{ github.event.inputs.news_lookback_days || '30' }}
         run: |
-          CMD="python main.py"
-          if [ "${{ github.event.inputs.use_powerful_model }}" = "true" ]; then
-            CMD="python main.py --powerful"
-          fi
-
-          # 遇到 429 配額超限時自動重試，最多 3 次，間隔加倍
+          # 遇到雲端 API 暫時性失敗時自動重試，最多 3 次，間隔加倍
           MAX_RETRY=3
           WAIT=60
           for i in $(seq 1 $MAX_RETRY); do
             echo "▶ 第 $i 次嘗試..."
-            $CMD && break
+            python main.py && break
             EXIT=$?
             if [ $i -lt $MAX_RETRY ]; then
               echo "⚠️ 失敗（exit $EXIT），等待 ${WAIT}s 後重試..."
