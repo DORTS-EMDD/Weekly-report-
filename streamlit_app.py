@@ -680,7 +680,14 @@ TECH_NEWS_SOFT_EXCLUDE_TERMS = [
 ]
 
 # ── 金鑰狀態 ──────────────────────────────────────────
-api_key    = get_secret("GEMINI_API_KEY")
+# AI 報告產製改用 MaiAgent 雲端 API。
+# 請在 Streamlit Cloud Secrets 或環境變數設定：
+# MAIAGENT_API_KEY、MAIAGENT_CHATBOT_ID、MAIAGENT_API_BASE
+maiagent_api_key = get_secret("MAIAGENT_API_KEY")
+maiagent_chatbot_id = get_secret("MAIAGENT_CHATBOT_ID")
+maiagent_api_base = get_secret("MAIAGENT_API_BASE", "https://api.maiagent.ai")
+model_choice = "MaiAgent 雲端 API"
+
 gmail_user = get_secret("GMAIL_USER")
 gmail_pass = get_secret("GMAIL_APP_PASS")
 
@@ -813,12 +820,8 @@ with st.sidebar:
         st.warning("請至少選擇一個國家/地區。")
 
     with st.expander("⚙️ 進階設定", expanded=False):
-        st.markdown("**Gemini 模型設定**")
-        model_choice = st.selectbox(
-            "選擇 Gemini 模型",
-            ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
-            index=0,
-        )
+        st.markdown("**AI 模型設定**")
+        st.caption("目前使用：MaiAgent 雲端 API")
 
         st.markdown("**長期趨勢 / 規範追蹤模式**")
         long_term_mode = st.checkbox(
@@ -833,10 +836,11 @@ with st.sidebar:
         st.caption("每週一 08:00｜GitHub Actions｜自動寄送")
 
         st.markdown("**系統狀態**")
-        st.markdown(f"Gemini API Key：{'✅' if api_key else '❌'}")
+        st.markdown(f"MaiAgent API Key：{'✅' if maiagent_api_key else '❌'}")
+        st.markdown(f"MaiAgent Chatbot ID：{'✅' if maiagent_chatbot_id else '❌'}")
+        st.markdown(f"MaiAgent API Base：{maiagent_api_base}")
         st.markdown(f"Gmail 帳號：{'✅' if gmail_user else '❌'}")
         st.markdown(f"Gmail 密碼：{'✅' if gmail_pass else '❌'}")
-        st.markdown(f"google-genai 套件：{'✅' if genai and types else '❌'}")
         st.markdown(f"ddgs 套件：{'✅' if DDGS else '❌'}")
         st.markdown(f"feedparser 套件：{'✅' if feedparser else '❌'}")
 
@@ -2004,6 +2008,7 @@ def build_revision_prompt(
 
 
 def extract_text(response) -> str:
+    # 保留原本 Gemini 解析函式，避免其他舊流程引用時發生錯誤。
     if response.text:
         return response.text
     candidates = response.candidates or []
@@ -2012,6 +2017,98 @@ def extract_text(response) -> str:
         if texts:
             return "\n".join(texts)
     raise ValueError("Gemini 回應無文字內容")
+
+
+def _extract_maiagent_text(data) -> str:
+    """寬鬆解析 MaiAgent 不同版本可能回傳的文字欄位。"""
+    if isinstance(data, str):
+        return data.strip()
+
+    if isinstance(data, dict):
+        for key in ("content", "text", "answer", "output", "response"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        message = data.get("message")
+        if isinstance(message, dict):
+            for key in ("content", "text", "answer"):
+                value = message.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+        content_payload = data.get("contentPayload") or data.get("content_payload")
+        if isinstance(content_payload, dict):
+            for key in ("content", "text", "answer"):
+                value = content_payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+            items = content_payload.get("items")
+            if isinstance(items, list):
+                texts = []
+                for item in items:
+                    if isinstance(item, dict):
+                        value = item.get("text") or item.get("content") or item.get("answer")
+                        if value:
+                            texts.append(str(value))
+                if texts:
+                    return "\n".join(texts).strip()
+
+        # 常見巢狀結果欄位 fallback
+        for key in ("result", "data"):
+            nested = data.get(key)
+            if isinstance(nested, (dict, str)):
+                nested_text = _extract_maiagent_text(nested)
+                if nested_text and nested_text != str(nested):
+                    return nested_text
+
+    text = str(data).strip()
+    if text:
+        return text
+    raise ValueError("MaiAgent 回應無文字內容")
+
+
+def call_maiagent_cloud(prompt: str) -> str:
+    """呼叫 MaiAgent 雲端 Chatbot completions API 產生報告。"""
+    if not maiagent_api_key:
+        raise RuntimeError("未設定 MAIAGENT_API_KEY")
+    if not maiagent_chatbot_id:
+        raise RuntimeError("未設定 MAIAGENT_CHATBOT_ID")
+
+    base_url = maiagent_api_base.rstrip("/")
+    endpoint = f"{base_url}/api/v1/chatbots/{maiagent_chatbot_id}/completions"
+    headers = {
+        "Authorization": f"Api-Key {maiagent_api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    payloads = [
+        {"message": {"content": prompt}, "isStreaming": False},
+        {"message": {"content": prompt}, "is_streaming": False},
+    ]
+    endpoints = [endpoint, endpoint + "/"]
+    last_error = None
+
+    for url in endpoints:
+        for payload in payloads:
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=240)
+                if response.status_code in (400, 404, 422):
+                    last_error = RuntimeError(f"MaiAgent API 回應 {response.status_code}: {response.text[:500]}")
+                    continue
+                response.raise_for_status()
+                try:
+                    data = response.json()
+                except ValueError:
+                    return response.text.strip()
+                return _extract_maiagent_text(data)
+            except Exception as exc:
+                last_error = exc
+                continue
+
+    raise RuntimeError(f"MaiAgent API 呼叫失敗：{last_error}")
 
 
 def markdown_to_html(md: str) -> str:
@@ -2493,7 +2590,7 @@ def _soft_wrap_long_tokens(text: str, chunk: int = 45) -> str:
 
 
 def raw_debug_to_pdf_bytes(raw_rss: str, raw_ddg: str) -> bytes:
-    """把「原始搜尋資料（Gemini 篩選前）」的純文字內容轉成 PDF，
+    """把「原始搜尋資料（MaiAgent 篩選前）」的純文字內容轉成 PDF，
     方便使用者下載保存，不用再從網頁手動複製。"""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
@@ -2577,10 +2674,10 @@ def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: st
 send_btn = False
 
 if generate_btn or send_btn:
-    if not api_key:
-        status_placeholder.error("❌ Gemini API Key 未設定，請至 Streamlit Cloud App Settings → Secrets 填入")
-    elif genai is None or types is None:
-        status_placeholder.error("❌ google-genai 套件未安裝，請確認 requirements.txt 已包含 google-genai。")
+    if not maiagent_api_key:
+        status_placeholder.error("❌ MaiAgent API Key 未設定，請至 Streamlit Cloud App Settings → Secrets 填入 MAIAGENT_API_KEY")
+    elif not maiagent_chatbot_id:
+        status_placeholder.error("❌ MaiAgent Chatbot ID 未設定，請至 Streamlit Cloud App Settings → Secrets 填入 MAIAGENT_CHATBOT_ID")
     elif not selected_types:
         status_placeholder.error("❌ 尚未勾選新聞類型，請至左側選單勾選想要搜尋的主題。")
     elif not is_global_scope and not active_regions:
@@ -2631,15 +2728,11 @@ if generate_btn or send_btn:
                 with open(f"reports/raw_ddg_{today.strftime('%Y%m%d')}.txt", "w", encoding="utf-8") as f:
                     f.write(ddg_results)
 
-            # Step 3：Gemini 分析
-            status_text.text(f"🤖 正在交由 Gemini 產生{report_period_label}……（{model_choice}）")
-            client   = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model=model_choice,
-                contents=build_prompt(rss_results, ddg_results, combined_sources),
-                config=types.GenerateContentConfig(temperature=0.2),
+            # Step 3：MaiAgent 雲端 API 分析
+            status_text.text(f"🤖 正在交由 MaiAgent 雲端 API 產生{report_period_label}……")
+            report_text = call_maiagent_cloud(
+                build_prompt(rss_results, ddg_results, combined_sources)
             )
-            report_text = extract_text(response)
             formal_count = count_report_items(report_text)
             needs_revision = (
                 (target_is_enforced and formal_count < min_report_items)
@@ -2651,18 +2744,15 @@ if generate_btn or send_btn:
                 status_text.text(
                     f"🤖 初稿 {formal_count} 則、分類或都市軌道範圍需修正，正在自動重寫……"
                 )
-                revision_response = client.models.generate_content(
-                    model=model_choice,
-                    contents=build_revision_prompt(
+                report_text = call_maiagent_cloud(
+                    build_revision_prompt(
                         rss_results,
                         ddg_results,
                         report_text,
                         formal_count,
                         combined_sources,
-                    ),
-                    config=types.GenerateContentConfig(temperature=0.2),
+                    )
                 )
-                report_text = extract_text(revision_response)
                 formal_count = count_report_items(report_text)
             progress_bar.progress(0.85)
             status_text.text("📄 正在產製 PDF / Email 輸出準備……")
@@ -2699,7 +2789,7 @@ if generate_btn or send_btn:
         except Exception as e:
             progress_placeholder.empty()
             status_text.error(f"❌ 發生錯誤：{e}")
-            st.info("請確認 Gemini API Key 正確，且帳號配額未超限")
+            st.info("請確認 MaiAgent API Key、Chatbot ID 與 API Base 正確，且該雲端 API 可由目前執行環境連線。")
 
 # ── 報告顯示區 ──────────────────────────────────────
 st.markdown("---")
@@ -2781,7 +2871,7 @@ else:
 if show_raw_debug and (raw_rss or raw_ddg):
     with st.expander("🔎 原始資料與 AI 篩選前候選池（除錯用）", expanded=False):
         st.caption(
-            "這裡是 RSS／ddgs 實際抓到、丟給 Gemini 的原始文字。"
+            "這裡是 RSS／ddgs 實際抓到、丟給 MaiAgent 的原始文字。"
             "如果這裡本來就沒什麼內容，代表是搜尋源撈得不夠廣；"
             "如果這裡內容很多但最終報告篇數很少，代表是日期、來源或 prompt 篩選規則較嚴。"
         )
