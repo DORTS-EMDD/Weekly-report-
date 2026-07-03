@@ -259,9 +259,121 @@ st.markdown("""
   }
   .primary-action { margin-top: 4px; }
 
+  /* Minimal presentation layer */
+  html, body, [class*="css"] {
+    font-family: Inter, "Noto Sans TC", "Microsoft JhengHei", Arial, sans-serif;
+    color: #111827;
+  }
+  .block-container { max-width: 1180px; padding-top: 1.8rem; }
+  [data-testid="stSidebar"] {
+    background: #f8fafc !important;
+    border-right: 1px solid #e5e7eb !important;
+  }
+  [data-testid="stSidebar"], [data-testid="stSidebar"] label,
+  [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
+  [data-testid="stSidebar"] div, [data-testid="stSidebar"] .stMarkdown {
+    color: #111827 !important;
+  }
+  [data-testid="stSidebar"] h1,
+  [data-testid="stSidebar"] h2,
+  [data-testid="stSidebar"] h3 {
+    color: #111827 !important;
+    font-size: .9rem !important;
+    font-weight: 800 !important;
+    letter-spacing: 0 !important;
+    margin: .65rem 0 .25rem !important;
+  }
+  [data-testid="stSidebar"] hr {
+    border-color: #e5e7eb !important;
+    margin: .55rem 0 !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stExpander"] {
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stExpander"] summary,
+  [data-testid="stSidebar"] [data-testid="stExpander"] summary * {
+    color: #111827 !important;
+  }
+  [data-testid="stSidebar"] .stButton button,
+  [data-testid="stSidebar"] .stButton button * {
+    background: #ffffff !important;
+    border-color: #d1d5db !important;
+    color: #111827 !important;
+    box-shadow: none !important;
+  }
+  [data-testid="stSidebar"] .stButton button:hover,
+  [data-testid="stSidebar"] .stButton button:hover * {
+    background: #eef2ff !important;
+    border-color: #315f8a !important;
+  }
+  .hero-card {
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    border-left: 5px solid #315f8a !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
+    padding: 32px 34px !important;
+  }
+  .hero-eyebrow { color: #315f8a !important; font-weight: 800; }
+  .hero-title { color: #111827 !important; font-size: 2.35rem !important; line-height: 1.18 !important; }
+  .hero-subtitle { color: #4b5563 !important; max-width: 860px !important; }
+  .hero-pill {
+    background: #f9fafb !important;
+    border: 1px solid #e5e7eb !important;
+    color: #374151 !important;
+    border-radius: 999px !important;
+  }
+  .section-title {
+    color: #111827 !important;
+    font-size: 1.05rem !important;
+    margin: 28px 0 10px !important;
+  }
+  .kpi-card, .workflow-card, .source-summary-card {
+    box-shadow: none !important;
+    border: 1px solid #e5e7eb !important;
+    background: #ffffff !important;
+  }
+  .kpi-card { padding: 14px !important; min-height: 102px !important; }
+  .kpi-icon { color: #315f8a !important; }
+  .kpi-num { color: #111827 !important; font-size: 1.65rem !important; }
+  .workflow-card { border-left: 2px solid #315f8a !important; min-height: 96px !important; }
+  .workflow-step { color: #315f8a !important; }
+  .report-card {
+    border: 1px solid #e5e7eb !important;
+    box-shadow: none !important;
+    margin: 8px 0 !important;
+    padding: 14px 16px !important;
+  }
+  .report-card h4 {
+    margin: 6px 0 8px !important;
+    line-height: 1.35 !important;
+    font-size: 1.02rem !important;
+  }
+  .report-card-body {
+    color: #374151 !important;
+    font-size: .92rem !important;
+    line-height: 1.42 !important;
+  }
+  .report-line { margin: 3px 0; }
+  .report-line.list { padding-left: 1rem; text-indent: -0.72rem; }
+  .report-line.meta { color: #4b5563; }
+  .report-spacer { height: 4px; }
+  .type-badge, .status-badge {
+    border-radius: 999px !important;
+    padding: 3px 8px !important;
+    font-size: .72rem !important;
+  }
+  .notice-success, .warn-box {
+    box-shadow: none !important;
+    border-radius: 8px !important;
+  }
+
   @media (max-width: 760px) {
-    .hero-card { padding: 20px; background: linear-gradient(180deg, #0f2d4a 0%, #16466f 68%, #ffffff 68%); }
-    .hero-title { font-size: 1.55rem; }
+    .hero-card { padding: 22px !important; background: #ffffff !important; }
+    .hero-title { font-size: 1.65rem !important; }
     .hero-meta { margin-top: 20px; }
     .kpi-card, .workflow-card { min-height: auto; }
   }
@@ -550,18 +662,14 @@ with st.sidebar:
     recipient_input = st.text_area(
         "公務信箱",
         key="recipients_text",
-        placeholder="每行一個信箱\npe9875@gov.taipei",
-        height=70,
+        placeholder="每行一個信箱",
+        height=58,
         help="新增收件人時直接換行追加即可。",
     )
 
     st.markdown("---")
     st.markdown("### 📅 排程說明")
-    st.markdown("""
-- ⏰ **每週一 08:00** 自動執行
-- ☁️ 由 **GitHub Actions** 雲端排程
-- 📧 自動寄送至公務信箱
-    """)
+    st.caption("每週一 08:00｜GitHub Actions｜自動寄送")
 
     st.markdown("---")
     st.markdown("### 🟢 系統狀態")
@@ -1524,7 +1632,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
    - 高鐵、主線鐵路或公車新聞最多只能在「候補觀察」中一行點出，而且必須說明「非都市軌道，僅作背景追蹤」；不得計入正式新聞數。
 3. **來源權重**：請優先採納「第一部分：RSS 訂閱源」中實際出現的來源（本次共 {len(rss_sources)} 個，清單如下），這些是本次真正抓取到的媒體，**不要**引用或想像清單以外的媒體名稱：
 {source_names}
-4. **報告排序固定**：正式報告必須依序輸出已勾選類型，順序參照：{report_order}。**未勾選的類型絕對不得出現在章節標題、每則標題、正式新聞、候補觀察、統計或結尾文字**。若只勾選「技術新知」，整份報告只能有「技術新知」類新聞。
+4. **報告排序固定**：正式報告必須依序輸出已勾選類型，順序參照：{report_order}。**未勾選的類型絕對不得出現在章節標題、每則標題、正式新聞、統計或結尾文字**。若只勾選「技術新知」，整份報告只能有「技術新知」類新聞。
 5. **【絕對禁止腦補、嚴格日期查核與來源查核】（違反本條視為報告失敗）**：
    - 每一則新聞的「發布/事件日期」**必須**直接取自原始資料中該則內容本身標註的日期字串（RSS 的「日期：」欄位，或關鍵字搜尋結果摘要中出現的日期）。**禁止**依你自己知識庫中對該事件、公司或專案的既有印象去推測、換算或臆造日期。
    - 若某則原始資料**沒有**明確可辨識的日期，或日期含糊到無法判斷是哪一天，**直接捨棄該則**，不要用「近期」「今年」等模糊字眼帶過，也不要自行補上一個日期。
@@ -1534,7 +1642,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
    - **來源必須是該則事件本身的具體新聞文章連結**：「資料來源」欄位填入的網址，**必須**是原始資料中該則內容自己標註的「連結：」網址，且該網址指向的必須是報導這件事本身的新聞文章頁面。**嚴禁**引用網站首頁、路網圖、票務頁面、會員名錄、活動總覽頁等非新聞頁面來充當來源，也**嚴禁**在原始資料中找不到對應連結時，挪用同一媒體其他頁面的網址頂替。若某則事件在原始資料中沒有對應的具體文章連結，即使內容看起來合理，也必須**整則捨棄**。
    - Google News RSS 的 `news.google.com/rss/articles/...` 連結若搭配原始資料中的「原始來源」或標題來源，可視為可追查來源連結；不要僅因其為 Google News 轉址而剔除。
     - 不得為了湊數引用無具體新聞頁、首頁、社群頁、會員頁、活動首頁或模型記憶。
-6. **數量要求**：本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，請優先納入中信度但來源、日期、都市軌道關聯明確的候選；不要因摘要較短或連結為 Google News 轉址而過度剔除。仍不足時，請另設「候補觀察」區，只收錄原始資料中存在、日期仍在本期範圍內、但信心較低或範圍需追蹤的候選，不得捏造。若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，例如：都市軌道來源不足、日期不明、非捷運/非輕軌、來源不合格。**不得為了湊滿數量，把高鐵、一般鐵路、公車或長途運輸新聞升格為正式新聞。**
+6. **數量要求**：本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，請優先納入中信度但來源、日期、都市軌道關聯明確的候選；不要因摘要較短或連結為 Google News 轉址而過度剔除。若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，例如：都市軌道來源不足、日期不明、非捷運/非輕軌、來源不合格。**不得為了湊滿數量，把高鐵、一般鐵路、公車或長途運輸新聞升格為正式新聞。**
 7. **國家/地區規則**：{scope_instruction}
 8. **內部國際新聞邊界**：台灣、臺灣、Taiwan、Taipei、台北/臺北捷運、北捷、新北、桃園/桃捷、台中、台南、高雄/高捷等國內新聞或國內案例，不得列入正式新聞或候補觀察。這是內部篩選條件，報告中不得呈現本條內容或其原因。
 
@@ -1558,11 +1666,8 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
 * **發布/事件日期**：（原文發布年月日）
 * **國家/地區**：（全球模式仍需標示；規範更新可填公告機構/標準體系）
 * **相關機電系統**：車輛/號誌/通訊/供電/月臺門/機廠設備/系統整合/資安/土建界面
-* **信心水準**：高/中/低
-* **納入理由**：（說明為何對捷運機電系統或機設處有參考價值）
 * **事件摘要**：
   - （列點精要說明，3–5 點）
-* **技術/政策關鍵字**：（英漢對照）
 * **資料來源**：[來源名稱](完整 https:// 網址)
 * **【臺北捷運局啟示】**
   - **可能影響系統**：
@@ -1571,15 +1676,10 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
 
 ---
 
-## 候補觀察（必要時）
-- 僅可列入原始資料中存在、日期在本期範圍內、但信心水準較低或仍需查證的候選；必須標示不足原因。
-- 若候補屬一般鐵路、高鐵、公車或長途運輸，不得包裝成捷運新聞，且必須明確標示「非都市軌道，僅作背景追蹤」。
-
-## 結尾（必填）
+## 報告摘要（必填）
 ---
 📊 **本週統計**：共 N 則 
 ⚠️ **不足 {min_report_items} 則原因**：（若正式新聞少於 {min_report_items} 則必填；若達標可寫「已達標」）
-🔍 **執行搜尋次數**：RSS/地區代理 {len(rss_sources)} 源 + ddgs {search_count} 次精簡搜尋
 ⏰ **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
 """
 
@@ -1601,11 +1701,12 @@ def build_revision_prompt(
 ## 必須修正
 1. 請重寫「完整報告」，不是只補充差額。
 2. 本次只允許下列分類：{allowed_types}。
-3. 未勾選分類不得出現在章節、標題、正文、候補觀察與統計。
+3. 未勾選分類不得出現在章節、標題、正文與統計。
 4. 正式新聞至少 {min_report_items} 則；若仍不足，結尾必須具體說明候選資料不足的原因。
 5. 僅能使用 raw RSS/ddgs 候選資料，不得補腦。
 6. 正式新聞只允許都市捷運/MRT/metro/subway/LRRT/LRT/light rail/tram/AGT/people mover；高鐵、新幹線、台鐵/國鐵、城際/區域/通勤鐵路、貨運鐵路、公車/客運/長途公路運輸不得用來補足正式新聞數。
 7. 若上一版曾納入 ETCS/FRMCS/GSM-R、電池列車、混合動力列車、一般鐵路資產管理、主線事故、bus strike 等非都市軌道題材，請移除正式新聞；除非 raw 明確寫出該事件發生在 metro/subway/light rail/tram 等都市軌道系統。
+8. 不要輸出「信心水準」「納入理由」「技術/政策關鍵字」「候補觀察」「執行搜尋次數」等內部稽核欄位。
 
 ## 上一版報告
 {previous_report}
@@ -1654,18 +1755,26 @@ def markdown_to_html(md: str) -> str:
 
 def markdown_fragment_to_html(md: str) -> str:
     md = compact_report_urls(md)
-    h = escape(md)
-    h = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", h)
-    h = re.sub(r"\[(.+?)\]\((https?://[^\s\)]+)\)", r'<a href="\2" target="_blank">\1</a>', h)
-    lines = []
-    for line in h.splitlines():
-        if line.startswith("- ") or line.startswith("* "):
-            lines.append(f"<li>{line[2:]}</li>")
-        elif not line.strip():
-            lines.append("<br>")
+
+    def _inline(line: str) -> str:
+        h = escape(line)
+        h = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", h)
+        h = re.sub(r"\[(.+?)\]\((https?://[^\s\)]+)\)", r'<a href="\2" target="_blank">\1</a>', h)
+        return h
+
+    rows = []
+    for raw_line in md.splitlines():
+        line = raw_line.strip()
+        if not line or line == "---":
+            rows.append('<div class="report-spacer"></div>')
+            continue
+        if line.startswith(("- ", "* ")):
+            rows.append(f'<div class="report-line list">• {_inline(line[2:].strip())}</div>')
+        elif line.startswith("> "):
+            rows.append(f'<div class="report-line meta">{_inline(line[2:].strip())}</div>')
         else:
-            lines.append(line)
-    return "<br>".join(lines)
+            rows.append(f'<div class="report-line">{_inline(line)}</div>')
+    return "".join(rows)
 
 
 def short_url_label(url: str) -> str:
@@ -1701,13 +1810,57 @@ def compact_report_urls(text: str) -> str:
     return text
 
 
+def strip_internal_report_fields(text: str) -> str:
+    """正式報告隱藏模型稽核欄位；raw debug 仍保留原始候選資料。"""
+    if not text:
+        return text
+
+    lines = text.splitlines()
+    cleaned: list[str] = []
+    skip_candidate_section = False
+    internal_field_pattern = re.compile(
+        r"^\s*[*-]?\s*(?:\*\*)?"
+        r"(信心水準|納入理由|技術/政策關鍵字)"
+        r"(?:\*\*)?\s*[：:].*$"
+    )
+    search_count_pattern = re.compile(r"^\s*(?:🔍\s*)?(?:\*\*)?執行搜尋次數")
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        section_title = re.sub(r"^[#\s]+", "", line).strip()
+
+        if re.match(r"^候補觀察(?:（.*?）)?$", section_title):
+            skip_candidate_section = True
+            continue
+
+        if skip_candidate_section:
+            if section_title.startswith(("報告摘要", "結尾")) or line.startswith(("📊", "⚠️", "⏰")):
+                skip_candidate_section = False
+            else:
+                continue
+
+        if internal_field_pattern.match(line):
+            continue
+        if search_count_pattern.match(line):
+            continue
+        if section_title in {"結尾", "結尾（必填）"}:
+            continue
+
+        cleaned.append(raw_line)
+
+    text = "\n".join(cleaned)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def sanitize_report_text(text: str) -> str:
-    return (
+    text = (
         text.replace("全球（排除台灣）", "全球（安全白名單來源）")
         .replace("全球(排除台灣)", "全球（安全白名單來源）")
         .replace("（排除台灣）", "")
         .replace("(排除台灣)", "")
     )
+    return strip_internal_report_fields(text)
 
 
 def compact_report_line_for_pdf(line: str) -> str:
@@ -1959,14 +2112,16 @@ def markdown_to_pdf_bytes(md: str) -> bytes:
     styles = getSampleStyleSheet()
     for style_name in ("Title", "Heading1", "Heading2", "Heading3", "BodyText"):
         styles[style_name].fontName = cjk_font
-        styles[style_name].leading = max(styles[style_name].leading, 16)
-    styles["BodyText"].fontSize = 10.5
+        styles[style_name].leading = max(styles[style_name].leading, 14)
+    styles["BodyText"].fontSize = 10.2
+    styles["BodyText"].leading = 13.2
+    styles["Heading3"].leading = 14.5
 
     story = []
     for raw_line in md.splitlines():
         line = raw_line.strip()
         if not line or line == "---":
-            story.append(Spacer(1, 8))
+            story.append(Spacer(1, 4))
             continue
         if line.startswith("# "):
             story.append(Paragraph(pdf_rich_text(line[2:], cjk_font, latin_font), styles["Title"]))
@@ -2162,7 +2317,6 @@ if generate_btn or send_btn:
             st.session_state["latest_report"] = report_text
             st.session_state["latest_report_summary"] = {
                 "formal_count": formal_count,
-                "has_candidate_observations": has_candidate_observations(report_text),
                 "has_standards": "規範更新" in report_text,
             }
             progress_bar.empty()
@@ -2173,7 +2327,6 @@ if generate_btn or send_btn:
                 <div class="notice-success">
                   <strong>✅ 報告已完成</strong><br>
                   正式新聞：{formal_count} 則｜
-                  候補觀察：{'有' if summary['has_candidate_observations'] else '無'}｜
                   規範更新：{'包含' if summary['has_standards'] else '未包含'}｜
                   可下載 PDF，也可寄送 Email。
                 </div>
@@ -2196,7 +2349,7 @@ source_statuses = st.session_state.get("latest_source_statuses", [])
 if source_statuses:
     render_source_health_dashboard(source_statuses)
 
-st.markdown('<div class="section-title">分類結果呈現</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">正式週報</div>', unsafe_allow_html=True)
 
 report_to_show = st.session_state.get("latest_report", "")
 if not report_to_show:
@@ -2208,7 +2361,7 @@ if not report_to_show:
 report_to_show = sanitize_report_text(report_to_show)
 
 if report_to_show:
-    tab1, tab2 = st.tabs(["📋 分類卡片", "📝 原始文字"])
+    tab1, tab2 = st.tabs(["正式版面", "Markdown"])
     with tab1:
         render_report_cards(report_to_show)
     with tab2:
