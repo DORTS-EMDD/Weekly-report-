@@ -540,6 +540,36 @@ NON_URBAN_QUERY_EXCLUSIONS = (
     '-Amtrak -Korail -RegioJet -bus -coach -highway'
 )
 
+TECH_NEWS_REQUIRED_TERMS = [
+    "cbtc", "goa4", "driverless", "unattended train operation", "automatic train operation",
+    "automation", "automated", "train control", "signalling", "signaling", "signal system",
+    "rolling stock", "fleet", "new train", "trainset", "vehicle", "platform screen door",
+    "platform doors", "psd", "power supply", "traction power", "substation", "third rail",
+    "overhead line", "communications", "telecom", "4g", "5g", "lte", "radio", "cybersecurity",
+    "data", "monitoring", "condition monitoring", "real-time", "digital", "asset management",
+    "depot", "maintenance", "workshop", "afc", "fare gate", "ticketing", "elevator",
+    "escalator", "system integration", "testing", "commissioning", "trial run",
+    "自動運転", "無人運転", "ワンマン運転", "信号", "ホームドア", "車両", "電力",
+    "変電所", "通信", "保守", "検査", "試験", "システム",
+    "自動駕駛", "無人駕駛", "單人駕駛", "號誌", "信號", "月臺門", "月台門",
+    "車輛", "列車", "供電", "牽引", "變電站", "通訊", "資安", "即時監控",
+    "維修", "機廠", "測試", "試運轉", "系統整合",
+]
+
+TECH_NEWS_SOFT_EXCLUDE_TERMS = [
+    "accident", "derailment", "collision", "fire", "arson", "incident", "strike",
+    "wage", "salary", "union", "fare dispute", "budget overrun", "lawsuit",
+    "ceo", "resignation", "appoints", "appointment", "preview", "ceremony",
+    "anniversary", "mascot", "branding", "pest", "hygiene", "route planning",
+    "network expansion", "line extension", "funding", "procurement scandal",
+    "bus procurement", "electric bus", "policy", "ban",
+    "事故", "脱線", "火災", "放火", "スト", "労組", "賃金", "社長", "退任",
+    "就任", "記念", "ラッピング", "ドラゴンズ", "害虫", "禁止", "バス",
+    "事故", "出軌", "脫軌", "火災", "縱火", "罷工", "工會", "薪資", "票價",
+    "爭議", "執行長", "離職", "任命", "預覽", "開幕", "紀念", "彩繪",
+    "行銷", "害蟲", "禁帶", "禁令", "公車", "電動巴士",
+]
+
 # ── 金鑰狀態 ──────────────────────────────────────────
 api_key    = get_secret("GEMINI_API_KEY")
 gmail_user = get_secret("GMAIL_USER")
@@ -878,16 +908,7 @@ def render_main_dashboard(source_count: int, standards_count: int) -> bool:
     )
 
     st.markdown('<div class="section-title">報告產出</div>', unsafe_allow_html=True)
-    cta_col, cta_note = st.columns([3, 5])
-    generate_clicked = cta_col.button(f"🚀 產生國際捷運 AI {report_period_label}", type="primary", use_container_width=True)
-    cta_note.markdown(
-        """
-        <div class="kpi-note" style="padding-top: .65rem;">
-        國際都市軌道資訊蒐集、AI 摘要與 PDF/Email 輸出集中於同一流程。
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    generate_clicked = st.button(f"🚀 產生國際捷運 AI {report_period_label}", type="primary", use_container_width=True)
 
     st.markdown('<div class="section-title">關鍵指標</div>', unsafe_allow_html=True)
     kpi_items = [
@@ -1109,6 +1130,24 @@ def _is_urban_rail_candidate(text: str, source_name: str = "") -> bool:
     return has_mode or has_operator
 
 
+def _is_tech_news_only_mode() -> bool:
+    return bool(selected_types) and set(selected_types) == {"技術新知"}
+
+
+def _is_technical_news_candidate(text: str, source_name: str = "") -> bool:
+    """只勾技術新知時，排除純事故、政策、人事、行銷或一般工程進度。"""
+    if _is_standards_source(source_name):
+        return True
+
+    topic_text = _strip_source_name_noise(f"{source_name} {text}")
+    has_technical_term = _contains_any_term(topic_text, TECH_NEWS_REQUIRED_TERMS)
+    has_soft_exclude = _contains_any_term(topic_text, TECH_NEWS_SOFT_EXCLUDE_TERMS)
+
+    if has_soft_exclude and not has_technical_term:
+        return False
+    return has_technical_term
+
+
 def _is_allowed_host(host: str) -> bool:
     if not ALLOWED_NEWS_DOMAINS:
         return True
@@ -1235,6 +1274,10 @@ def _items_from_parsed_feed(
             continue
 
         if not _is_urban_rail_candidate(f"{title} {desc} {link} {source_href}", source_name):
+            topic_filtered_count += 1
+            continue
+
+        if _is_tech_news_only_mode() and not _is_technical_news_candidate(f"{title} {desc} {link} {source_href}", source_name):
             topic_filtered_count += 1
             continue
 
@@ -1380,9 +1423,9 @@ def build_search_queries() -> tuple[list[str], set[int]]:
     # 1. 核心通用關鍵字（只查有勾的）
     if "技術新知" in selected_types:
         queries.extend([
-            f"metro subway MRT LRRT LRT light rail automated guideway transit technology {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            f"metro subway CBTC GoA4 driverless platform screen doors {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            f"地下鉄 メトロ 新交通システム 都市鉄道 技術 {today:%Y} -新幹線 -JR -在来線 -高速バス"
+            f"metro subway MRT LRRT LRT light rail automated guideway transit signalling rolling stock power depot technology {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+            f"metro subway CBTC GoA4 driverless platform screen doors communications power supply depot maintenance {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+            f"地下鉄 メトロ 新交通システム 都市鉄道 自動運転 信号 車両 ホームドア 電力 通信 保守 {today:%Y} -新幹線 -JR -在来線 -高速バス"
         ])
     if "重大事故" in selected_types:
         queries.extend([
@@ -1403,7 +1446,7 @@ def build_search_queries() -> tuple[list[str], set[int]]:
     if is_global_scope:
         if "技術新知" in selected_types:
             queries.extend([
-                f"urban rail metro subway light rail rolling stock signalling power supply project {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+                f"urban rail metro subway light rail rolling stock signalling power supply CBTC automation depot {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
                 f"metro subway MRT platform screen doors CBTC communications cybersecurity upgrade {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
                 f"tram LRT LRRT automated depot maintenance system integration {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
             ])
@@ -1435,7 +1478,7 @@ def build_search_queries() -> tuple[list[str], set[int]]:
     for i, region in enumerate(active_regions):
         term = REGION_SEARCH_TERMS.get(region, region)
         if "技術新知" in selected_types:
-            queries.append(f"{term} metro subway MRT LRRT LRT light rail tram upgrade press release {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}")
+            queries.append(f"{term} metro subway MRT LRRT LRT light rail tram CBTC driverless signalling rolling stock power depot maintenance system integration {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}")
 
         # 將事故、政策、爭議合併為一個查詢字串，精簡發送數量
         if any(t in selected_types for t in ["重大事故", "營運政策", "營運爭議"]):
@@ -1472,6 +1515,8 @@ def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -
                         if _contains_taiwan_reference(f"{title} {body} {href}"):
                             continue
                         if not _is_standard_update_query(query) and not _is_urban_rail_candidate(f"{title} {body} {href}"):
+                            continue
+                        if _is_tech_news_only_mode() and not _is_standard_update_query(query) and not _is_technical_news_candidate(f"{title} {body} {href}"):
                             continue
                         is_valid, reason = _is_valid_news_url(href)
                         if not is_valid:
@@ -1620,7 +1665,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
 
 ## 篩選與優先級指示
 1. **新聞類型過濾**：本次報告**只能**包含以下使用者勾選的新聞類型：【{selected_types_str}】。若不屬於這些類型，請直接忽略。
-   - **技術新知**：機電、號誌、車輛、土木等工程技術。
+   - **技術新知**：只收「新聞本身」明確描述都會軌道機電/系統技術、測試、導入或維修方法者，例如車輛、號誌/CBTC/GoA4、通訊、供電、月臺門、AFC/閘門、機廠設備、即時監控、資安、系統整合、試運轉與技術驗證。單純路線規劃、預算、人事、開幕預覽、服務調整、事故、罷工、行銷列車、禁止規定、害蟲防治、公車/電動巴士採購、一般工程進度或沒有技術細節的擴建消息，均不得列為技術新知。
    - **重大事故**：出軌、追撞、火災、嚴重系統當機。
    - **營運政策**：捷運站內安檢新規、乘車規則變動（如禁帶大型鋰電池/滑板車）、安全管理政策。
    - **營運爭議**：罷工、預算超支、票價爭議、合約糾紛、服務品質爭議。
@@ -1633,7 +1678,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
    - 高鐵、主線鐵路或公車新聞最多只能在「候補觀察」中一行點出，而且必須說明「非都市軌道，僅作背景追蹤」；不得計入正式新聞數。
 3. **來源權重**：請優先採納「第一部分：RSS 訂閱源」中實際出現的來源（本次共 {len(rss_sources)} 個，清單如下），這些是本次真正抓取到的媒體，**不要**引用或想像清單以外的媒體名稱：
 {source_names}
-4. **報告排序固定**：正式報告必須依序輸出已勾選類型，順序參照：{report_order}。**未勾選的類型絕對不得出現在章節標題、每則標題、正式新聞、統計或結尾文字**。若只勾選「技術新知」，整份報告只能有「技術新知」類新聞。
+4. **報告排序固定**：正式報告必須依序輸出已勾選類型，順序參照：{report_order}。**未勾選的類型絕對不得出現在章節標題、每則標題、正式新聞、統計或結尾文字**。若只勾選「技術新知」，整份報告只能有「技術新知」類新聞；遇到事故、政策、爭議、勞資、人事、開幕活動、行銷、一般路線規劃或非都市軌道新聞，必須剔除，不得改寫成技術新知。
 5. **【絕對禁止腦補、嚴格日期查核與來源查核】（違反本條視為報告失敗）**：
    - 每一則新聞的「發布/事件日期」**必須**直接取自原始資料中該則內容本身標註的日期字串（RSS 的「日期：」欄位，或關鍵字搜尋結果摘要中出現的日期）。**禁止**依你自己知識庫中對該事件、公司或專案的既有印象去推測、換算或臆造日期。
    - 若某則原始資料**沒有**明確可辨識的日期，或日期含糊到無法判斷是哪一天，**直接捨棄該則**，不要用「近期」「今年」等模糊字眼帶過，也不要自行補上一個日期。
@@ -1643,7 +1688,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
    - **來源必須是該則事件本身的具體新聞文章連結**：「資料來源」欄位填入的網址，**必須**是原始資料中該則內容自己標註的「連結：」網址，且該網址指向的必須是報導這件事本身的新聞文章頁面。**嚴禁**引用網站首頁、路網圖、票務頁面、會員名錄、活動總覽頁等非新聞頁面來充當來源，也**嚴禁**在原始資料中找不到對應連結時，挪用同一媒體其他頁面的網址頂替。若某則事件在原始資料中沒有對應的具體文章連結，即使內容看起來合理，也必須**整則捨棄**。
    - Google News RSS 的 `news.google.com/rss/articles/...` 連結若搭配原始資料中的「原始來源」或標題來源，可視為可追查來源連結；不要僅因其為 Google News 轉址而剔除。
     - 不得為了湊數引用無具體新聞頁、首頁、社群頁、會員頁、活動首頁或模型記憶。
-6. **數量要求**：本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，請優先納入中信度但來源、日期、都市軌道關聯明確的候選；不要因摘要較短或連結為 Google News 轉址而過度剔除。若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，例如：都市軌道來源不足、日期不明、非捷運/非輕軌、來源不合格。**不得為了湊滿數量，把高鐵、一般鐵路、公車或長途運輸新聞升格為正式新聞。**
+6. **數量要求**：本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，請優先納入中信度但來源、日期、都市軌道關聯明確的候選；不要因摘要較短或連結為 Google News 轉址而過度剔除。若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，例如：都市軌道來源不足、日期不明、非捷運/非輕軌、來源不合格。**品質優先於數量；不得為了湊滿數量，把高鐵、一般鐵路、公車、長途運輸、事故、政策、爭議或一般專案消息升格為技術新知。**
 7. **國家/地區規則**：{scope_instruction}
 8. **內部國際新聞邊界**：台灣、臺灣、Taiwan、Taipei、台北/臺北捷運、北捷、新北、桃園/桃捷、台中、台南、高雄/高捷等國內新聞或國內案例，不得列入正式新聞或候補觀察。這是內部篩選條件，報告中不得呈現本條內容或其原因。
 
@@ -1707,7 +1752,8 @@ def build_revision_prompt(
 5. 僅能使用 raw RSS/ddgs 候選資料，不得補腦。
 6. 正式新聞只允許都市捷運/MRT/metro/subway/LRRT/LRT/light rail/tram/AGT/people mover；高鐵、新幹線、台鐵/國鐵、城際/區域/通勤鐵路、貨運鐵路、公車/客運/長途公路運輸不得用來補足正式新聞數。
 7. 若上一版曾納入 ETCS/FRMCS/GSM-R、電池列車、混合動力列車、一般鐵路資產管理、主線事故、bus strike 等非都市軌道題材，請移除正式新聞；除非 raw 明確寫出該事件發生在 metro/subway/light rail/tram 等都市軌道系統。
-8. 不要輸出「信心水準」「納入理由」「技術/政策關鍵字」「候補觀察」「執行搜尋次數」等內部稽核欄位。
+8. 若本次只允許「技術新知」，請移除事故、政策、爭議、勞資、人事、開幕活動、行銷、一般路線規劃、害蟲防治、公車/電動巴士採購，以及未具體描述機電/系統技術的工程進度。
+9. 不要輸出「信心水準」「納入理由」「技術/政策關鍵字」「候補觀察」「執行搜尋次數」等內部稽核欄位。
 
 ## 上一版報告
 {previous_report}
@@ -2363,7 +2409,7 @@ source_statuses = st.session_state.get("latest_source_statuses", [])
 if source_statuses:
     render_source_health_dashboard(source_statuses)
 
-st.markdown('<div class="section-title">正式週報</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="section-title">正式{report_period_label}</div>', unsafe_allow_html=True)
 
 report_to_show = st.session_state.get("latest_report", "")
 if not report_to_show:
@@ -2388,7 +2434,7 @@ if report_to_show:
     with out1:
         if pdf_bytes:
             st.download_button(
-                "📄 下載正式週報 PDF",
+                f"📄 下載正式{report_period_label} PDF",
                 data=pdf_bytes,
                 file_name=f"metro_report_{today.strftime('%Y%m%d')}.pdf",
                 mime="application/pdf",
