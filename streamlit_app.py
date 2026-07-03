@@ -858,9 +858,23 @@ min_report_items = REPORT_TARGET_BY_DAYS.get(lookback_int, 0)
 report_target_display = f"至少 {min_report_items} 則" if target_is_enforced else LONG_TERM_TARGET_LABELS.get(lookback_int, "趨勢回顧")
 report_output_requirement = f"正式報告至少 {min_report_items} 則" if target_is_enforced else f"{report_target_display}，不強制篇數"
 report_quantity_instruction = (
-    f"本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，請優先納入中信度但來源、日期、都市軌道關聯明確的候選；不要因摘要較短或連結為 Google News 轉址而過度剔除。若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，例如：都市軌道來源不足、日期不明、非捷運/非輕軌、來源不合格。**品質優先於數量；不得為了湊滿數量，把高鐵、一般鐵路、公車、長途運輸、事故、政策、爭議或一般專案消息升格為技術新知。**"
+    f"本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。"
+    f"請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，"
+    f"請優先納入中信度但來源、日期、都市軌道關聯明確的候選；"
+    f"不要因摘要較短或連結為 Google News 轉址而過度剔除。"
+    f"若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，"
+    f"例如：都市軌道來源不足、日期不明、非捷運/非輕軌、來源不合格。"
+    f"**品質優先於數量；不得為了湊滿數量，把高鐵、一般鐵路、公車、長途運輸、"
+    f"事故、政策、爭議或一般專案消息升格為技術新知。"
+    f"規範追蹤清單、持續追蹤中、無單一新聞連結的標準項目，"
+    f"不得列入正式規範更新，也不得計入正式新聞數。**"
     if target_is_enforced
-    else f"本期為 {report_period_label}，屬長期趨勢 / 規範追蹤模式，不強制篇數。請以趨勢分析、事故彙整、規範更新追蹤、來源品質與去重為優先；不得為了增加篇數納入低關聯、重複、非都市軌道或來源不合格新聞。若有效候選有限，請在報告摘要說明原因。"
+    else f"本期為 {report_period_label}，屬長期趨勢 / 規範追蹤模式，不強制篇數。"
+         f"請以趨勢分析、事故彙整、真正規範更新、來源品質與去重為優先；"
+         f"不得為了增加篇數納入低關聯、重複、非都市軌道或來源不合格新聞。"
+         f"規範追蹤清單、持續追蹤中、無單一新聞連結的標準項目，"
+         f"不得列入正式規範更新，也不得計入正式新聞數。"
+         f"若有效候選有限，請在報告摘要說明原因。"
 )
 report_shortfall_summary_line = (
     f"**不足 {min_report_items} 則原因**：（僅正式新聞少於 {min_report_items} 則時輸出；若達標，整行不要出現）"
@@ -1265,6 +1279,46 @@ def _is_standard_update_query(query: str) -> bool:
         for standards in STANDARDS_WATCHLIST.values()
         for standard in standards
     )
+def _is_standard_update_candidate(text: str, require_url: bool = True) -> bool:
+    """
+    判斷是否為真正的規範更新。
+    只有「標準編號 + 明確更新動作 + 可查證來源」才算規範更新。
+    單純標準清單、官方首頁、持續追蹤中，不可列入正式週報。
+    """
+    text_raw = text or ""
+    text_lower = text_raw.casefold()
+
+    has_standard = any(
+        standard.casefold() in text_lower
+        for standards in STANDARDS_WATCHLIST.values()
+        for standard in standards
+    )
+
+    update_action_terms = [
+        "new edition", "revision", "amendment", "corrigendum",
+        "draft", "public comment", "published", "withdrawn",
+        "superseded", "revised", "updated",
+        "新版", "新版本", "修訂", "修正", "增補", "勘誤",
+        "草案", "徵詢", "公告", "發布", "撤回", "取代",
+    ]
+
+    tracking_only_terms = [
+        "持續追蹤中", "持續追蹤", "追蹤清單",
+        "標準體系公告", "無單一新聞連結",
+        "standard watchlist", "tracking only",
+        "catalogue", "catalog", "webstore",
+    ]
+
+    has_update_action = any(term.casefold() in text_lower for term in update_action_terms)
+    is_tracking_only = any(term.casefold() in text_lower for term in tracking_only_terms)
+    has_url = re.search(r"https?://", text_raw) is not None
+
+    if is_tracking_only:
+        return False
+    if require_url and not has_url:
+        return False
+
+    return has_standard and has_update_action
 
 
 def _is_urban_rail_candidate(text: str, source_name: str = "") -> bool:
@@ -1425,11 +1479,19 @@ def _items_from_parsed_feed(
         if not title or not _is_recent(pub_str, cutoff):
             continue
 
-        if _contains_taiwan_reference(f"{title} {desc} {link} {source_href}"):
+        candidate_text = f"{title} {desc} {link} {source_href} {pub_str}"
+
+        if _contains_taiwan_reference(candidate_text):
             blocked_count += 1
             continue
 
-        if not _is_urban_rail_candidate(f"{title} {desc} {link} {source_href}", source_name):
+        # 規範更新來源必須是「真正更新」，不能只是標準首頁或追蹤清單
+        if _is_standards_source(source_name):
+            if not pub_str or not _is_standard_update_candidate(candidate_text):
+                topic_filtered_count += 1
+                continue
+
+        if not _is_urban_rail_candidate(candidate_text, source_name):
             topic_filtered_count += 1
             continue
 
@@ -1668,11 +1730,25 @@ def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -
                         title = (r.get("title") or "").strip()
                         if not title:
                             continue
-                        if _contains_taiwan_reference(f"{title} {body} {href}"):
+                        item_date = r.get("date") or r.get("published") or ""
+                        candidate_text = f"{title} {body} {href} {item_date}"
+
+                        if _contains_taiwan_reference(candidate_text):
                             continue
-                        if not _is_standard_update_query(query) and not _is_urban_rail_candidate(f"{title} {body} {href}"):
-                            continue
-                        if _is_tech_news_only_mode() and not _is_standard_update_query(query) and not _is_technical_news_candidate(f"{title} {body} {href}"):
+
+                        # 規範更新查詢必須符合「標準編號 + 更新動作 + 來源 URL」
+                        if _is_standard_update_query(query):
+                            if not item_date or not _is_standard_update_candidate(candidate_text):
+                                continue
+                        else:
+                            if not _is_urban_rail_candidate(candidate_text):
+                                continue
+
+                        if (
+                            _is_tech_news_only_mode()
+                            and not _is_standard_update_query(query)
+                            and not _is_technical_news_candidate(candidate_text)
+                        ):
                             continue
                         is_valid, reason = _is_valid_news_url(href)
                         if not is_valid:
@@ -1681,7 +1757,7 @@ def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -
                             "title": title,
                             "summary": body,
                             "link": href,
-                            "date": r.get("date") or r.get("published") or "日期未知",
+                            "date": item_date or "日期未知",
                         })
                     final_backend = backend
                     final_status = "成功" if result_items else "無結果"
@@ -1788,20 +1864,34 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
     standards_instruction = ""
     if "規範更新" in selected_types:
         standards_instruction = f"""
+    standards_instruction = ""
+    if "規範更新" in selected_types:
+        standards_instruction = f"""
 ## 規範更新特別規則
-1. 只有原始資料中明確出現下列標準編號與公開公告/新聞，才可列入規範更新；不得依模型記憶補寫。
-2. 不可重製、翻譯或摘要標準全文，只能整理公開的版本狀態、公告、摘要與可能影響。
-3. 關鍵字範圍包含：{", ".join(STANDARD_UPDATE_TERMS)}。
-4. 每則規範更新請使用固定格式：
+
+1. 「規範更新」只可列入本期確實發生之標準版本、草案、修訂、勘誤、撤回、取代、公告或公開徵詢事件。
+2. 每一則規範更新必須同時具備以下四項：
+   - 明確標準編號，例如 EN 50126、NFPA 130、IEC 60076。
+   - 明確更新動作，例如 new edition、revision、amendment、corrigendum、draft、public comment、published、withdrawn、superseded。
+   - 明確日期，且日期必須落在本期搜尋期間內。
+   - 可查證的完整來源 URL。
+3. 不可重製、翻譯或摘要標準全文，只能整理公開的版本狀態、公告摘要與可能影響。
+4. 僅出現標準編號、標準名稱、官方首頁、標準體系網站、catalog、webstore，或僅屬「持續追蹤中」者，不得列入正式規範更新。
+5. 不得把 STANDARDS_WATCHLIST 追蹤清單改寫成規範更新新聞。
+6. 不得輸出「持續追蹤中」作為正式規範更新。
+7. 不得輸出「此為標準體系公告，無單一新聞連結」作為正式規範更新。
+8. 規範追蹤清單只能作為系統監測範圍，不得列入正式新聞數量統計。
+9. 若本期沒有符合條件的規範更新，請在「規範更新」章節只寫：
+   「本期未發現符合條件之規範版本更新、修訂草案、公告或徵詢事件。」
+10. 關鍵字範圍包含：{", ".join(STANDARD_UPDATE_TERMS)}。
+
+每則真正規範更新請使用固定格式：
 ### [規範更新] 標準編號：主題
 - **更新狀態**：
 - **涉及風險類別**：
 - **可能影響機電系統**：
 - **對捷運機電規劃/規範之啟示**：
 - **資料來源**：[來源名稱](完整 https:// URL)
-
-規範追蹤清單：
-{chr(10).join("- " + category + "：" + "、".join(standards) for category, standards in STANDARDS_WATCHLIST.items())}
 """
 
     return f"""
@@ -1825,7 +1915,7 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
    - **重大事故**：出軌、追撞、火災、嚴重系統當機。
    - **營運政策**：捷運站內安檢新規、乘車規則變動（如禁帶大型鋰電池/滑板車）、安全管理政策。
    - **營運爭議**：罷工、預算超支、票價爭議、合約糾紛、服務品質爭議。
-   - **規範更新**：標準版本、修訂、勘誤、草案、徵詢、公告、撤回、取代等公開狀態。
+   - **規範更新**：僅限本期確實發生且原始資料可查證的標準版本、修訂、勘誤、草案、徵詢、公告、撤回、取代等公開狀態；單純標準追蹤清單、官方首頁、catalog/webstore 或「持續追蹤中」不得列入。
 2. **最高優先級（只收都會軌道，不以一般鐵路湊數）**：
    - 正式新聞必須直接屬於都市軌道系統：Metro / Subway / Underground / MRT / Metrorail、LRRT / LRT / Light Rail / Tram / Tramway / Streetcar、AGT / Automated Guideway Transit / People Mover、都市單軌或其他明確城市大眾捷運系統。
    - 只有「事件本身」發生於上述系統，或新聞明確寫出技術/設備將用於上述系統時，才可列為正式新聞。不能因為 ETCS、FRMCS、GSM-R、CBTC、車輛、供電、維修、AI、資產管理等技術「理論上可參考」就列入正式新聞。
