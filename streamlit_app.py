@@ -377,6 +377,35 @@ st.markdown("""
     box-shadow: none !important;
     border-radius: 8px !important;
   }
+  [data-testid="stSidebar"] {
+    min-width: 324px !important;
+    max-width: 324px !important;
+  }
+  [data-testid="stSidebar"] > div:first-child {
+    min-width: 324px !important;
+    max-width: 324px !important;
+  }
+  [data-testid="stSidebar"] label,
+  [data-testid="stSidebar"] p,
+  [data-testid="stSidebar"] span {
+    font-size: .9rem !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+    font-size: .98rem !important;
+  }
+  .sidebar-title {
+    font-size: 1.12rem;
+    font-weight: 800;
+    line-height: 1.35;
+    color: #111827;
+    margin: .12rem 0 .08rem;
+  }
+  .sidebar-subtitle {
+    font-size: .78rem;
+    line-height: 1.45;
+    color: #6b7280;
+    margin: 0 0 .55rem;
+  }
   [data-testid="stSidebar"] hr {
     margin: .28rem 0 !important;
   }
@@ -601,8 +630,13 @@ gmail_pass = get_secret("GMAIL_APP_PASS")
 
 # ── 側邊欄 ──────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 🚇 國際捷運 AI 週報")
-    st.caption("臺北市政府捷運工程局｜機電系統設計處")
+    st.markdown(
+        """
+        <div class="sidebar-title">🚇 國際捷運 AI 週報</div>
+        <div class="sidebar-subtitle">臺北市政府捷運工程局｜機電系統設計處</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown("### 📬 收件設定")
     default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
@@ -640,29 +674,40 @@ with st.sidebar:
     if int(lookback_days) in ADVANCED_LOOKBACK_OPTIONS:
         st.info("長期回顧適合趨勢分析、事故彙整與規範更新追蹤；不建議作為一般新聞週報使用，系統將提高去重與來源審查標準。")
 
-    col_t_all, col_t_clear = st.columns(2)
-    if col_t_all.button("全選類型", use_container_width=True):
-        st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
-        st.rerun()
-
-    if col_t_clear.button("清除類型", use_container_width=True):
-        st.session_state["selected_types_state"] = []
-        st.rerun()
-
-    selected_types = st.multiselect(
-        "新聞類型",
-        ADVANCED_TYPES,
-        key="selected_types_state",
-        help="正式報告只會輸出已選類型，並依固定順序排序。",
+    selected_types = []
+    selected_target = REPORT_TARGET_BY_DAYS.get(int(lookback_days))
+    target_summary = f"目標至少 {selected_target} 則" if selected_target else LONG_TERM_TARGET_LABELS.get(int(lookback_days), "趨勢回顧")
+    selected_type_count = sum(
+        1 for t in ADVANCED_TYPES
+        if st.session_state.get(f"type_{t}", t in st.session_state["selected_types_state"])
     )
+    st.markdown("**新聞類型**")
+    st.caption(f"已選 {selected_type_count} 種類型｜{target_summary}")
+    with st.expander("展開選擇新聞類型", expanded=False):
+        col_t_all, col_t_clear = st.columns(2)
+        if col_t_all.button("全選類型", use_container_width=True):
+            st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
+            for t in ADVANCED_TYPES:
+                st.session_state[f"type_{t}"] = True
+            st.rerun()
+
+        if col_t_clear.button("清除類型", use_container_width=True):
+            st.session_state["selected_types_state"] = []
+            for t in ADVANCED_TYPES:
+                st.session_state[f"type_{t}"] = False
+            st.rerun()
+
+        for t in ADVANCED_TYPES:
+            checked = t in st.session_state["selected_types_state"]
+            if st.checkbox(t, value=checked, key=f"type_{t}"):
+                selected_types.append(t)
+
+    st.session_state["selected_types_state"] = selected_types
     if not selected_types:
         st.warning("⚠️ 請至少選擇一種新聞類型。")
 
     standards_enabled = "規範更新" in selected_types
     standard_count = sum(len(v) for v in STANDARDS_WATCHLIST.values())
-    selected_target = REPORT_TARGET_BY_DAYS.get(int(lookback_days))
-    target_summary = f"目標至少 {selected_target} 則" if selected_target else LONG_TERM_TARGET_LABELS.get(int(lookback_days), "趨勢回顧")
-    st.caption(f"已選 {len(selected_types)} 種類型｜{target_summary}")
     if standards_enabled:
         st.caption(f"📚 規範追蹤：已啟用，{standard_count} 項標準")
         with st.expander("查看規範追蹤清單", expanded=False):
