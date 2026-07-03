@@ -8,11 +8,13 @@
 """
 
 import os
+import sys
 import re
 import time
 import random
 import smtplib
 import datetime
+import concurrent.futures
 from io import BytesIO
 from html import escape
 import urllib.request
@@ -25,6 +27,11 @@ from email.mime.application import MIMEApplication
 from ddgs import DDGS
 import requests
 
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 # ── 環境變數（由 GitHub Secrets 注入）────────────────
 MAIAGENT_API_KEY = os.environ["MAIAGENT_API_KEY"]
 MAIAGENT_CHATBOT_ID = os.environ["MAIAGENT_CHATBOT_ID"]
@@ -34,6 +41,12 @@ GMAIL_USER     = os.environ["GMAIL_USER"]
 GMAIL_APP_PASS = os.environ["GMAIL_APP_PASS"]
 RECIPIENTS     = os.environ["RECIPIENTS"]        # 逗號分隔
 NEWS_LOOKBACK_DAYS = int(os.environ.get("NEWS_LOOKBACK_DAYS", "7"))
+MAIAGENT_TIMEOUT_SECONDS = int(os.environ.get("MAIAGENT_TIMEOUT_SECONDS", "180"))
+MAIAGENT_MAX_RSS_CHARS = int(os.environ.get("MAIAGENT_MAX_RSS_CHARS", "45000"))
+MAIAGENT_MAX_DDG_CHARS = int(os.environ.get("MAIAGENT_MAX_DDG_CHARS", "25000"))
+DDGS_MAX_WORKERS = int(os.environ.get("DDGS_MAX_WORKERS", "4"))
+DDGS_MAX_QUERIES = int(os.environ.get("DDGS_MAX_QUERIES", "30"))
+ENABLE_DDGS = os.environ.get("ENABLE_DDGS", "1").strip().lower() not in {"0", "false", "no"}
 
 # GitHub 排程版預設聚焦制度透明、軌道技術成熟且對臺北捷運較有借鏡性的國家/地區。
 ADVANCED_REGIONS = [
@@ -241,99 +254,127 @@ for region in ADVANCED_REGIONS:
 _NEWS_QUERY_INDICES = set(range(13, len(SEARCH_QUERIES) + 1))
 
 
+def _run_single_ddg_query(i: int, query: str, use_news: bool, news_timelimit: str) -> tuple[int, str]:
+    """執行單一 ddgs 查詢（可安全在背景執行緒平行執行）。"""
+    # 隨機抖動起跑時間，避免多執行緒同時擊中 DDGS 觸發瞬間限速
+    time.sleep(random.uniform(0.1, 0.8))
+    result_block = None
+
+    for backend in ["auto", "bing"]:
+        for attempt in range(1, 3):        # 每個後端最多嘗試 2 次
+            try:
+                with DDGS() as ddgs:
+                    if use_news:
+                        results = ddgs.news(
+                            query, max_results=8,
+                            timelimit=news_timelimit, backend=backend
+                        )
+                    else:
+                        results = ddgs.text(
+                            query, max_results=10,
+                            timelimit="m", backend=backend
+                        )
+
+                if results:
+                    lines = [f"【DDG {i}（{backend}）】{query}"]
+                    for r in results:
+                        body = (
+                            r.get("body")
+                            or r.get("excerpt")
+                            or r.get("description")
+                            or ""
+                        )[:300]
+                        href = r.get("href") or r.get("url") or ""
+                        lines.append(
+                            f"  標題：{r.get('title','')}\n"
+                            f"  日期：{r.get('date','')}\n"
+                            f"  摘要：{body}\n"
+                            f"  連結：{href}"
+                        )
+                    result_block = "\n".join(lines)
+                else:
+                    result_block = (
+                        f"【DDG {i}（{backend}）】{query}\n"
+                        f"  （{backend} 無結果）"
+                    )
+                break   # 成功，跳出 attempt 迴圈
+
+            except Exception as exc:
+                err = str(exc)
+                is_rate = any(
+                    k in err for k in
+                    ("Ratelimit", "429", "403", "vqd", "No results")
+                )
+                wait = attempt * 1.0 + random.uniform(0.5, 1.5)
+                time.sleep(wait)
+                if not is_rate:
+                    result_block = (
+                        f"【DDG {i}】{query}\n"
+                        f"  ⚠️ {type(exc).__name__}: {err[:120]}"
+                    )
+                    break   # 非限速錯誤，不切後端
+
+        if result_block and "無結果" not in result_block and "⚠️" not in result_block:
+            break   # 已取得有效結果，無需切後端
+
+    return i, (
+        result_block
+        or f"【DDG {i}】{query}\n  ⚠️ 兩個後端均無法取得結果，已略過"
+    )
+
+
 def run_duckduckgo_searches() -> str:
     """
-    執行基礎關鍵字與先進國家/地區補充搜尋（ddgs v9 多後端）。
+    平行執行基礎關鍵字與先進國家/地區補充搜尋（ddgs v9 多後端）。
     - 技術類：text()  + backend=auto
     - 事故/爭議類：news() + backend=auto
-    - 限速時自動切換後備後端（bing / yahoo），最多重試 3 次
-    - 每次查詢間隔 2~5 秒（隨機），降低觸發限速機率
+    - 限速時自動切換後備後端（bing），最多重試 2 次
+    - 同時最多 6 條併發，兼顧速度與避免被 DDGS 判定為濫用流量
+    - 相較舊版序列執行（56 組查詢逐一等待，最壞情況可能超過 GitHub Actions
+      15 分鐘 timeout 被強制取消），平行化後總時間大幅縮短。
     """
-    total = len(SEARCH_QUERIES)
-    all_blocks: list[str] = []
-    FALLBACK_BACKENDS = ["auto", "bing", "yahoo"]
+    if not ENABLE_DDGS:
+        print("[INFO] DDGS 已由環境變數 ENABLE_DDGS=0 停用")
+        return "【DDGS】本次依設定停用 ddgs 搜尋，僅使用 RSS 來源。"
+
+    active_queries = SEARCH_QUERIES[:max(1, min(DDGS_MAX_QUERIES, len(SEARCH_QUERIES)))]
+    total = len(active_queries)
     news_timelimit = "w" if NEWS_LOOKBACK_DAYS <= 7 else "m"
+    results_map: dict[int, str] = {}
+    max_workers = max(1, min(DDGS_MAX_WORKERS, total))
+    print(f"[INFO] DDG 啟動：{total}/{len(SEARCH_QUERIES)} 組查詢，併發 {max_workers}，timelimit={news_timelimit}")
 
-    for i, query in enumerate(SEARCH_QUERIES, 1):
-        use_news = i in _NEWS_QUERY_INDICES
-        search_label = "新聞搜尋" if use_news else "文字搜尋"
-        print(f"[INFO] DDG {i:02d}/{total}（{search_label}）：{query}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _run_single_ddg_query, i, query, i in _NEWS_QUERY_INDICES, news_timelimit
+            ): i
+            for i, query in enumerate(active_queries, 1)
+        }
+        done_count = 0
+        for future in concurrent.futures.as_completed(futures):
+            i, block = future.result()
+            results_map[i] = block
+            done_count += 1
+            print(f"[INFO] DDG 已完成 {done_count:02d}/{total}")
 
-        result_block = None
-
-        for backend in FALLBACK_BACKENDS:
-            for attempt in range(1, 3):        # 每個後端最多嘗試 2 次
-                try:
-                    with DDGS() as ddgs:
-                        if use_news:
-                            results = ddgs.news(
-                                query, max_results=8,
-                                timelimit=news_timelimit, backend=backend
-                            )
-                        else:
-                            results = ddgs.text(
-                                query, max_results=10,
-                                timelimit="m", backend=backend
-                            )
-
-                    if results:
-                        lines = [f"【DDG {i}（{backend}）】{query}"]
-                        for r in results:
-                            body = (
-                                r.get("body")
-                                or r.get("excerpt")
-                                or r.get("description")
-                                or ""
-                            )[:300]
-                            href = r.get("href") or r.get("url") or ""
-                            lines.append(
-                                f"  標題：{r.get('title','')}\n"
-                                f"  日期：{r.get('date','')}\n"
-                                f"  摘要：{body}\n"
-                                f"  連結：{href}"
-                            )
-                        result_block = "\n".join(lines)
-                    else:
-                        result_block = (
-                            f"【DDG {i}（{backend}）】{query}\n"
-                            f"  （{backend} 無結果）"
-                        )
-                    break   # 成功，跳出 attempt 迴圈
-
-                except Exception as exc:
-                    err = str(exc)
-                    is_rate = any(
-                        k in err for k in
-                        ("Ratelimit", "429", "403", "vqd", "No results")
-                    )
-                    wait = (2 ** attempt) * 3 + random.uniform(1, 4)
-                    print(
-                        f"[WARN] DDG {i} backend={backend} attempt={attempt} "
-                        f"→ {'限速' if is_rate else '錯誤'}，等待 {wait:.1f}s"
-                    )
-                    time.sleep(wait)
-                    if not is_rate:
-                        result_block = (
-                            f"【DDG {i}】{query}\n"
-                            f"  ⚠️ {type(exc).__name__}: {err[:120]}"
-                        )
-                        break   # 非限速錯誤，不切後端
-
-            if result_block and "無結果" not in result_block and "⚠️" not in result_block:
-                break   # 已取得有效結果，無需切後端
-
-        all_blocks.append(
-            result_block
-            or f"【DDG {i}】{query}\n  ⚠️ 三個後端均無法取得結果，已略過"
-        )
-
-        # 每次搜尋後隨機等待 2~5 秒（降低累積限速風險）
-        time.sleep(random.uniform(2.0, 5.0))
-
-    return "\n\n".join(all_blocks)
+    return "\n\n".join(results_map[i] for i in sorted(results_map))
 
 
 # ─────────────────────────────────────────────────────
+def _limit_chars(text: str, max_chars: int, label: str) -> str:
+    """避免一次送進 MaiAgent 的 prompt 過長導致 GitHub Actions 卡住或 API 逾時。"""
+    text = text or ""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    head = text[: max_chars // 2]
+    tail = text[- max_chars // 2 :]
+    return (
+        f"{head}\n\n【系統提示：{label} 原始資料共 {len(text):,} 字元，"
+        f"為避免雲端 API 逾時，已截取前後各半，保留代表性候選。】\n\n{tail}"
+    )
+
+
 def build_prompt(rss_results: str, ddg_results: str) -> str:
     weekday_zh = ["一","二","三","四","五","六","日"][today.weekday()]
     return f"""
@@ -478,19 +519,26 @@ def call_maiagent_cloud(prompt: str) -> str:
     for url in endpoints:
         for payload in payloads:
             try:
-                response = requests.post(url, headers=headers, json=payload, timeout=240)
-                if response.status_code in (400, 404, 422):
-                    last_error = RuntimeError(f"MaiAgent API 回應 {response.status_code}: {response.text[:500]}")
-                    continue
-                response.raise_for_status()
-                try:
-                    data = response.json()
-                except ValueError:
-                    return response.text.strip()
-                return _extract_maiagent_text(data)
+                print(f"[INFO] 送出 MaiAgent API：timeout={MAIAGENT_TIMEOUT_SECONDS}s，endpoint={url}")
+                response = requests.post(url, headers=headers, json=payload, timeout=MAIAGENT_TIMEOUT_SECONDS)
+            except requests.exceptions.Timeout as exc:
+                raise RuntimeError(
+                    f"MaiAgent API 超過 {MAIAGENT_TIMEOUT_SECONDS}s 未回應；"
+                    "請降低 DDGS_MAX_QUERIES / MAIAGENT_MAX_DDG_CHARS，或提高 MAIAGENT_TIMEOUT_SECONDS。"
+                ) from exc
             except Exception as exc:
                 last_error = exc
                 continue
+
+            if response.status_code in (400, 404, 422):
+                last_error = RuntimeError(f"MaiAgent API 回應 {response.status_code}: {response.text[:500]}")
+                continue
+            response.raise_for_status()
+            try:
+                data = response.json()
+            except ValueError:
+                return response.text.strip()
+            return _extract_maiagent_text(data)
 
     raise RuntimeError(f"MaiAgent API 呼叫失敗：{last_error}")
 
@@ -511,7 +559,10 @@ def generate_report() -> str:
 
     # Step 3：MaiAgent 雲端 API 分析整理
     print("\n[INFO] ── Step 3：MaiAgent 雲端 API 分析整理 ──")
-    prompt = build_prompt(rss_results, ddg_results)
+    rss_for_prompt = _limit_chars(rss_results, MAIAGENT_MAX_RSS_CHARS, "RSS")
+    ddg_for_prompt = _limit_chars(ddg_results, MAIAGENT_MAX_DDG_CHARS, "DDGS")
+    prompt = build_prompt(rss_for_prompt, ddg_for_prompt)
+    print(f"[INFO] Prompt 資料量：約 {len(prompt):,} 字元（RSS上限 {MAIAGENT_MAX_RSS_CHARS:,} / DDGS上限 {MAIAGENT_MAX_DDG_CHARS:,}）")
     return call_maiagent_cloud(prompt)
 
 
@@ -647,7 +698,8 @@ def main():
     print(f"  日期：{today.strftime('%Y年%m月%d日')}")
     print(f"  AI：{AI_PROVIDER_LABEL}")
     print(f"  新聞天數：{NEWS_LOOKBACK_DAYS} 天")
-    print(f"  搜尋：RSS {len(RSS_SOURCES)} 源 + ddgs {len(SEARCH_QUERIES)} 次")
+    print(f"  MaiAgent timeout：{MAIAGENT_TIMEOUT_SECONDS}s")
+    print(f"  搜尋：RSS {len(RSS_SOURCES)} 源 + ddgs 最多 {min(DDGS_MAX_QUERIES, len(SEARCH_QUERIES))}/{len(SEARCH_QUERIES)} 次")
     print("=" * 55)
 
     report = generate_report()
