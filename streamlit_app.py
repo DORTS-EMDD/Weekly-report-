@@ -215,6 +215,11 @@ st.markdown("""
   }
   .report-card h4 { color: #102f4e; margin: 8px 0 10px; font-size: 1.08rem; line-height: 1.45; }
   .report-card-body { color: #334155; font-size: .94rem; line-height: 1.75; }
+  .report-summary-card {
+    background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px;
+    padding: 12px 14px; margin: 10px 0 16px;
+  }
+  .report-summary-card .report-card-body { line-height: 1.45; }
   .type-badge, .status-badge {
     display: inline-block; border-radius: 999px; padding: 4px 10px;
     font-size: .78rem; font-weight: 800; margin-right: 6px;
@@ -371,6 +376,22 @@ st.markdown("""
   .notice-success, .warn-box {
     box-shadow: none !important;
     border-radius: 8px !important;
+  }
+  [data-testid="stSidebar"] hr {
+    margin: .28rem 0 !important;
+  }
+  [data-testid="stSidebar"] h3 {
+    margin: .42rem 0 .12rem !important;
+  }
+  [data-testid="stSidebar"] [data-testid="stExpander"] {
+    margin-bottom: .35rem !important;
+  }
+  [data-testid="stSidebar"] .stButton button {
+    min-height: 2.2rem !important;
+    padding: .25rem .55rem !important;
+  }
+  [data-testid="stSidebar"] textarea {
+    min-height: 52px !important;
   }
 
   @media (max-width: 760px) {
@@ -581,6 +602,20 @@ with st.sidebar:
     st.caption("臺北市政府捷運工程局｜機電系統設計處")
     st.markdown("---")
 
+    st.markdown("### 📬 收件設定")
+    default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
+    if "recipients_text" not in st.session_state:
+        st.session_state["recipients_text"] = default_recipients
+
+    recipient_input = st.text_area(
+        "收件信箱",
+        key="recipients_text",
+        placeholder="每行一個 Email",
+        height=52,
+        help="需要新增收件人時，直接換行輸入。",
+    )
+    st.markdown("---")
+
     st.markdown("### 📑 新聞類型篩選")
     if "selected_types_state" not in st.session_state:
         st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
@@ -684,20 +719,6 @@ with st.sidebar:
             index=0,
             label_visibility="collapsed",
         )
-
-    st.markdown("---")
-    st.markdown("### 📬 收件設定")
-    default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
-    if "recipients_text" not in st.session_state:
-        st.session_state["recipients_text"] = default_recipients
-
-    recipient_input = st.text_area(
-        "收件人 Email",
-        key="recipients_text",
-        placeholder="每行一個信箱",
-        height=58,
-        help="新增收件人時直接換行追加即可。",
-    )
 
     st.markdown("---")
     st.markdown("### 📅 排程說明")
@@ -2053,10 +2074,38 @@ def has_candidate_observations(report_md: str) -> bool:
     return "候補觀察" in report_md and not re.search(r"候補觀察[^\n]*\n\s*(?:無|本期無)", report_md)
 
 
+def split_report_summary(report_md: str) -> tuple[str, str]:
+    match = re.search(r"(?m)^##\s*報告摘要.*$", report_md)
+    if not match:
+        return report_md.strip(), ""
+    main_report = report_md[:match.start()].strip()
+    summary = report_md[match.end():].strip()
+    summary = re.sub(r"(?m)^---\s*$", "", summary).strip()
+    return main_report, summary
+
+
+def trim_report_card_body(body: str) -> str:
+    body = re.split(r"(?m)^##\s+", body, maxsplit=1)[0]
+    body = re.sub(r"(?m)^---\s*$", "", body)
+    body = re.sub(r"\n{3,}", "\n\n", body)
+    return body.strip()
+
+
 def render_report_cards(report_md: str) -> None:
-    parts = re.split(r"(?m)^###\s+", report_md)
+    main_report, summary = split_report_summary(report_md)
+    parts = re.split(r"(?m)^###\s+", main_report)
     if len(parts) <= 1:
-        st.markdown(compact_report_urls(report_md))
+        st.markdown(compact_report_urls(main_report))
+        if summary:
+            st.markdown(
+                f"""
+                <div class="section-title">報告摘要</div>
+                <div class="report-summary-card">
+                  <div class="report-card-body">{markdown_fragment_to_html(summary)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         return
 
     intro = parts[0].strip()
@@ -2068,7 +2117,9 @@ def render_report_cards(report_md: str) -> None:
             continue
         lines = part.splitlines()
         heading = lines[0].strip()
-        body = "\n".join(lines[1:]).strip()
+        if re.sub(r"^[#\s]+", "", heading).strip().startswith(("報告摘要", "候補觀察")):
+            continue
+        body = trim_report_card_body("\n".join(lines[1:]).strip())
         category = detect_category(heading)
         st.markdown(
             f"""
@@ -2076,6 +2127,17 @@ def render_report_cards(report_md: str) -> None:
               <span class="type-badge {category_badge_class(category)}">{escape(category)}</span>
               <h4>{escape(heading)}</h4>
               <div class="report-card-body">{markdown_fragment_to_html(body)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if summary:
+        st.markdown(
+            f"""
+            <div class="section-title">報告摘要</div>
+            <div class="report-summary-card">
+              <div class="report-card-body">{markdown_fragment_to_html(summary)}</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -2437,7 +2499,7 @@ if report_to_show:
                 f"📄 下載正式{report_period_label} PDF",
                 data=pdf_bytes,
                 file_name=f"metro_report_{today.strftime('%Y%m%d')}.pdf",
-                mime="application/pdf",
+                mime="application/octet-stream",
                 use_container_width=True,
             )
         else:
@@ -2448,7 +2510,7 @@ if report_to_show:
                 "🧾 下載原始資料 PDF",
                 data=raw_pdf_bytes,
                 file_name=f"raw_search_data_{today.strftime('%Y%m%d')}.pdf",
-                mime="application/pdf",
+                mime="application/octet-stream",
                 use_container_width=True,
             )
         else:
