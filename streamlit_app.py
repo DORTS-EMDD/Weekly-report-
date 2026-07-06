@@ -9,6 +9,7 @@
 import os
 import re
 import json
+import hashlib
 import time
 import random
 import difflib
@@ -17,6 +18,7 @@ import smtplib
 import concurrent.futures
 from io import BytesIO
 from html import escape
+from pathlib import Path
 import urllib.parse
 from urllib.parse import urlparse, urlunparse, parse_qs
 from email.utils import parsedate_to_datetime
@@ -155,6 +157,9 @@ st.markdown("""
     background-color: #1d5f8f !important;
     color: white !important;
     border-color: rgba(255,255,255,0.35) !important;
+  }
+  [data-testid="InputInstructions"] {
+    display: none !important;
   }
 
   .hero-card {
@@ -483,10 +488,40 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+def get_app_source_hash() -> str:
+    try:
+        return hashlib.sha1(Path(__file__).read_bytes()).hexdigest()
+    except Exception:
+        return "unknown"
+
+
+def clear_old_report_state() -> None:
+    keys_to_clear = [
+        "latest_report_md", "latest_report_html", "latest_pdf", "latest_raw_pdf",
+        "latest_raw_data", "latest_stats", "latest_candidates",
+        "latest_selected_candidates", "latest_journal_candidates",
+        "latest_source_health", "latest_prompt", "latest_response",
+        "report_generated", "email_sent", "last_run_result",
+        "latest_report", "latest_report_summary", "latest_report_stats",
+        "latest_debug_info", "latest_rss_raw", "latest_ddg_raw",
+        "latest_source_statuses",
+    ]
+    for key in keys_to_clear:
+        st.session_state.pop(key, None)
+
+
+current_app_hash = get_app_source_hash()
+previous_app_hash = st.session_state.get("_app_source_hash")
+if previous_app_hash and previous_app_hash != current_app_hash:
+    clear_old_report_state()
+st.session_state["_app_source_hash"] = current_app_hash
+
 # ── 日期與常數 ──────────────────────────────────────────────
 today = datetime.date.today()
 
 ADVANCED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議", "規範更新"]
+DEFAULT_SELECTED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議"]
 MIN_REPORT_ITEMS = 15
 MAX_ITEMS_PER_SOURCE = 25
 DDGS_MAX_RESULTS = 25
@@ -705,6 +740,17 @@ LOW_QUALITY_CONTENT_TERMS = [
     "一般旅遊", "旅遊攻略", "景點", "飯店", "酒店",
 ]
 
+LOW_INFORMATION_PAGE_TERMS = [
+    "home", "homepage", "topic page", "archive", "category", "service page",
+    "portal", "入口", "首頁", "分類頁", "服務頁", "旅客資訊", "活動資訊",
+]
+
+LOW_INFORMATION_PATH_MARKERS = [
+    "/topic", "/topics", "/archive", "/archives", "/category", "/categories",
+    "/tag/", "/tags/", "/services", "/service", "/customer", "/passenger",
+    "/mobile", "/app", "/apps",
+]
+
 JOURNAL_PRECISION_QUERIES = [
     '"urban rail transit" "predictive maintenance" "condition monitoring"',
     '"metro system" "fault diagnosis" "machine learning"',
@@ -781,7 +827,14 @@ with st.sidebar:
 
     st.markdown("### 📋 報告設定")
     if "selected_types_state" not in st.session_state:
-        st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
+        st.session_state["selected_types_state"] = DEFAULT_SELECTED_TYPES.copy()
+    if (
+        not st.session_state.get("_default_types_without_standards_applied")
+        and st.session_state.get("selected_types_state") == ADVANCED_TYPES
+    ):
+        st.session_state["selected_types_state"] = DEFAULT_SELECTED_TYPES.copy()
+        st.session_state["type_規範更新"] = False
+    st.session_state["_default_types_without_standards_applied"] = True
     if "long_term_mode" not in st.session_state:
         st.session_state["long_term_mode"] = False
     if "lookback_days_state" not in st.session_state:
@@ -912,8 +965,6 @@ with st.sidebar:
             key="long_term_mode",
             help="啟用後，報告期間可選 90、180、365 天。",
         )
-        if not standards_enabled:
-            st.caption("規範更新未勾選；目前僅執行一般新聞追蹤。")
 
         st.markdown("**排程說明**")
         st.caption("GitHub Actions 排程版負責固定自動寄送核心週報；實際時間依 weekly.yml 設定。")
@@ -1177,29 +1228,14 @@ def render_main_dashboard(source_count: int, standards_count: int):
     progress_placeholder = st.empty()
     status_placeholder = st.empty()
 
-    kpi_items = [
-        ("📑", len(selected_types), "追蹤主題數", "固定依報告排序輸出"),
-        ("🌏", selected_regions_note, "預設/選取國家數", "指定模式套用國家邊界"),
-        ("🗓️", f"{lookback_days} 天", f"新聞搜尋期間（{report_period_label}）", date_range),
-        ("📚", standards_count if standards_enabled else "未啟用", "規範追蹤數量", "勾選規範更新後啟用"),
-        ("🧪", "啟用" if include_research_supplement else "未啟用", "技術研究補充", "只進入第六章，不列入新聞統計"),
-    ]
-    compact_standards = "規範追蹤啟用" if standards_enabled else "規範追蹤未啟用"
-    compact_kpi_items = [
-        f"📑 追蹤 {len(selected_types)} 類型",
-        f"🌏 {selected_regions_note}",
-        f"🗓️ {lookback_days} 天{report_period_label}",
-        f"📚 {compact_standards}",
-        f"🧪 研究補充 {'啟用' if include_research_supplement else '未啟用'}",
-    ]
-    st.markdown(
-        "<div class=\"compact-kpi-bar\">"
-        + "".join(f"<span class=\"compact-kpi-item\">{escape(str(item))}</span>" for item in compact_kpi_items)
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-
     if show_developer_info:
+        kpi_items = [
+            ("📑", len(selected_types), "追蹤主題數", "固定依報告排序輸出"),
+            ("🌏", selected_regions_note, "預設/選取國家數", "指定模式套用國家邊界"),
+            ("🗓️", f"{lookback_days} 天", f"新聞搜尋期間（{report_period_label}）", date_range),
+            ("📚", standards_count if standards_enabled else "未啟用", "規範追蹤數量", "勾選規範更新後啟用"),
+            ("🧪", "啟用" if include_research_supplement else "未啟用", "技術研究補充", "只進入第六章，不列入新聞統計"),
+        ]
         with st.expander("查看詳細關鍵指標", expanded=False):
             detail_cols = st.columns(3)
             for idx, (icon, num, label, note) in enumerate(kpi_items):
@@ -1212,24 +1248,24 @@ def render_main_dashboard(source_count: int, standards_count: int):
                     unsafe_allow_html=True,
                 )
 
-    workflow_items = [
-        ("01", "蒐集候選資料", "RSS / Google News / ddgs"),
-        ("02", "去重與初步篩選", "排除重複、舊聞與低品質來源"),
-        ("03", "MaiAgent 選題分析", "只看精簡候選清單"),
-        ("04", "產生正式週報", "只送入選新聞與必要補充"),
-        ("05", "輸出與寄送", "下載 PDF 或依勾選寄送"),
-    ]
-    with st.expander("查看系統流程", expanded=False):
-        wcols = st.columns(5)
-        for idx, (step, title, desc) in enumerate(workflow_items):
-            wcols[idx].markdown(
-                f'<div class="workflow-card">'
-                f'<div class="workflow-step">STEP {escape(step)}</div>'
-                f'<div class="workflow-title">{escape(title)}</div>'
-                f'<div class="workflow-desc">{escape(desc)}</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+        workflow_items = [
+            ("01", "蒐集候選資料", "RSS / Google News / ddgs"),
+            ("02", "去重與初步篩選", "排除重複、舊聞與低品質來源"),
+            ("03", "MaiAgent 選題分析", "只看精簡候選清單"),
+            ("04", "產生正式週報", "只送入選新聞與必要補充"),
+            ("05", "輸出與寄送", "下載 PDF 或依勾選寄送"),
+        ]
+        with st.expander("查看系統流程", expanded=False):
+            wcols = st.columns(5)
+            for idx, (step, title, desc) in enumerate(workflow_items):
+                wcols[idx].markdown(
+                    f'<div class="workflow-card">'
+                    f'<div class="workflow-step">STEP {escape(step)}</div>'
+                    f'<div class="workflow-title">{escape(title)}</div>'
+                    f'<div class="workflow-desc">{escape(desc)}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
     return generate_clicked, send_after_generate, progress_placeholder, status_placeholder
 
@@ -2182,6 +2218,7 @@ def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], dict[str, int
     seen_title_keys: set[str] = set()
     title_keys: list[str] = []
     deduped: list[dict] = []
+    similarity_threshold = 0.84 if int(lookback_days) in ADVANCED_LOOKBACK_OPTIONS else 0.90
 
     sorted_candidates = sorted(
         candidates,
@@ -2201,7 +2238,7 @@ def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], dict[str, int
         if title_key and title_key in seen_title_keys:
             stats["標題正規化重複"] += 1
             continue
-        if title_key and any(difflib.SequenceMatcher(None, title_key, existing).ratio() >= 0.90 for existing in title_keys):
+        if title_key and any(difflib.SequenceMatcher(None, title_key, existing).ratio() >= similarity_threshold for existing in title_keys):
             stats["標題相似重複"] += 1
             continue
         if url_key:
@@ -2243,6 +2280,19 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
 
     if any(term.casefold() in text_lower for term in LOW_QUALITY_CONTENT_TERMS):
         return False, "旅遊/SEO/內容農場"
+
+    parsed_url = urlparse(url)
+    path_lower = (parsed_url.path or "").casefold()
+    has_entry_path = any(marker in path_lower for marker in LOW_INFORMATION_PATH_MARKERS)
+    has_entry_terms = any(term.casefold() in text_lower for term in LOW_INFORMATION_PAGE_TERMS)
+    has_technical_detail = _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS)
+    has_dispute_detail = _contains_any_term(text, [
+        "strike", "fare dispute", "contract dispute", "lawsuit", "delay compensation",
+        "cost overrun", "budget overrun", "service disruption", "public backlash",
+        "罷工", "勞資爭議", "票價爭議", "合約糾紛", "工程延宕", "成本增加", "服務中斷", "民怨",
+    ])
+    if (has_entry_path or has_entry_terms) and not (has_technical_detail or has_dispute_detail or _is_standard_update_candidate(text, require_url=True)):
+        return False, "入口頁/服務頁/分類頁且缺少明確事件"
 
     looks_like_standard = _is_standards_source(source) or any(
         standard.casefold() in text_lower
@@ -3237,6 +3287,13 @@ def register_pdf_fonts() -> tuple[str, str]:
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
     from reportlab.pdfbase.ttfonts import TTFont
 
+    try:
+        if not pdfmetrics.getFont("MSung-Light"):
+            pass
+    except Exception:
+        pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
+    return "MSung-Light", "MSung-Light"
+
     def _is_registered(font_name: str) -> bool:
         try:
             pdfmetrics.getFont(font_name)
@@ -3582,7 +3639,9 @@ def _soft_wrap_long_tokens(text: str, chunk: int = 45) -> str:
     words = text.split(" ")
     out = []
     for w in words:
-        if len(w) > chunk:
+        has_cjk = re.search(r"[\u3400-\u9fff]", w) is not None
+        looks_like_url_or_ascii_token = re.search(r"https?://|[A-Za-z0-9]{24,}", w) is not None
+        if len(w) > chunk and looks_like_url_or_ascii_token and not has_cjk:
             w = "\u200b".join(w[i:i + chunk] for i in range(0, len(w), chunk))
         out.append(w)
     return " ".join(out)
