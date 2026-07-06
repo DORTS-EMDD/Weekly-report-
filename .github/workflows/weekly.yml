@@ -11,7 +11,7 @@ on:
       news_lookback_days:
         description: '新聞搜尋天數（排程預設 30 天；技術新知也會納入近 30 天）'
         required: false
-        default: '30'
+        default: '7'
         type: choice
         options:
           - '7'
@@ -44,14 +44,18 @@ jobs:
           GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           RECIPIENTS:     ${{ secrets.RECIPIENTS }}
-          NEWS_LOOKBACK_DAYS: ${{ github.event.inputs.news_lookback_days || '30' }}
+          NEWS_LOOKBACK_DAYS: ${{ github.event.inputs.news_lookback_days || '7' }}
+          MAIAGENT_TIMEOUT_SECONDS: 300
+          DDGS_MAX_QUERIES: 20
+          MAIAGENT_MAX_DDG_CHARS: 15000
+          MAIAGENT_MAX_RSS_CHARS: 15000
         run: |
           # 遇到雲端 API 暫時性失敗時自動重試，最多 3 次，間隔加倍
           MAX_RETRY=3
           WAIT=60
           for i in $(seq 1 $MAX_RETRY); do
             echo "▶ 第 $i 次嘗試..."
-            python main.py && break
+            python -u main.py && break
             EXIT=$?
             if [ $i -lt $MAX_RETRY ]; then
               echo "⚠️ 失敗（exit $EXIT），等待 ${WAIT}s 後重試..."
