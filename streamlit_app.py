@@ -2328,8 +2328,8 @@ def build_selection_prompt(candidates: list[dict]) -> str:
 - 規範更新必須同時有明確標準編號、更新動作、日期、URL，且屬近期公告；watchlist、介紹頁或標準體系首頁不得列入。
 - 仍須排除 high-speed rail、intercity rail、freight、Amtrak、Shinkansen、TGV、ICE、bus、highway、旅遊/飯店/SEO 內容與臺灣新聞。
 - 不得為了湊數納入非都市軌道案例。
-- 營運爭議必須與捷運營運、系統服務、票價、罷工、工程延宕、系統轉換、重大服務中斷、安全管理或機電系統有關；單純人員操守、遺失物、治安或個別乘客糾紛，除非造成重大營運影響，否則不要入選。
-- 技術新知優先選擇含明確機電技術、系統升級、維修策略、資安、號誌、供電、通訊、車站設備、測試驗證或能源效率內容者；單純通車、開幕、新車投入服務，若缺少技術細節，應優先歸入營運政策或降權。
+- 營運爭議必須具備明確爭議性，例如罷工、票價爭議、工程延宕、合約糾紛、重大服務中斷引發民怨、系統轉換困難或安全管理爭議；單純延誤證明、週末服務調整、區間無服務公告、一般旅客資訊更新，不得列為營運爭議。若沒有重大影響或原因不明，請排除或降權。
+- 技術新知優先選擇含明確機電技術、系統升級、號誌、通訊、供電、車輛設備、月臺門、維修策略、資安、測試驗證、能源效率或系統整合內容者；單純新車上線、車站啟用、無障礙改善、服務公告，若缺少技術細節，應降權或歸入營運政策。
 
 ## 請只回傳 JSON
 格式如下，不要加 Markdown 說明：
@@ -2716,8 +2716,8 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 - 資料來源優先使用入選新聞的 url 欄位；該欄位已優先放入原始來源 URL。只有沒有原始來源時，才可使用 google_news_proxy_url 或 Google News 代理連結。
 - 若摘要不足，只能寫標題與摘要能確認的事實；推論只能放在「臺北捷運局啟示」並寫成建議。
 - A 級來源優先呈現；C 級來源若被納入，請避免把它寫成技術新知主要依據。
-- 營運爭議需與捷運營運、系統服務、票價、罷工、工程延宕、系統轉換、重大服務中斷、安全管理或機電系統有關；單純人員操守、遺失物、治安或個別乘客糾紛，除非造成重大營運影響，否則不得列入。
-- 技術新知優先選擇含明確機電技術、系統升級、維修策略、資安、號誌、供電、通訊、車站設備、測試驗證或能源效率內容者；單純通車、開幕、新車投入服務，若缺少技術細節，應優先歸入營運政策或降權。
+- 營運爭議需具備明確爭議性，例如罷工、票價爭議、工程延宕、合約糾紛、重大服務中斷引發民怨、系統轉換困難或安全管理爭議；單純延誤證明、週末服務調整、區間無服務公告、一般旅客資訊更新，不得列為營運爭議。若沒有重大影響或原因不明，請排除或降權。
+- 技術新知優先選擇含明確機電技術、系統升級、號誌、通訊、供電、車輛設備、月臺門、維修策略、資安、測試驗證、能源效率或系統整合內容者；單純新車上線、車站啟用、無障礙改善、服務公告，若缺少技術細節，應降權或歸入營運政策。
 {journal_section_rule}
 
 ## 報告最後必須保留統計資訊
@@ -3050,8 +3050,42 @@ def short_url_label(url: str) -> str:
     return f"來源連結（{host}）"
 
 
+def _extract_complete_url(text: str) -> str:
+    match = re.search(r"https?://[^\s\)\]）＞>，,；;。]+", text or "")
+    if not match:
+        return ""
+    return match.group(0).rstrip("。；;,，)")
+
+
+def _extract_domain_hint(text: str) -> str:
+    text = text or ""
+    url = _extract_complete_url(text)
+    if url:
+        return _domain_from_url(url)
+    match = re.search(r"\b(?:[a-z0-9-]+\.)+(?:com|org|net|gov|edu|info|co|jp|kr|sg|hk|uk|fr|de|au|ca|tw)\b", text, flags=re.IGNORECASE)
+    return match.group(0).lower() if match else ""
+
+
+def normalize_source_line(line: str) -> str:
+    if "資料來源" not in (line or ""):
+        return line
+    prefix = line.split("資料來源", 1)[0] + "資料來源："
+    url = _extract_complete_url(line)
+    if url:
+        return f"{prefix}{url}"
+    domain = _extract_domain_hint(line)
+    if domain:
+        return f"{prefix}{domain}"
+    return f"{prefix}原始候選資料未提供完整 URL"
+
+
+def normalize_report_source_lines(text: str) -> str:
+    return "\n".join(normalize_source_line(line) for line in (text or "").splitlines())
+
+
 def compact_report_urls(text: str) -> str:
     """正式報告只顯示短連結文字；完整 URL 保留在 raw debug。"""
+    text = normalize_report_source_lines(text)
     placeholders: list[str] = []
 
     def _replace_markdown_link(match: re.Match) -> str:
@@ -3142,17 +3176,25 @@ def sanitize_report_text(text: str) -> str:
     if not include_research_supplement:
         text = re.sub(r"(?ms)^六、技術研究補充.*?(?=^📊|^⏰|\Z)", "", text)
         text = re.sub(r"(?m)^.*技術研究補充.*$", "", text)
+    text = normalize_report_source_lines(text)
     return strip_internal_report_fields(text)
 
 
 def compact_report_line_for_pdf(line: str) -> str:
+    line = normalize_source_line(line)
     line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
     line = re.sub(
         r"\[(.+?)\]\((https?://[^\)]+)\)",
-        lambda m: f"{m.group(1)}（{short_url_label(m.group(2))}）",
+        lambda m: f"{m.group(1)}（{m.group(2)}）",
         line,
     )
-    return compact_report_urls(line)
+    line = re.sub(r"https?://[^\s\)\]]+", lambda m: _extract_complete_url(m.group(0)) or m.group(0), line)
+    return line
+
+
+def display_report_markdown(md: str) -> str:
+    display_md = compact_report_urls(md)
+    return re.sub(r"(?m)^#\s+(.+)$", r"### \1", display_md, count=1)
 
 
 def register_pdf_fonts() -> tuple[str, str]:
@@ -3215,26 +3257,16 @@ def register_pdf_fonts() -> tuple[str, str]:
 
 
 def pdf_rich_text(text: str, cjk_font: str, latin_font: str) -> str:
-    chunks: list[str] = []
-    current: list[str] = []
-    current_is_latin: bool | None = None
-
-    for char in text:
-        is_latin = ord(char) < 128
-        if current and is_latin != current_is_latin:
-            chunk = escape("".join(current), quote=False)
-            font_name = latin_font if current_is_latin else cjk_font
-            chunks.append(f'<font name="{font_name}">{chunk}</font>')
-            current = []
-        current.append(char)
-        current_is_latin = is_latin
-
-    if current:
-        chunk = escape("".join(current), quote=False)
-        font_name = latin_font if current_is_latin else cjk_font
-        chunks.append(f'<font name="{font_name}">{chunk}</font>')
-
-    return "".join(chunks)
+    safe = (
+        (text or "")
+        .replace("🔹", "◆")
+        .replace("📊", "【統計】")
+        .replace("⏰", "【時間】")
+        .replace("🔍", "【搜尋】")
+        .replace("🚇", "")
+        .replace("📧", "")
+    )
+    return f'<font name="{cjk_font}">{escape(safe, quote=False)}</font>'
 
 
 def category_badge_class(category: str) -> str:
@@ -3455,6 +3487,7 @@ def render_source_health_dashboard(statuses: list[dict]) -> None:
 def markdown_to_pdf_bytes(md: str) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.styles import ParagraphStyle
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 
     cjk_font, latin_font = register_pdf_fonts()
@@ -3466,9 +3499,26 @@ def markdown_to_pdf_bytes(md: str) -> bytes:
     for style_name in ("Title", "Heading1", "Heading2", "Heading3", "BodyText"):
         styles[style_name].fontName = cjk_font
         styles[style_name].leading = max(styles[style_name].leading, 14)
+        styles[style_name].wordWrap = "CJK"
+        styles[style_name].splitLongWords = 1
     styles["BodyText"].fontSize = 10.2
-    styles["BodyText"].leading = 13.2
-    styles["Heading3"].leading = 14.5
+    styles["BodyText"].leading = 15
+    styles["Title"].fontSize = 15
+    styles["Title"].leading = 20
+    styles["Heading2"].fontSize = 12.5
+    styles["Heading2"].leading = 17
+    styles["Heading3"].fontSize = 11.2
+    styles["Heading3"].leading = 16
+    styles.add(ParagraphStyle(
+        name="ReportBullet",
+        parent=styles["BodyText"],
+        leftIndent=14,
+        firstLineIndent=-8,
+        spaceBefore=1,
+        spaceAfter=1,
+        wordWrap="CJK",
+        splitLongWords=1,
+    ))
 
     story = []
     for raw_line in md.splitlines():
@@ -3482,9 +3532,12 @@ def markdown_to_pdf_bytes(md: str) -> bytes:
             story.append(Paragraph(pdf_rich_text(line[3:], cjk_font, latin_font), styles["Heading2"]))
         elif line.startswith("### "):
             story.append(Paragraph(pdf_rich_text(line[4:], cjk_font, latin_font), styles["Heading3"]))
+        elif line.startswith(("- ", "• ")):
+            line = compact_report_line_for_pdf(line)
+            story.append(Paragraph(pdf_rich_text(_soft_wrap_long_tokens(line, 48), cjk_font, latin_font), styles["ReportBullet"]))
         else:
             line = compact_report_line_for_pdf(line)
-            story.append(Paragraph(pdf_rich_text(line, cjk_font, latin_font), styles["BodyText"]))
+            story.append(Paragraph(pdf_rich_text(_soft_wrap_long_tokens(line, 56), cjk_font, latin_font), styles["BodyText"]))
     doc.build(story)
     return buffer.getvalue()
 
@@ -3830,12 +3883,12 @@ if not report_to_show:
 report_to_show = sanitize_report_text(report_to_show)
 
 if report_to_show:
-    st.markdown(compact_report_urls(report_to_show))
+    st.markdown(display_report_markdown(report_to_show))
 
     st.markdown('<div class="section-title">輸出與寄送</div>', unsafe_allow_html=True)
     pdf_source_md = st.session_state.get("latest_report_md", "")
     pdf_bytes = try_markdown_to_pdf_bytes(pdf_source_md) if pdf_source_md else None
-    raw_pdf_bytes = try_raw_debug_to_pdf_bytes(raw_rss, raw_ddg) if (raw_rss or raw_ddg) else None
+    raw_pdf_bytes = try_raw_debug_to_pdf_bytes(raw_rss, raw_ddg) if (show_developer_info and (raw_rss or raw_ddg)) else None
     output_cols = st.columns(3 if show_developer_info else 2)
     out1 = output_cols[0]
     out2 = output_cols[1] if show_developer_info else None
