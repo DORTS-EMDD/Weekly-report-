@@ -8,8 +8,10 @@
 
 import os
 import re
+import json
 import time
 import random
+import difflib
 import datetime
 import smtplib
 import concurrent.futures
@@ -672,6 +674,70 @@ TECH_NEWS_SOFT_EXCLUDE_TERMS = [
     "行銷", "害蟲", "禁帶", "禁令", "公車", "電動巴士",
 ]
 
+MAX_SELECTION_CANDIDATES = 80
+SELECTION_MIN_ITEMS = 15
+SELECTION_MAX_ITEMS = 25
+CANDIDATE_SNIPPET_CHARS = 260
+REPORT_SNIPPET_CHARS = 420
+JOURNAL_MAX_RESULTS_PER_QUERY = 3
+JOURNAL_MAX_ITEMS = 10
+
+SOURCE_QUALITY_A_DOMAINS = {
+    "tfl.gov.uk", "mta.info", "wmata.com", "ttc.ca", "translink.ca",
+    "ratp.fr", "lta.gov.sg", "smrt.com.sg", "mtr.com.hk",
+    "seoulmetro.co.kr", "tokyometro.jp", "metro.tokyo.lg.jp",
+    "metro-madrid.es", "tmb.cat", "wienerlinien.at", "sl.se",
+    "cph.dk", "rta.ae", "railwaygazette.com", "railjournal.com",
+    "railway-technology.com", "railway-news.com",
+    "urban-transport-magazine.com", "masstransitmag.com",
+    "intelligenttransport.com", "metro-magazine.com",
+}
+
+SOURCE_QUALITY_C_DOMAINS = {
+    "msn.com", "yahoo.com", "aol.com", "tripadvisor.com", "timeout.com",
+    "lonelyplanet.com", "booking.com", "expedia.com", "trip.com",
+    "wikipedia.org", "wikivoyage.org",
+}
+
+LOW_QUALITY_CONTENT_TERMS = [
+    "wikipedia", "travel guide", "tourist", "hotel", "airport parking",
+    "things to do", "itinerary", "visitor guide", "seo", "sponsored",
+    "一般旅遊", "旅遊攻略", "景點", "飯店", "酒店",
+]
+
+JOURNAL_PRECISION_QUERIES = [
+    '"urban rail transit" "predictive maintenance" "condition monitoring"',
+    '"metro system" "fault diagnosis" "machine learning"',
+    '"urban rail transit" "digital twin" maintenance',
+    '"metro system" "digital twin" operation maintenance',
+    '"CBTC" "urban rail transit" safety',
+    '"communication based train control" "metro" reliability',
+    '"driverless metro" "system assurance"',
+    '"urban rail transit" "regenerative braking" energy storage',
+    '"metro" "wayside energy storage" supercapacitor',
+    '"platform screen door" "metro" fault diagnosis',
+    '"platform screen doors" "urban rail transit" reliability',
+    '"urban rail transit" cybersecurity',
+    '"CBTC" cybersecurity',
+    '"railway operational technology" cybersecurity',
+]
+
+JOURNAL_EXPLORATORY_QUERIES = [
+    '"urban rail transit" emerging technology',
+    '"metro system" innovation',
+    '"smart metro" system integration',
+    '"urban rail" advanced monitoring',
+    '"driverless metro" technology',
+    '"rail transit" intelligent maintenance',
+    '"urban rail transit" intelligent operation maintenance',
+]
+
+JOURNAL_EXCLUDE_TERMS = [
+    "high-speed rail", "freight railway", "intercity rail", "road traffic",
+    "bus", "autonomous vehicle", "air traffic", "pure algorithm",
+    "高速鐵路", "貨運鐵路", "城際鐵路", "公車", "自駕車", "航空",
+]
+
 # ── 金鑰狀態 ──────────────────────────────────────────
 # AI 報告產製改用 MaiAgent 雲端 API。
 # 請在 Streamlit Cloud Secrets 或環境變數設定：
@@ -761,6 +827,13 @@ with st.sidebar:
     st.session_state["selected_types_state"] = selected_types
     if not selected_types:
         st.warning("⚠️ 請至少選擇一種新聞類型。")
+
+    include_research_supplement = st.checkbox(
+        "納入國際期刊與技術論文作為技術新知補充",
+        value=False,
+        key="include_research_supplement",
+        help="預設不啟用；勾選後只在正式報告最後新增「六、技術研究補充」，不計入本週新聞統計。",
+    )
 
     standards_enabled = "規範更新" in selected_types
     standard_count = sum(len(v) for v in STANDARDS_WATCHLIST.values())
@@ -1059,6 +1132,12 @@ def render_main_dashboard(source_count: int, standards_count: int):
 
     st.markdown('<div class="section-title">報告產出</div>', unsafe_allow_html=True)
     generate_clicked = st.button(f"🚀 產生國際捷運 AI {report_period_label}", type="primary", use_container_width=True)
+    send_after_generate = st.checkbox(
+        "產生後寄送 Email",
+        value=False,
+        key="send_after_generate",
+        help="預設只產生並顯示報告；勾選後會在報告成功產生後才寄送。",
+    )
     progress_placeholder = st.empty()
     status_placeholder = st.empty()
 
@@ -1069,6 +1148,7 @@ def render_main_dashboard(source_count: int, standards_count: int):
         ("📡", source_count, "RSS/代理來源數", "含官方與 Google News 代理"),
         ("🎯", report_target_display, "AI 報告目標", f"{report_period_label}輸出模式"),
         ("📚", standards_count if standards_enabled else "未啟用", "規範追蹤數量", "勾選規範更新後啟用"),
+        ("🧪", "啟用" if include_research_supplement else "未啟用", "技術研究補充", "只進入第六章，不列入新聞統計"),
     ]
     compact_standards = f"規範 {standards_count} 項" if standards_enabled else "規範 未啟用"
     compact_kpi_items = [
@@ -1078,6 +1158,7 @@ def render_main_dashboard(source_count: int, standards_count: int):
         f"📡 {source_count} 來源",
         f"🎯 {report_target_display}",
         f"📚 {compact_standards}",
+        f"🧪 研究補充 {'啟用' if include_research_supplement else '未啟用'}",
     ]
     st.markdown(
         "<div class=\"compact-kpi-bar\">"
@@ -1100,13 +1181,13 @@ def render_main_dashboard(source_count: int, standards_count: int):
 
     workflow_items = [
         ("01", "蒐集候選資料", "RSS / Google News / ddgs"),
-        ("02", "安全與連結過濾", "排除高風險來源與無效 URL"),
-        ("03", "AI 分類與摘要", "依固定類型排序與去重"),
-        ("04", "形成機設處啟示", "可能影響系統、可參考作法、追蹤建議"),
-        ("05", "輸出與寄送", "下載 PDF 或寄送公務信箱"),
+        ("02", "去重與初步篩選", "排除重複、舊聞與低品質來源"),
+        ("03", "MaiAgent 選題分析", "只看精簡候選清單"),
+        ("04", "產生正式週報", "只送入選新聞與必要補充"),
+        ("05", "輸出與寄送", "下載 PDF 或依勾選寄送"),
     ]
     st.markdown(
-        '<div class="flow-summary">蒐集候選資料 → 安全與連結過濾 → AI 分類與摘要 → 形成機設處啟示 → 輸出與寄送</div>',
+        '<div class="flow-summary">蒐集國際新聞來源 → 去重與初步篩選 → MaiAgent 選題分析 → MaiAgent 產生正式週報 → PDF / Email</div>',
         unsafe_allow_html=True,
     )
     with st.expander("查看系統流程", expanded=False):
@@ -1121,12 +1202,12 @@ def render_main_dashboard(source_count: int, standards_count: int):
                 unsafe_allow_html=True,
             )
 
-    return generate_clicked, progress_placeholder, status_placeholder
+    return generate_clicked, send_after_generate, progress_placeholder, status_placeholder
 
 
 initial_region_sources = build_region_news_sources(active_regions, int(lookback_days))
 initial_standard_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
-generate_btn, progress_placeholder, status_placeholder = render_main_dashboard(
+generate_btn, send_after_generate, progress_placeholder, status_placeholder = render_main_dashboard(
     source_count=len(RSS_SOURCES) + len(initial_region_sources) + len(initial_standard_sources),
     standards_count=sum(len(v) for v in STANDARDS_WATCHLIST.values()),
 )
@@ -1834,6 +1915,707 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
     return "\n\n".join(results_map[i] for i in sorted(results_map))
 
 
+def _clean_text(text: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", text or "")
+    text = re.sub(r"&nbsp;|&#160;", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _shorten(text: str, max_chars: int = CANDIDATE_SNIPPET_CHARS) -> str:
+    text = _clean_text(text)
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
+def _effective_source_url(candidate: dict) -> str:
+    return candidate.get("source_href") or candidate.get("url") or ""
+
+
+def _quality_rank(quality: str) -> int:
+    return {"A": 0, "B": 1, "C": 2}.get((quality or "B").upper(), 1)
+
+
+def classify_source_quality(source: str, url: str, source_href: str = "") -> tuple[str, str]:
+    check_url = source_href or url
+    host = _domain_from_url(check_url)
+    text = f"{source} {url} {source_href}".casefold()
+
+    if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_A_DOMAINS):
+        return "A", "官方/營運機構/政府交通機關/專業鐵道媒體"
+    if any(term.casefold() in text for term in ("official", "government", "transport authority", "metro operator")):
+        return "A", "官方或交通機關線索"
+    if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_C_DOMAINS):
+        return "C", "轉載、旅遊或低信度網站"
+    if any(term.casefold() in text for term in LOW_QUALITY_CONTENT_TERMS):
+        return "C", "旅遊、SEO 或內容農場線索"
+    return "B", "一般新聞媒體或未分級來源"
+
+
+def guess_region_from_text(text: str) -> str:
+    text_lower = (text or "").casefold()
+    aliases = {
+        "日本": ["japan", "tokyo", "osaka", "日本", "東京", "大阪"],
+        "韓國": ["korea", "seoul", "韓國", "韩国", "서울"],
+        "新加坡": ["singapore", "lta", "smrt", "新加坡"],
+        "香港": ["hong kong", "mtr", "香港", "港鐵", "港铁"],
+        "澳洲": ["australia", "sydney", "melbourne", "brisbane", "澳洲"],
+        "英國": ["united kingdom", "uk", "london", "tfl", "underground", "英國", "英国", "倫敦"],
+        "法國": ["france", "paris", "ratp", "法國", "法国", "巴黎"],
+        "德國": ["germany", "berlin", "munich", "hamburg", "u-bahn", "德國", "德国"],
+        "美國": ["united states", "new york", "washington", "chicago", "wmata", "cta", "mta", "美國", "美国"],
+        "加拿大": ["canada", "toronto", "vancouver", "ttc", "skytrain", "加拿大"],
+        "西班牙": ["spain", "madrid", "barcelona", "西班牙"],
+        "荷蘭": ["netherlands", "amsterdam", "rotterdam", "荷蘭", "荷兰"],
+        "瑞士": ["switzerland", "zurich", "lausanne", "瑞士"],
+        "義大利": ["italy", "milan", "rome", "turin", "義大利", "意大利"],
+        "瑞典": ["sweden", "stockholm", "gothenburg", "瑞典"],
+        "奧地利": ["austria", "vienna", "wien", "奧地利", "奥地利"],
+        "丹麥": ["denmark", "copenhagen", "丹麥", "丹麦"],
+        "挪威": ["norway", "oslo", "挪威"],
+    }
+    for region, terms in aliases.items():
+        if any(term.casefold() in text_lower for term in terms):
+            return region
+    return "未判定"
+
+
+def _candidate_date_obj(date_text: str) -> datetime.date | None:
+    text = (date_text or "").strip()
+    if not text or "未知" in text:
+        return None
+    try:
+        return parsedate_to_datetime(text).date()
+    except Exception:
+        pass
+    try:
+        return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except Exception:
+        pass
+    for pattern in (r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", r"(\d{4})年(\d{1,2})月(\d{1,2})日"):
+        match = re.search(pattern, text)
+        if match:
+            try:
+                return datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            except Exception:
+                return None
+    year_match = re.search(r"\b(20\d{2})\b", text)
+    if year_match:
+        try:
+            return datetime.date(int(year_match.group(1)), 1, 1)
+        except Exception:
+            return None
+    return None
+
+
+def _date_sort_key(candidate: dict) -> int:
+    date_obj = _candidate_date_obj(candidate.get("date", ""))
+    return date_obj.toordinal() if date_obj else 0
+
+
+def _make_news_candidate(
+    title: str,
+    date: str,
+    source: str,
+    url: str,
+    snippet: str,
+    query: str,
+    region: str,
+    source_type: str,
+    source_href: str = "",
+) -> dict:
+    quality, quality_reason = classify_source_quality(source, url, source_href)
+    region_value = region if region and region != "未判定" else guess_region_from_text(
+        f"{title} {snippet} {source} {query} {url} {source_href}"
+    )
+    return {
+        "title": _clean_text(title),
+        "date": _clean_text(date) or "日期未知",
+        "source": _clean_text(source) or (_domain_from_url(source_href or url) or "未判定來源"),
+        "url": (url or "").strip(),
+        "snippet": _shorten(snippet, REPORT_SNIPPET_CHARS),
+        "query": _clean_text(query),
+        "region": region_value,
+        "source_type": source_type,
+        "source_href": (source_href or "").strip(),
+        "source_quality": quality,
+        "source_quality_reason": quality_reason,
+        "source_domain": _domain_from_url(source_href or url),
+    }
+
+
+def parse_rss_candidates(raw_rss: str) -> list[dict]:
+    candidates: list[dict] = []
+    for block in re.split(r"(?=^【RSS來源：)", raw_rss or "", flags=re.MULTILINE):
+        block = block.strip()
+        if not block.startswith("【RSS來源："):
+            continue
+        header, *body_lines = block.splitlines()
+        source_match = re.match(r"^【RSS來源：(.+?)(?:（|】)", header)
+        source_name = source_match.group(1).strip() if source_match else "RSS"
+        source_type = "Google News 代理" if "Google News" in source_name or "代理" in source_name else "官方 RSS"
+        current: dict[str, str] = {}
+
+        def _flush_current():
+            if current.get("title") and current.get("url"):
+                candidates.append(_make_news_candidate(
+                    title=current.get("title", ""),
+                    date=current.get("date", ""),
+                    source=source_name,
+                    url=current.get("url", ""),
+                    snippet=current.get("snippet", ""),
+                    query=source_name,
+                    region=guess_region_from_text(f"{source_name} {current.get('title', '')}"),
+                    source_type=source_type,
+                    source_href=current.get("source_href", ""),
+                ))
+
+        for raw_line in body_lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("日期："):
+                _flush_current()
+                current = {"date": line.split("：", 1)[1].strip()}
+            elif line.startswith("標題："):
+                current["title"] = line.split("：", 1)[1].strip()
+            elif line.startswith("摘要："):
+                current["snippet"] = line.split("：", 1)[1].strip()
+            elif line.startswith("連結："):
+                link_text = line.split("：", 1)[1].strip()
+                link_parts = link_text.split("原始來源：", 1)
+                current["url"] = link_parts[0].strip()
+                if len(link_parts) > 1:
+                    current["source_href"] = link_parts[1].strip()
+            elif line.startswith("原始來源："):
+                current["source_href"] = line.split("：", 1)[1].strip()
+        _flush_current()
+    return candidates
+
+
+def parse_ddg_candidates(raw_ddg: str) -> list[dict]:
+    candidates: list[dict] = []
+    for block in re.split(r"(?=^【搜尋\s+\d+)", raw_ddg or "", flags=re.MULTILINE):
+        block = block.strip()
+        if not block.startswith("【搜尋"):
+            continue
+        header, *body_lines = block.splitlines()
+        query_match = re.match(r"^【搜尋\s+\d+（[^）]+）】(.+?)(?:（有效候選|\s*$)", header)
+        query = query_match.group(1).strip() if query_match else header
+        current: dict[str, str] = {}
+
+        def _flush_current():
+            if current.get("title") and current.get("url"):
+                source_domain = _domain_from_url(current.get("url", ""))
+                candidates.append(_make_news_candidate(
+                    title=current.get("title", ""),
+                    date=current.get("date", ""),
+                    source=source_domain or "ddgs",
+                    url=current.get("url", ""),
+                    snippet=current.get("snippet", ""),
+                    query=query,
+                    region=guess_region_from_text(f"{query} {current.get('title', '')} {current.get('snippet', '')}"),
+                    source_type="ddgs",
+                ))
+
+        for raw_line in body_lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("日期："):
+                _flush_current()
+                current = {"date": line.split("：", 1)[1].strip()}
+            elif line.startswith("標題："):
+                current["title"] = line.split("：", 1)[1].strip()
+            elif line.startswith("摘要："):
+                current["snippet"] = line.split("：", 1)[1].strip()
+            elif line.startswith("連結："):
+                current["url"] = line.split("：", 1)[1].strip()
+        _flush_current()
+    return candidates
+
+
+def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], dict[str, int]]:
+    stats = {"URL 重複": 0, "標題正規化重複": 0, "標題相似重複": 0}
+    seen_urls: set[str] = set()
+    seen_title_keys: set[str] = set()
+    title_keys: list[str] = []
+    deduped: list[dict] = []
+
+    sorted_candidates = sorted(
+        candidates,
+        key=lambda item: (
+            _quality_rank(item.get("source_quality", "B")),
+            0 if item.get("source_type") in {"官方 RSS", "Google News 代理"} else 1,
+            -_date_sort_key(item),
+        ),
+    )
+
+    for candidate in sorted_candidates:
+        url_key = _dedupe_url(candidate.get("url", ""))
+        title_key = _normalize_title(candidate.get("title", ""))
+        if url_key and url_key in seen_urls:
+            stats["URL 重複"] += 1
+            continue
+        if title_key and title_key in seen_title_keys:
+            stats["標題正規化重複"] += 1
+            continue
+        if title_key and any(difflib.SequenceMatcher(None, title_key, existing).ratio() >= 0.90 for existing in title_keys):
+            stats["標題相似重複"] += 1
+            continue
+        if url_key:
+            seen_urls.add(url_key)
+        if title_key:
+            seen_title_keys.add(title_key)
+            title_keys.append(title_key)
+        deduped.append(candidate)
+    return deduped, stats
+
+
+def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
+    url = candidate.get("url", "")
+    source_href = candidate.get("source_href", "")
+    source = candidate.get("source", "")
+    title = candidate.get("title", "")
+    snippet = candidate.get("snippet", "")
+    text = f"{title} {snippet} {source} {url} {source_href} {candidate.get('query', '')}"
+    text_lower = text.casefold()
+
+    if not url:
+        return False, "沒有 URL"
+
+    is_valid, reason = _is_valid_news_url(url, source_href=source_href)
+    if not is_valid:
+        return False, reason
+
+    date_obj = _candidate_date_obj(candidate.get("date", ""))
+    if not date_obj:
+        return False, "日期不明或無法判斷"
+    cutoff_date = today - datetime.timedelta(days=max(1, min(int(lookback_days), 365)) + 3)
+    if date_obj < cutoff_date:
+        return False, "日期不符搜尋期間"
+    if date_obj > today + datetime.timedelta(days=1):
+        return False, "未來日期不合理"
+
+    if _contains_taiwan_reference(text):
+        return False, "國內新聞排除"
+
+    if any(term.casefold() in text_lower for term in LOW_QUALITY_CONTENT_TERMS):
+        return False, "旅遊/SEO/內容農場"
+
+    looks_like_standard = _is_standards_source(source) or any(
+        standard.casefold() in text_lower
+        for standards in STANDARDS_WATCHLIST.values()
+        for standard in standards
+    )
+    if looks_like_standard:
+        if "規範更新" not in selected_types:
+            return False, "規範更新未勾選"
+        if not _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
+            return False, "規範更新條件不足"
+        return True, ""
+
+    if not _is_urban_rail_candidate(text, source):
+        return False, "非捷運/都市軌道"
+
+    if _is_tech_news_only_mode() and not _is_technical_news_candidate(text, source):
+        return False, "非技術新知"
+
+    if candidate.get("source_quality") == "C" and not _contains_any_term(text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS):
+        return False, "C級來源且主題關聯不足"
+
+    return True, ""
+
+
+def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
+    raw_candidates = parse_rss_candidates(raw_rss) + parse_ddg_candidates(raw_ddg)
+    deduped_candidates, dedupe_stats = dedupe_candidates(raw_candidates)
+    filtered_candidates: list[dict] = []
+    exclusion_stats: dict[str, int] = {}
+
+    for candidate in deduped_candidates:
+        keep, reason = preliminary_filter_candidate(candidate)
+        if keep:
+            filtered_candidates.append(candidate)
+        else:
+            exclusion_stats[reason] = exclusion_stats.get(reason, 0) + 1
+
+    filtered_candidates = sorted(
+        filtered_candidates,
+        key=lambda item: (
+            _quality_rank(item.get("source_quality", "B")),
+            0 if item.get("source_type") in {"官方 RSS", "Google News 代理"} else 1,
+            -_date_sort_key(item),
+        ),
+    )
+    model_candidates = [dict(item, id=idx) for idx, item in enumerate(filtered_candidates[:MAX_SELECTION_CANDIDATES], 1)]
+    return {
+        "raw_candidates": raw_candidates,
+        "deduped_candidates": deduped_candidates,
+        "filtered_candidates": filtered_candidates,
+        "model_candidates": model_candidates,
+        "dedupe_stats": dedupe_stats,
+        "exclusion_stats": exclusion_stats,
+        "raw_count": len(raw_candidates),
+        "deduped_count": len(deduped_candidates),
+        "filtered_count": len(filtered_candidates),
+    }
+
+
+def format_selection_candidate(candidate: dict) -> str:
+    return (
+        f"{candidate['id']}. title: {candidate.get('title', '')}\n"
+        f"   date: {candidate.get('date', '')}\n"
+        f"   source: {candidate.get('source', '')}\n"
+        f"   url: {candidate.get('url', '')}\n"
+        f"   snippet: {_shorten(candidate.get('snippet', ''), CANDIDATE_SNIPPET_CHARS)}\n"
+        f"   source_quality: {candidate.get('source_quality', 'B')}\n"
+        f"   region: {candidate.get('region', '未判定')}"
+    )
+
+
+def build_selection_prompt(candidates: list[dict]) -> str:
+    candidate_block = "\n\n".join(format_selection_candidate(candidate) for candidate in candidates)
+    if not candidate_block:
+        candidate_block = "本期 Python 初篩後沒有候選新聞。請回傳空的 selected 清單。"
+    selected_types_str = "、".join(selected_types) if selected_types else "無"
+    return f"""
+# 角色
+你是捷運機電週報的選題編輯，只能根據下方「候選新聞清單」判斷，不得上網搜尋，不得使用模型記憶補新聞。
+
+# 任務
+請從候選新聞中選出最適合進入正式週報的新聞，供第二階段報告撰寫使用。
+
+## 選題限制
+- 本次使用者勾選類型：{selected_types_str}
+- 最多選 {SELECTION_MAX_ITEMS} 則；若候選品質不足，寧缺勿濫，可少於 {SELECTION_MIN_ITEMS} 則。
+- 只能選候選清單內的編號，不得自行新增新聞。
+- A 級來源優先；B 級可納入；C 級降權。
+- C 級來源不得作為技術新知主要來源，除非沒有更好來源且標題/摘要明確描述都市軌道機電技術。
+- 規範更新必須同時有明確標準編號、更新動作、日期、URL，且屬近期公告；watchlist、介紹頁或標準體系首頁不得列入。
+- 排除 high-speed rail、intercity rail、freight、Amtrak、Shinkansen、TGV、ICE、bus、highway、旅遊/飯店/SEO 內容。
+
+## 請只回傳 JSON
+格式如下，不要加 Markdown 說明：
+{{
+  "selected": [
+    {{
+      "id": 1,
+      "classification": "技術新知",
+      "selected_reason": "入選理由",
+      "topic_type": "技術新知 / 重大事故 / 營運政策 / 營運爭議 / 規範更新",
+      "include_in_report": true
+    }}
+  ]
+}}
+
+## 候選新聞清單
+{candidate_block}
+""".strip()
+
+
+def _json_loads_loose(text: str):
+    candidates = []
+    fenced = re.findall(r"```(?:json)?\s*(.*?)```", text or "", flags=re.DOTALL | re.IGNORECASE)
+    candidates.extend(fenced)
+    candidates.append(text or "")
+    for raw in candidates:
+        raw = raw.strip()
+        if not raw:
+            continue
+        for start_char, end_char in (("{", "}"), ("[", "]")):
+            start = raw.find(start_char)
+            end = raw.rfind(end_char)
+            if start >= 0 and end > start:
+                try:
+                    return json.loads(raw[start:end + 1])
+                except Exception:
+                    continue
+    return None
+
+
+def _truthy_report_flag(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return True
+    text = str(value).strip().casefold()
+    return text not in {"false", "no", "否", "不納入", "不建議", "0"}
+
+
+def parse_selection_response(response_text: str, candidates: list[dict]) -> list[dict]:
+    candidate_map = {int(candidate["id"]): candidate for candidate in candidates}
+    selected: list[dict] = []
+    seen_ids: set[int] = set()
+
+    parsed = _json_loads_loose(response_text)
+    items = []
+    if isinstance(parsed, dict):
+        for key in ("selected", "items", "入選", "selections"):
+            if isinstance(parsed.get(key), list):
+                items = parsed[key]
+                break
+    elif isinstance(parsed, list):
+        items = parsed
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_id = item.get("id") or item.get("編號") or item.get("number") or item.get("candidate_id")
+        try:
+            candidate_id = int(raw_id)
+        except Exception:
+            continue
+        if candidate_id not in candidate_map or candidate_id in seen_ids:
+            continue
+        if not _truthy_report_flag(item.get("include_in_report", item.get("是否建議納入正式週報"))):
+            continue
+        classification = (
+            item.get("classification")
+            or item.get("分類")
+            or item.get("topic_type")
+            or item.get("類型")
+            or "技術新知"
+        )
+        if classification not in ADVANCED_TYPES:
+            classification = next((category for category in ADVANCED_TYPES if category in str(item)), "技術新知")
+        candidate = dict(candidate_map[candidate_id])
+        candidate["classification"] = classification
+        candidate["selected_reason"] = item.get("selected_reason") or item.get("入選理由") or item.get("reason") or "MaiAgent 第一階段選題入選。"
+        candidate["include_in_report"] = True
+        selected.append(candidate)
+        seen_ids.add(candidate_id)
+        if len(selected) >= SELECTION_MAX_ITEMS:
+            return selected
+
+    if selected:
+        return selected
+
+    fallback_ids: list[int] = []
+    for match in re.finditer(r"(?:編號|候選|ID|id|#)\s*[:：]?\s*(\d{1,3})", response_text or ""):
+        candidate_id = int(match.group(1))
+        if candidate_id in candidate_map and candidate_id not in fallback_ids:
+            fallback_ids.append(candidate_id)
+    if not fallback_ids:
+        for line in (response_text or "").splitlines():
+            match = re.match(r"^\s*(\d{1,3})[\.、\)]", line)
+            if match:
+                candidate_id = int(match.group(1))
+                if candidate_id in candidate_map and candidate_id not in fallback_ids:
+                    fallback_ids.append(candidate_id)
+
+    for candidate_id in fallback_ids[:SELECTION_MAX_ITEMS]:
+        candidate = dict(candidate_map[candidate_id])
+        candidate["classification"] = next((category for category in ADVANCED_TYPES if category in response_text), "技術新知")
+        candidate["selected_reason"] = "MaiAgent 第一階段回應未完全符合 JSON，已依回應中的候選編號納入。"
+        candidate["include_in_report"] = True
+        selected.append(candidate)
+
+    if selected:
+        return selected
+
+    fallback_count = min(SELECTION_MIN_ITEMS, len(candidates), SELECTION_MAX_ITEMS)
+    for candidate in candidates[:fallback_count]:
+        backup = dict(candidate)
+        backup["classification"] = "規範更新" if _is_standard_update_candidate(f"{backup.get('title')} {backup.get('snippet')} {backup.get('url')}", True) else "技術新知"
+        backup["selected_reason"] = "MaiAgent 第一階段回應格式無法解析；依 Python 初篩排序備援納入。"
+        backup["include_in_report"] = True
+        selected.append(backup)
+    return selected
+
+
+def format_report_candidate(candidate: dict) -> str:
+    return (
+        f"- 編號：{candidate.get('id', '')}\n"
+        f"  title: {candidate.get('title', '')}\n"
+        f"  date: {candidate.get('date', '')}\n"
+        f"  source: {candidate.get('source', '')}\n"
+        f"  url: {candidate.get('url', '')}\n"
+        f"  snippet: {_shorten(candidate.get('snippet', ''), REPORT_SNIPPET_CHARS)}\n"
+        f"  classification: {candidate.get('classification', '')}\n"
+        f"  selected_reason: {candidate.get('selected_reason', '')}\n"
+        f"  region: {candidate.get('region', '未判定')}\n"
+        f"  source_quality: {candidate.get('source_quality', 'B')}"
+    )
+
+
+def _journal_year(item: dict) -> str:
+    for value in (item.get("date", ""), item.get("title", ""), item.get("snippet", "")):
+        match = re.search(r"\b(20\d{2}|19\d{2})\b", value or "")
+        if match:
+            return match.group(1)
+    return "年份未標示"
+
+
+def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]]:
+    if not include_research_supplement:
+        return [], []
+    if DDGS is None:
+        return [], [{"query": "國際期刊與技術論文", "status": "ddgs 套件未安裝", "count": 0}]
+
+    queries = JOURNAL_PRECISION_QUERIES + JOURNAL_EXPLORATORY_QUERIES
+    candidates: list[dict] = []
+    statuses: list[dict] = []
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+
+    for idx, query in enumerate(queries, 1):
+        if len(candidates) >= JOURNAL_MAX_ITEMS:
+            break
+        if status_text:
+            status_text.text(f"📚 國際期刊與技術論文補充搜尋 {idx}/{len(queries)}...")
+        query_text = f'{query} journal OR research OR paper OR IEEE OR "Transportation Research"'
+        try:
+            with DDGS() as ddgs:
+                results = ddgs.text(query_text, max_results=JOURNAL_MAX_RESULTS_PER_QUERY, backend="auto")
+        except Exception as exc:
+            statuses.append({"query": query, "status": f"失敗：{exc}", "count": 0})
+            continue
+
+        accepted = 0
+        for result in results or []:
+            title = _clean_text(result.get("title") or "")
+            snippet = _clean_text(result.get("body") or result.get("excerpt") or result.get("description") or "")
+            url = result.get("href") or result.get("url") or ""
+            if not title or not url:
+                continue
+            text = f"{title} {snippet} {url}"
+            if any(term.casefold() in text.casefold() for term in JOURNAL_EXCLUDE_TERMS):
+                continue
+            if not _is_urban_rail_candidate(text) and not _contains_any_term(text, ["metro system", "urban rail transit", "rail transit"]):
+                continue
+            title_key = _normalize_title(title)
+            url_key = _dedupe_url(url)
+            if title_key in seen_titles or url_key in seen_urls:
+                continue
+            seen_titles.add(title_key)
+            seen_urls.add(url_key)
+            source = _domain_from_url(url) or "研究資料庫"
+            candidate = _make_news_candidate(
+                title=title,
+                date=result.get("date") or _journal_year({"title": title, "snippet": snippet}),
+                source=source,
+                url=url,
+                snippet=snippet,
+                query=query,
+                region="國際研究",
+                source_type="國際期刊/技術論文",
+            )
+            candidate["year"] = _journal_year(candidate)
+            candidates.append(candidate)
+            accepted += 1
+            if len(candidates) >= JOURNAL_MAX_ITEMS:
+                break
+        statuses.append({"query": query, "status": "成功" if accepted else "無符合研究", "count": accepted})
+
+    return candidates, statuses
+
+
+def build_report_prompt(selected_candidates: list[dict], journal_candidates: list[dict], search_count: int) -> str:
+    weekday = ['一','二','三','四','五','六','日'][today.weekday()]
+    selected_types_str = "、".join(selected_types) if selected_types else "無"
+    candidate_block = "\n\n".join(format_report_candidate(candidate) for candidate in selected_candidates)
+    if not candidate_block:
+        candidate_block = "第一階段沒有入選新聞。請依固定章節輸出沒有符合資料的文字，不得自行補新聞。"
+
+    journal_section_rule = ""
+    journal_block = ""
+    if include_research_supplement:
+        journal_section_rule = """
+- 報告最後必須新增「六、技術研究補充」。
+- 技術研究補充不得計入本週新聞統計。
+- 每則研究補充需包含：論文或技術研究標題、年份、來源、研究重點、對捷運機電系統之參考價值、與新聞事件之差異說明。
+"""
+        if journal_candidates:
+            journal_block = "\n\n".join(
+                f"- title: {item.get('title', '')}\n"
+                f"  year: {item.get('year', _journal_year(item))}\n"
+                f"  source: {item.get('source', '')}\n"
+                f"  url: {item.get('url', '')}\n"
+                f"  snippet: {_shorten(item.get('snippet', ''), REPORT_SNIPPET_CHARS)}\n"
+                f"  query: {item.get('query', '')}"
+                for item in journal_candidates
+            )
+        else:
+            journal_block = "本期未找到適合納入的國際期刊或技術論文補充。"
+
+    return f"""
+# 角色
+你是專業捷運機電技術分析師，服務對象為台北市政府捷運工程局處長及技術同仁。
+
+# 任務
+請只根據「第一階段入選新聞」產出正式中文週報。不得上網搜尋，不得使用模型記憶或常識補寫新聞事實，不得加入候選清單以外的新聞。
+
+## 報告基本資料
+- 標題：{report_title}
+- 資料涵蓋期間：{date_range}
+- 篩選類型：{selected_types_str}
+- 報導範圍：{scope_mode}
+- 本次 ddgs 搜尋次數：{search_count}
+
+## 固定章節與格式
+正式報告章節固定使用以下中文章節，不得改成表格、卡片或簡報格式：
+一、技術新知
+二、重大事故
+三、營運政策
+四、營運爭議
+五、規範更新
+{ "六、技術研究補充" if include_research_supplement else "" }
+
+每一則新聞請使用下列格式，新聞之間以一行分隔線「________________________________________」分隔：
+
+🔹 [分類] 國家／城市：主標題
+
+• 發布/事件日期：
+• 國家/地區：
+• 相關機電系統：
+• 事件摘要：
+- 重點 1
+- 重點 2
+- 重點 3
+• 技術關鍵字：
+• 資料來源：
+• 【臺北捷運局啟示】：
+- 可能影響系統：
+- 可參考作法：
+- 後續追蹤建議：
+
+## 空章節固定文字
+- 重大事故若無符合資料，請寫：本期未發現符合條件之重大事故案例。
+- 營運爭議若無符合資料，請寫：本期未發現符合條件之營運爭議事件。
+- 規範更新若無符合資料，請寫：本期未發現符合條件之規範版本更新、修訂草案、公告或徵詢事件。
+- 技術新知或營運政策若無符合資料，請用同樣語氣簡短寫明本期未發現符合條件資料。
+
+## 規範更新嚴格判斷
+規範更新必須同時符合：
+1. 有明確標準編號。
+2. 有明確更新動作，例如 new edition、revision、amendment、corrigendum、draft、public comment、published、withdrawn、superseded。
+3. 有明確日期。
+4. 有可查證 URL。
+5. 屬於本次搜尋期間或合理近期公告。
+以下不得列入：持續追蹤中、標準體系公告、無單一新聞連結、僅列出 NFPA / IEC / EN / IEEE 標準名稱、只有標準介紹頁、沒有更新動作。
+
+## 來源與事實限制
+- 每則新聞的日期、標題、來源與 URL 必須取自入選新聞。
+- 若摘要不足，只能寫標題與摘要能確認的事實；推論只能放在「臺北捷運局啟示」並寫成建議。
+- A 級來源優先呈現；C 級來源若被納入，請避免把它寫成技術新知主要依據。
+- 技術研究補充只能放在第六章，不能混入一至五章，也不能計入新聞統計。
+{journal_section_rule}
+
+## 報告最後必須保留統計資訊
+📊 本週統計：共 N 則（技術新知 N 則 / 重大事故 N 則 / 營運政策 N 則 / 營運爭議 N 則 / 規範更新 N 則）
+🔍 執行搜尋次數：{search_count}
+⏰ 報告產出時間：{today.strftime('%Y年%m月%d日')} 週{weekday}
+
+## 第一階段入選新聞
+{candidate_block}
+
+## 國際期刊與技術論文補充候選
+{journal_block}
+""".strip()
+
+
 # ── Prompt 建立 ───────────────────────────────────────
 def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str, str]] | None = None) -> str:
     if rss_sources is None:
@@ -2344,12 +3126,32 @@ def detect_category(text: str) -> str:
 
 
 def count_report_items(report_md: str) -> int:
+    bullet_count = len(re.findall(r"(?m)^🔹\s*\[(?:技術新知|重大事故|營運政策|營運爭議|規範更新)\]", report_md or ""))
+    if bullet_count:
+        return bullet_count
     count = 0
-    for match in re.finditer(r"^###\s+(.+)$", report_md, flags=re.MULTILINE):
+    for match in re.finditer(r"^###\s+(.+)$", report_md or "", flags=re.MULTILINE):
         heading = match.group(1)
-        if any(category in heading for category in selected_types):
+        if any(category in heading for category in ADVANCED_TYPES):
             count += 1
     return count
+
+
+def count_report_items_by_category(report_md: str) -> dict[str, int]:
+    counts = {category: 0 for category in ADVANCED_TYPES}
+    for match in re.finditer(r"(?m)^🔹\s*\[([^\]]+)\]", report_md or ""):
+        category = match.group(1).strip()
+        if category in counts:
+            counts[category] += 1
+    if any(counts.values()):
+        return counts
+    for match in re.finditer(r"^###\s+(.+)$", report_md or "", flags=re.MULTILINE):
+        heading = match.group(1)
+        for category in ADVANCED_TYPES:
+            if category in heading:
+                counts[category] += 1
+                break
+    return counts
 
 
 def report_has_unselected_types(report_md: str) -> bool:
@@ -2652,9 +3454,35 @@ def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: st
         return False
 
 
-send_btn = False
+def send_current_report_email(report_md: str, status_target=None, progress_target=None) -> bool:
+    recipients = [r.strip() for r in recipient_input.splitlines() if r.strip()]
+    if not report_md:
+        if status_target:
+            status_target.warning("⚠️ 請先產生報告，再寄送 Email。")
+        return False
+    if not recipients:
+        if status_target:
+            status_target.warning("⚠️ 請在左側填入收件信箱")
+        return False
+    if not gmail_user or not gmail_pass:
+        if status_target:
+            status_target.warning("⚠️ GMAIL_USER 或 GMAIL_APP_PASS 未在 Secrets 中設定")
+        return False
+    if progress_target:
+        progress_target.progress(0.95)
+    if status_target:
+        status_target.text("📧 正在寄送 Email 至公務信箱……")
+    ok = send_email_func(report_md, recipients, gmail_user, gmail_pass)
+    if ok:
+        if progress_target:
+            progress_target.progress(1.0)
+        if status_target:
+            status_target.success("✅ Email 已寄送完成。")
+        st.success(f"📧 已成功寄送至：{', '.join(recipients)}")
+    return ok
 
-if generate_btn or send_btn:
+
+if generate_btn:
     if not maiagent_api_key:
         status_placeholder.error("❌ MaiAgent API Key 未設定，請至 Streamlit Cloud App Settings → Secrets 填入 MAIAGENT_API_KEY")
     elif not maiagent_chatbot_id:
@@ -2678,29 +3506,36 @@ if generate_btn or send_btn:
                 self.progress_bar_obj.progress(self.start + (self.end - self.start) * value)
 
         try:
+            maiagent_call_count = 0
+
             # Step 1：RSS 訂閱源 + 指定模式地區代理 + 規範更新代理
             region_sources = build_region_news_sources(active_regions, int(lookback_days))
             standards_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
             combined_sources = RSS_SOURCES + region_sources + standards_sources
             status_text.text(
-                f"🔎 正在蒐集 RSS / Google News / ddgs 候選資料……（共 {len(combined_sources)} 個來源）"
+                f"🔎 蒐集國際新聞來源……（RSS / Google News 代理共 {len(combined_sources)} 個來源）"
             )
             rss_results, source_statuses = fetch_rss_feeds(
                 combined_sources, status_text=status_text, return_status=True
             )
-            progress_bar.progress(0.30)
-            status_text.text("🛡️ 正在進行來源安全檢查與去重……")
+            progress_bar.progress(0.25)
             st.session_state["latest_rss_raw"] = rss_results
             st.session_state["latest_source_statuses"] = source_statuses
 
-            # Step 2：加速版 ddgs 搜尋
-            status_text.text("🔍 正在蒐集 ddgs 候選資料……")
-            ddg_progress = ProgressRange(progress_bar, 0.30, 0.50)
+            status_text.text("🔍 蒐集國際新聞來源……（ddgs 多後端搜尋）")
+            ddg_progress = ProgressRange(progress_bar, 0.25, 0.40)
             ddg_results = run_duckduckgo_searches(ddg_progress, status_text)
-            progress_bar.progress(0.50)
             st.session_state["latest_ddg_raw"] = ddg_results
-            status_text.text("🚇 正在篩選都會軌道相關新聞……")
-            progress_bar.progress(0.65)
+            progress_bar.progress(0.42)
+
+            status_text.text("🧹 去重與初步篩選……")
+            candidate_pool = prepare_candidate_pool(rss_results, ddg_results)
+            model_candidates = candidate_pool["model_candidates"]
+            progress_bar.progress(0.52)
+
+            status_text.text("🛡️ 排除舊聞與低品質來源……")
+            time.sleep(0.1)
+            progress_bar.progress(0.58)
 
             if show_raw_debug:
                 os.makedirs("reports", exist_ok=True)
@@ -2709,36 +3544,35 @@ if generate_btn or send_btn:
                 with open(f"reports/raw_ddg_{today.strftime('%Y%m%d')}.txt", "w", encoding="utf-8") as f:
                     f.write(ddg_results)
 
-            # Step 3：MaiAgent 雲端 API 分析
-            status_text.text(f"🤖 正在交由 MaiAgent 雲端 API 產生{report_period_label}……")
-            report_text = call_maiagent_cloud(
-                build_prompt(rss_results, ddg_results, combined_sources)
-            )
-            formal_count = count_report_items(report_text)
-            needs_revision = (
-                (target_is_enforced and formal_count < min_report_items)
-                or report_has_unselected_types(report_text)
-                or report_has_non_urban_formal_items(report_text)
-                or "排除台灣" in report_text
-            )
-            if needs_revision:
-                status_text.text(
-                    f"🤖 初稿 {formal_count} 則、分類或都市軌道範圍需修正，正在自動重寫……"
-                )
-                report_text = call_maiagent_cloud(
-                    build_revision_prompt(
-                        rss_results,
-                        ddg_results,
-                        report_text,
-                        formal_count,
-                        combined_sources,
-                    )
-                )
-                formal_count = count_report_items(report_text)
-            progress_bar.progress(0.85)
-            status_text.text("📄 正在產製 PDF / Email 輸出準備……")
+            # Step 2：MaiAgent 第一階段選題
+            status_text.text("🤖 MaiAgent 選題分析……")
+            selection_prompt = build_selection_prompt(model_candidates)
+            selection_response = call_maiagent_cloud(selection_prompt)
+            maiagent_call_count += 1
+            selected_candidates = parse_selection_response(selection_response, model_candidates)
+            progress_bar.progress(0.70)
+
+            journal_candidates: list[dict] = []
+            journal_statuses: list[dict] = []
+            if include_research_supplement:
+                journal_candidates, journal_statuses = collect_journal_candidates(status_text)
+            progress_bar.progress(0.76)
+
+            # Step 3：MaiAgent 第二階段正式報告
+            status_text.text("📝 MaiAgent 產生正式週報……")
+            search_count = len(build_search_queries()[0])
+            report_prompt = build_report_prompt(selected_candidates, journal_candidates, search_count)
+            report_response = call_maiagent_cloud(report_prompt)
+            maiagent_call_count += 1
+            progress_bar.progress(0.88)
+
+            status_text.text("📄 完成 PDF / Email 輸出準備……")
+            report_text = report_response
             report_text = sanitize_report_text(report_text)
             formal_count = count_report_items(report_text)
+            category_counts = count_report_items_by_category(report_text)
+            prompt_chars = len(selection_prompt) + len(report_prompt)
+            raw_chars = len(rss_results) + len(ddg_results)
 
             os.makedirs("reports", exist_ok=True)
             with open("reports/latest.md", "w", encoding="utf-8") as f:
@@ -2746,22 +3580,67 @@ if generate_btn or send_btn:
             with open(f"reports/report_{today.strftime('%Y%m%d')}.md", "w", encoding="utf-8") as f:
                 f.write(report_text)
 
+            report_stats = {
+                "raw_count": candidate_pool["raw_count"],
+                "deduped_count": candidate_pool["deduped_count"],
+                "filtered_count": candidate_pool["filtered_count"],
+                "ai_selected_count": len(selected_candidates),
+                "formal_count": formal_count,
+                "prompt_chars": prompt_chars,
+                "raw_chars": raw_chars,
+                "maiagent_call_count": maiagent_call_count,
+                "category_counts": category_counts,
+                "journal_count": len(journal_candidates),
+                "model_candidate_count": len(model_candidates),
+            }
+            st.session_state["latest_report_md"] = report_text
             st.session_state["latest_report"] = report_text
             st.session_state["latest_report_summary"] = {
                 "formal_count": formal_count,
                 "has_standards": "規範更新" in report_text,
+                "category_counts": category_counts,
             }
-            progress_bar.progress(0.95)
+            st.session_state["latest_report_stats"] = report_stats
+            st.session_state["latest_debug_info"] = {
+                "raw_candidates": candidate_pool["raw_candidates"],
+                "deduped_candidates": candidate_pool["deduped_candidates"],
+                "filtered_candidates": candidate_pool["filtered_candidates"],
+                "model_candidates": model_candidates,
+                "selected_candidates": selected_candidates,
+                "journal_candidates": journal_candidates,
+                "journal_statuses": journal_statuses,
+                "selection_prompt": selection_prompt,
+                "selection_response": selection_response,
+                "report_prompt": report_prompt,
+                "report_response": report_response,
+                "dedupe_stats": candidate_pool["dedupe_stats"],
+                "exclusion_stats": candidate_pool["exclusion_stats"],
+                "source_statuses": source_statuses,
+                "report_stats": report_stats,
+            }
+
+            email_note = "未自動寄送 Email"
+            if send_after_generate:
+                email_ok = send_current_report_email(
+                    st.session_state["latest_report_md"],
+                    status_target=status_text,
+                    progress_target=progress_bar,
+                )
+                email_note = "Email 已寄送" if email_ok else "Email 未寄出，請檢查收件設定或 Secrets"
+            else:
+                progress_bar.progress(0.95)
+
             summary = st.session_state["latest_report_summary"]
             progress_bar.progress(1.0)
             status_text.markdown(
                 f"""
                 <div class="notice-success">
                   <strong>✅ 報告已完成</strong><br>
-                  可於下方查看正式{report_period_label}、下載 PDF 或寄送 Email。<br>
+                  可於下方查看正式{report_period_label}、下載 PDF 或手動寄送 Email。<br>
                   正式新聞：{formal_count} 則｜
                   規範更新：{'包含' if summary['has_standards'] else '未包含'}｜
-                  PDF / Email 已準備完成。
+                  MaiAgent 呼叫：{maiagent_call_count} 次｜
+                  {email_note}。
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -2783,7 +3662,24 @@ if source_statuses:
 
 st.markdown(f'<div class="section-title">正式{report_period_label}</div>', unsafe_allow_html=True)
 
-report_to_show = st.session_state.get("latest_report", "")
+report_stats = st.session_state.get("latest_report_stats", {})
+if report_stats:
+    st.markdown('<div class="section-title">本次統計</div>', unsafe_allow_html=True)
+    stats_cols = st.columns(7)
+    stats_cols[0].metric("原始蒐集", f"{report_stats.get('raw_count', 0)} 筆")
+    stats_cols[1].metric("去重後", f"{report_stats.get('deduped_count', 0)} 筆")
+    stats_cols[2].metric("初篩後", f"{report_stats.get('filtered_count', 0)} 筆")
+    stats_cols[3].metric("AI 入選", f"{report_stats.get('ai_selected_count', 0)} 筆")
+    stats_cols[4].metric("正式產出", f"{report_stats.get('formal_count', 0)} 則")
+    stats_cols[5].metric("Prompt 約", f"{report_stats.get('prompt_chars', 0):,} 字元")
+    stats_cols[6].metric("MaiAgent", f"{report_stats.get('maiagent_call_count', 0)} 次")
+    raw_chars = report_stats.get("raw_chars", 0)
+    prompt_chars = report_stats.get("prompt_chars", 0)
+    if raw_chars:
+        st.caption(f"本次送入 MaiAgent 的兩階段 prompt 約 {prompt_chars:,} 字元；原始 raw 文字約 {raw_chars:,} 字元。")
+
+latest_report_md = st.session_state.get("latest_report_md", "")
+report_to_show = latest_report_md or st.session_state.get("latest_report", "")
 if not report_to_show:
     try:
         with open("reports/latest.md", "r", encoding="utf-8") as f:
@@ -2793,14 +3689,15 @@ if not report_to_show:
 report_to_show = sanitize_report_text(report_to_show)
 
 if report_to_show:
-    tab1, tab2 = st.tabs(["正式版面", "Markdown"])
+    tab1, tab2 = st.tabs(["正式週報", "Markdown"])
     with tab1:
-        render_report_cards(report_to_show)
+        st.markdown(compact_report_urls(report_to_show))
     with tab2:
         st.text_area("原始 Markdown", report_to_show, height=600)
 
     st.markdown('<div class="section-title">輸出與寄送</div>', unsafe_allow_html=True)
-    pdf_bytes = try_markdown_to_pdf_bytes(report_to_show)
+    pdf_source_md = st.session_state.get("latest_report_md", "")
+    pdf_bytes = try_markdown_to_pdf_bytes(pdf_source_md) if pdf_source_md else None
     raw_pdf_bytes = try_raw_debug_to_pdf_bytes(raw_rss, raw_ddg) if (raw_rss or raw_ddg) else None
     out1, out2, out3 = st.columns(3)
     with out1:
@@ -2813,7 +3710,8 @@ if report_to_show:
                 use_container_width=True,
             )
         else:
-            st.info("PDF 套件尚未安裝；部署後會依 requirements.txt 自動啟用 PDF 下載。")
+            st.button(f"📄 下載正式{report_period_label} PDF", disabled=True, use_container_width=True)
+            st.caption("請先產生本次報告；PDF 會使用 latest_report_md。")
     with out2:
         if raw_pdf_bytes:
             st.download_button(
@@ -2827,50 +3725,88 @@ if report_to_show:
             st.button("🧾 下載原始資料 PDF", disabled=True, use_container_width=True)
             st.caption("產生報告後會提供原始資料 PDF。")
     with out3:
-        send_latest_btn = st.button("📧 寄送至公務信箱", use_container_width=True)
-        if send_latest_btn:
-            recipients = [r.strip() for r in recipient_input.splitlines() if r.strip()]
-            if not recipients:
-                status_placeholder.warning("⚠️ 請在左側填入收件信箱")
-            elif not gmail_user or not gmail_pass:
-                status_placeholder.warning("⚠️ GMAIL_USER 或 GMAIL_APP_PASS 未在 Secrets 中設定")
-            else:
+        if latest_report_md:
+            send_latest_btn = st.button("📧 寄送目前報告", use_container_width=True)
+            if send_latest_btn:
                 email_progress = progress_placeholder.progress(0.95)
-                status_placeholder.text("📧 正在寄送 Email 至公務信箱……")
-                ok = send_email_func(report_to_show, recipients, gmail_user, gmail_pass)
-                if ok:
-                    email_progress.progress(1.0)
-                    status_placeholder.success("✅ Email 已寄送完成。")
-                    st.success(f"📧 已成功寄送至：{', '.join(recipients)}")
+                send_current_report_email(
+                    st.session_state["latest_report_md"],
+                    status_target=status_placeholder,
+                    progress_target=email_progress,
+                )
+        else:
+            st.button("📧 寄送目前報告", disabled=True, use_container_width=True)
+            st.caption("請先產生報告。")
 else:
     st.markdown(f"""
     <div class="warn-box">
     📭 尚無報告資料。請點擊上方「產生國際捷運 AI {report_period_label}」按鈕產生第一份報告。
     </div>""", unsafe_allow_html=True)
 
-# ── 原始搜尋資料（除錯用）────────────────────────────
-if show_raw_debug and (raw_rss or raw_ddg):
-    with st.expander("🔎 原始資料與 AI 篩選前候選池（除錯用）", expanded=False):
-        st.caption(
-            "這裡是 RSS／ddgs 實際抓到、丟給 MaiAgent 的原始文字。"
-            "如果這裡本來就沒什麼內容，代表是搜尋源撈得不夠廣；"
-            "如果這裡內容很多但最終報告篇數很少，代表是日期、來源或 prompt 篩選規則較嚴。"
-        )
+# ── 開發者除錯資訊 ───────────────────────────────────
+def _debug_candidate_rows(items: list[dict]) -> list[dict]:
+    rows = []
+    for item in items or []:
+        rows.append({
+            "id": item.get("id", ""),
+            "date": item.get("date", ""),
+            "title": item.get("title", ""),
+            "source": item.get("source", ""),
+            "quality": item.get("source_quality", ""),
+            "region": item.get("region", ""),
+            "type": item.get("source_type", ""),
+            "url": item.get("url", ""),
+            "classification": item.get("classification", ""),
+            "reason": item.get("selected_reason", ""),
+        })
+    return rows
 
-        rss_blocks = raw_rss.count("【RSS來源：")
-        rss_with_data = raw_rss.count("有效候選")
-        rss_no_article = raw_rss.count("（無文章）")
-        rss_blocked = raw_rss.count("（被安全規則排除）")
-        ddg_blocks = raw_ddg.count("【搜尋 ")
-        ddg_no_result = raw_ddg.count("無結果")
 
-        c_d1, c_d2, c_d3, c_d4 = st.columns(4)
-        c_d1.metric("RSS 有效來源", f"{rss_with_data}/{rss_blocks}")
-        c_d2.metric("RSS 無文章/安全排除", rss_no_article + rss_blocked)
-        c_d3.metric("ddgs 查詢總數", ddg_blocks)
-        c_d4.metric("ddgs 無結果", ddg_no_result)
+debug_info = st.session_state.get("latest_debug_info", {})
+if debug_info or (show_raw_debug and (raw_rss or raw_ddg)):
+    with st.expander("開發者除錯資訊", expanded=False):
+        st.caption("候選新聞、排除原因、raw data、MaiAgent prompt、MaiAgent 回應與來源健康狀態集中於此，預設收合供展示時保持簡潔。")
 
-        with st.expander("📡 RSS 原始資料全文", expanded=False):
-            st.text_area("RSS raw", raw_rss, height=400, label_visibility="collapsed")
-        with st.expander("🔍 ddgs 原始資料全文", expanded=False):
-            st.text_area("ddgs raw", raw_ddg, height=400, label_visibility="collapsed")
+        latest_stats = debug_info.get("report_stats", report_stats or {})
+        d1, d2, d3, d4, d5 = st.columns(5)
+        d1.metric("原始候選", latest_stats.get("raw_count", 0))
+        d2.metric("去重後", latest_stats.get("deduped_count", 0))
+        d3.metric("初篩後", latest_stats.get("filtered_count", 0))
+        d4.metric("AI 入選", latest_stats.get("ai_selected_count", 0))
+        d5.metric("Prompt 字元", f"{latest_stats.get('prompt_chars', 0):,}")
+
+        with st.expander("原始候選新聞", expanded=False):
+            st.dataframe(_debug_candidate_rows(debug_info.get("raw_candidates", [])), use_container_width=True)
+        with st.expander("去重後新聞", expanded=False):
+            st.dataframe(_debug_candidate_rows(debug_info.get("deduped_candidates", [])), use_container_width=True)
+        with st.expander("初篩後新聞", expanded=False):
+            st.dataframe(_debug_candidate_rows(debug_info.get("filtered_candidates", [])), use_container_width=True)
+        with st.expander("AI 入選新聞", expanded=False):
+            st.dataframe(_debug_candidate_rows(debug_info.get("selected_candidates", [])), use_container_width=True)
+
+        with st.expander("排除原因統計", expanded=False):
+            st.json({
+                "去重統計": debug_info.get("dedupe_stats", {}),
+                "初篩排除": debug_info.get("exclusion_stats", {}),
+            })
+
+        with st.expander("第一階段 MaiAgent 選題 prompt", expanded=False):
+            st.text_area("selection_prompt", debug_info.get("selection_prompt", ""), height=360, label_visibility="collapsed")
+        with st.expander("第一階段 MaiAgent 回應", expanded=False):
+            st.text_area("selection_response", debug_info.get("selection_response", ""), height=260, label_visibility="collapsed")
+        with st.expander("第二階段正式報告 prompt", expanded=False):
+            st.text_area("report_prompt", debug_info.get("report_prompt", ""), height=420, label_visibility="collapsed")
+        with st.expander("第二階段 MaiAgent 回應", expanded=False):
+            st.text_area("report_response", debug_info.get("report_response", ""), height=360, label_visibility="collapsed")
+
+        with st.expander("來源健康狀態", expanded=False):
+            st.dataframe(debug_info.get("source_statuses", source_statuses), use_container_width=True)
+
+        if include_research_supplement:
+            with st.expander("國際期刊與技術論文補充", expanded=False):
+                st.dataframe(_debug_candidate_rows(debug_info.get("journal_candidates", [])), use_container_width=True)
+                st.json(debug_info.get("journal_statuses", []))
+
+        with st.expander("raw data", expanded=False):
+            st.text_area("RSS raw", raw_rss, height=300)
+            st.text_area("ddgs raw", raw_ddg, height=300)
