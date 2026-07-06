@@ -1959,7 +1959,18 @@ def _shorten(text: str, max_chars: int = CANDIDATE_SNIPPET_CHARS) -> str:
 
 
 def _effective_source_url(candidate: dict) -> str:
-    return candidate.get("source_href") or candidate.get("url") or ""
+    return _clean_candidate_url(candidate.get("source_href") or candidate.get("url") or "")
+
+
+def _clean_candidate_url(value: str) -> str:
+    value = (value or "").strip()
+    if value.casefold() in {"http:", "https:", "http://", "https://"}:
+        return ""
+    url = _extract_complete_url(value)
+    if url:
+        return url
+    domain = _extract_domain_hint(value)
+    return domain or value
 
 
 def _quality_rank(quality: str) -> int:
@@ -2311,28 +2322,19 @@ def build_selection_prompt(candidates: list[dict]) -> str:
         candidate_block = "本期 Python 初篩後沒有候選新聞。請回傳空的 selected 清單。"
     selected_types_str = "、".join(selected_types) if selected_types else "無"
     return f"""
-# 角色
-你是捷運機電週報的選題編輯，只能根據下方「候選新聞清單」判斷，不得上網搜尋，不得使用模型記憶補新聞。
+# 第一階段：候選新聞選題
+報告期間：{date_range}
+報導範圍：{report_scope_label}
+勾選類型：{selected_types_str}
+選題目標：{SELECTION_MIN_ITEMS}～{SELECTION_MAX_ITEMS} 則。
 
-# 任務
-請從候選新聞中選出最適合進入正式週報的新聞，供第二階段報告撰寫使用。
+硬性限制：
+- 只能使用候選清單編號，不得補新聞或自行上網。
+- 不得納入臺灣新聞、非都市軌道、旅遊/SEO 或無完整 URL 資料。
+- 技術新知需優先明確機電/系統/維修/資安/測試/能源效率內容；單純上線、啟用或服務公告降權。
+- 營運爭議需有明確爭議性或重大營運影響；一般旅客資訊、週末調整、延誤證明、治安或乘客糾紛降權或排除。
 
-## 選題限制
-- 本次使用者勾選類型：{selected_types_str}
-- 目標選出 {SELECTION_MIN_ITEMS}～{SELECTION_MAX_ITEMS} 則；只要候選明確屬於都市軌道，請優先達到至少 {SELECTION_MIN_ITEMS} 則。
-- 若 A 級高品質新聞不足，可納入中信度但明確屬於都市軌道、MRT、Metro、Subway、Light Rail、Tram 的候選。
-- 不要因摘要較短就過度剔除；若標題、日期、來源與 URL 已能確認事件主體，可先入選供第二階段保守撰寫。
-- 只能選候選清單內的編號，不得自行新增新聞。
-- A 級來源優先；B 級可納入；C 級仍需降權，但不是一律刪除。
-- C 級來源不得作為技術新知主要來源，除非沒有更好來源且標題/摘要明確描述都市軌道機電技術。
-- 規範更新必須同時有明確標準編號、更新動作、日期、URL，且屬近期公告；watchlist、介紹頁或標準體系首頁不得列入。
-- 仍須排除 high-speed rail、intercity rail、freight、Amtrak、Shinkansen、TGV、ICE、bus、highway、旅遊/飯店/SEO 內容與臺灣新聞。
-- 不得為了湊數納入非都市軌道案例。
-- 營運爭議必須具備明確爭議性，例如罷工、票價爭議、工程延宕、合約糾紛、重大服務中斷引發民怨、系統轉換困難或安全管理爭議；單純延誤證明、週末服務調整、區間無服務公告、一般旅客資訊更新，不得列為營運爭議。若沒有重大影響或原因不明，請排除或降權。
-- 技術新知優先選擇含明確機電技術、系統升級、號誌、通訊、供電、車輛設備、月臺門、維修策略、資安、測試驗證、能源效率或系統整合內容者；單純新車上線、車站啟用、無障礙改善、服務公告，若缺少技術細節，應降權或歸入營運政策。
-
-## 請只回傳 JSON
-格式如下，不要加 Markdown 說明：
+請只回傳 JSON，不要加 Markdown 說明：
 {{
   "selected": [
     {{
@@ -2541,6 +2543,59 @@ def _journal_priority(date_text: str) -> tuple[int, str]:
     return 2, "無明確發表日期，降低優先度"
 
 
+def _parse_full_research_date(date_text: str) -> datetime.date | None:
+    text = (date_text or "").strip()
+    if not text or not _has_explicit_full_date(text):
+        return None
+    date_obj = _candidate_date_obj(text)
+    return date_obj
+
+
+def _research_date_info(result: dict, title: str, snippet: str) -> dict:
+    date_fields = [
+        "published_date", "publication_date", "online_publication_date",
+        "article_date", "release_date", "published", "date",
+    ]
+    for key in date_fields:
+        value = result.get(key) or result.get(key.replace("_", ""))
+        date_obj = _parse_full_research_date(str(value or ""))
+        if date_obj:
+            cutoff_date = today - datetime.timedelta(days=max(1, min(lookback_int, 365)))
+            return {
+                "published_date": date_obj.isoformat(),
+                "date_confidence": "high",
+                "date_reason": f"{key} 提供完整日期",
+                "is_within_research_period": cutoff_date <= date_obj <= today,
+            }
+
+    labelled_patterns = [
+        r"(?:published date|publication date|online publication date|article date|release date)\s*[:：]\s*([A-Za-z0-9,\-/\s]+)",
+        r"(?:發表日期|出版日期|發布日期)\s*[:：]\s*([0-9年月日\-/\s]+)",
+    ]
+    text = f"{title} {snippet}"
+    for pattern in labelled_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        date_obj = _parse_full_research_date(match.group(1))
+        if date_obj:
+            cutoff_date = today - datetime.timedelta(days=max(1, min(lookback_int, 365)))
+            return {
+                "published_date": date_obj.isoformat(),
+                "date_confidence": "high",
+                "date_reason": "摘要提供明確發表/出版/發布日期",
+                "is_within_research_period": cutoff_date <= date_obj <= today,
+            }
+
+    year_only = re.search(r"\b(20\d{2}|19\d{2})\b", text)
+    return {
+        "published_date": "",
+        "date_confidence": "low",
+        "date_reason": "只有年份或未提供明確發表日期" if year_only else "未提供明確發表日期",
+        "is_within_research_period": False,
+    }
+
+
 def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]]:
     if not include_research_supplement or lookback_int not in ADVANCED_LOOKBACK_OPTIONS:
         return [], []
@@ -2585,14 +2640,13 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
             seen_titles.add(title_key)
             seen_urls.add(url_key)
             source = _domain_from_url(url) or "研究資料庫"
-            date_text = result.get("date") or ""
-            priority, priority_reason = _journal_priority(date_text)
-            if priority >= 99:
+            date_info = _research_date_info(result, title, snippet)
+            if date_info["date_confidence"] != "high" or not date_info["is_within_research_period"]:
                 continue
             preferred_source = any(term.casefold() in text.casefold() for term in JOURNAL_PREFERRED_SOURCE_TERMS)
             candidate = _make_news_candidate(
                 title=title,
-                date=date_text or _journal_year({"title": title, "snippet": snippet}),
+                date=date_info["published_date"],
                 source=source,
                 url=url,
                 snippet=snippet,
@@ -2601,9 +2655,13 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
                 source_type="國際學術/技術研究",
             )
             candidate["year"] = _journal_year(candidate)
-            candidate["journal_priority"] = max(0, priority - 1) if preferred_source else priority
+            candidate["published_date"] = date_info["published_date"]
+            candidate["date_confidence"] = date_info["date_confidence"]
+            candidate["date_reason"] = date_info["date_reason"]
+            candidate["is_within_research_period"] = date_info["is_within_research_period"]
+            candidate["journal_priority"] = 0 if preferred_source else 1
             candidate["journal_priority_reason"] = (
-                f"{priority_reason}；可靠學術來源優先" if preferred_source else priority_reason
+                f"{date_info['date_reason']}；可靠學術來源優先" if preferred_source else date_info["date_reason"]
             )
             candidate["preferred_research_source"] = preferred_source
             candidates.append(candidate)
@@ -2628,16 +2686,18 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
     journal_input_section = ""
     if include_research_supplement:
         journal_section_rule = """
-- 報告最後必須新增「六、技術研究補充」。
-- 技術研究補充不得計入本週新聞統計。
-- 每則研究補充需包含：論文或技術研究標題、年份、來源、研究重點、對捷運機電系統之參考價值、與新聞事件之差異說明。
-- 優先使用有明確發表/發布日期且符合本報告期間的研究；只有年份或日期不明者不得優先納入。
-- 優先使用可靠學術來源，例如 MDPI、ScienceDirect、IEEE、Springer、Taylor & Francis、Elsevier、Transportation Research、Railway Engineering Science。
+- 啟用研究補充：是。
+- 研究補充期間：只允許本次資料涵蓋期間內且 date_confidence=high、is_within_research_period=True 的研究。
+- 若下方沒有研究候選，第六章請固定寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
 """
         if journal_candidates:
             journal_block = "\n\n".join(
                 f"- title: {item.get('title', '')}\n"
                 f"  year: {item.get('year', _journal_year(item))}\n"
+                f"  published_date: {item.get('published_date', '')}\n"
+                f"  date_confidence: {item.get('date_confidence', '')}\n"
+                f"  date_reason: {item.get('date_reason', '')}\n"
+                f"  is_within_research_period: {item.get('is_within_research_period', False)}\n"
                 f"  source: {item.get('source', '')}\n"
                 f"  url: {item.get('url', '')}\n"
                 f"  snippet: {_shorten(item.get('snippet', ''), REPORT_SNIPPET_CHARS)}\n"
@@ -2646,81 +2706,36 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
                 for item in journal_candidates
             )
         else:
-            journal_block = "本期未找到適合納入的國際學術或技術研究補充。"
+            journal_block = "無符合期間條件且具明確發表日期之研究候選。"
         journal_input_section = f"""
 ## 國際學術與技術研究補充候選
 {journal_block}
 """.strip()
 
     return f"""
-# 角色
-你是專業捷運機電技術分析師，服務對象為台北市政府捷運工程局處長及技術同仁。
+# 第二階段：正式週報產出
+報告期間：{date_range}
+報導範圍：{report_scope_label}
+勾選類型：{selected_types_str}
+研究補充：{'啟用' if include_research_supplement else '未啟用'}
 
-# 任務
-請只根據「第一階段入選新聞」產出正式中文週報。不得上網搜尋，不得使用模型記憶或常識補寫新聞事實，不得加入候選清單以外的新聞。
+硬性限制：
+- 只能根據下方入選新聞與研究候選撰寫，不得補述、不得自行新增資料。
+- 正式報告開頭只保留：標題、資料涵蓋期間、報導範圍。
+- 章節維持：一、技術新知；二、重大事故；三、營運政策；四、營運爭議；五、規範更新；{('六、技術研究補充' if include_research_supplement else '不輸出技術研究補充章節')}。
+- 每則新聞使用既定中文週報格式與分隔線「________________________________________」。
+- 資料來源優先使用入選新聞 url；若只有 google_news_proxy_url 才可用代理連結。
+- 不得納入臺灣新聞。
+- 技術新知需優先明確機電/系統/維修/資安/測試/能源效率內容；單純上線、啟用或服務公告降權。
+- 營運爭議需有明確爭議性或重大營運影響；一般旅客資訊、週末調整、延誤證明、治安或乘客糾紛降權或排除。
+{journal_section_rule}
 
-## 內部設定（不得逐字輸出到正式報告正文）
-- 篩選類型：{selected_types_str}
-- ddgs 搜尋次數：{search_count}
-
-## 正式報告開頭
-請只保留以下三行，不得加入追蹤類型、搜尋次數、prompt 字數、MaiAgent 呼叫次數、來源健康、原始蒐集、去重或初篩數據：
+正式報告開頭固定：
 # {report_title}
 > 資料涵蓋期間：{date_range}
 > 報導範圍：{report_scope_label}
 
-## 固定章節與格式
-正式報告章節固定使用以下中文章節，不得改成表格、卡片或簡報格式：
-一、技術新知
-二、重大事故
-三、營運政策
-四、營運爭議
-五、規範更新
-{ "六、技術研究補充" if include_research_supplement else "" }
-
-每一則新聞請使用下列格式，新聞之間以一行分隔線「________________________________________」分隔：
-
-🔹 [分類] 國家／城市：主標題
-
-• 發布/事件日期：
-• 國家/地區：
-• 相關機電系統：
-• 事件摘要：
-- 重點 1
-- 重點 2
-- 重點 3
-• 技術關鍵字：
-• 資料來源：
-• 【臺北捷運局啟示】：
-- 可能影響系統：
-- 可參考作法：
-- 後續追蹤建議：
-
-## 空章節固定文字
-- 重大事故若無符合資料，請寫：本期未發現符合條件之重大事故案例。
-- 營運爭議若無符合資料，請寫：本期未發現符合條件之營運爭議事件。
-- 規範更新若無符合資料，請寫：本期未發現符合條件之規範版本更新、修訂草案、公告或徵詢事件。
-- 技術新知或營運政策若無符合資料，請用同樣語氣簡短寫明本期未發現符合條件資料。
-
-## 規範更新嚴格判斷
-規範更新必須同時符合：
-1. 有明確標準編號。
-2. 有明確更新動作，例如 new edition、revision、amendment、corrigendum、draft、public comment、published、withdrawn、superseded。
-3. 有明確日期。
-4. 有可查證 URL。
-5. 屬於本次搜尋期間或合理近期公告。
-以下不得列入：持續追蹤中、標準體系公告、無單一新聞連結、僅列出 NFPA / IEC / EN / IEEE 標準名稱、只有標準介紹頁、沒有更新動作。
-
-## 來源與事實限制
-- 每則新聞的日期、標題、來源與 URL 必須取自入選新聞。
-- 資料來源優先使用入選新聞的 url 欄位；該欄位已優先放入原始來源 URL。只有沒有原始來源時，才可使用 google_news_proxy_url 或 Google News 代理連結。
-- 若摘要不足，只能寫標題與摘要能確認的事實；推論只能放在「臺北捷運局啟示」並寫成建議。
-- A 級來源優先呈現；C 級來源若被納入，請避免把它寫成技術新知主要依據。
-- 營運爭議需具備明確爭議性，例如罷工、票價爭議、工程延宕、合約糾紛、重大服務中斷引發民怨、系統轉換困難或安全管理爭議；單純延誤證明、週末服務調整、區間無服務公告、一般旅客資訊更新，不得列為營運爭議。若沒有重大影響或原因不明，請排除或降權。
-- 技術新知優先選擇含明確機電技術、系統升級、號誌、通訊、供電、車輛設備、月臺門、維修策略、資安、測試驗證、能源效率或系統整合內容者；單純新車上線、車站啟用、無障礙改善、服務公告，若缺少技術細節，應降權或歸入營運政策。
-{journal_section_rule}
-
-## 報告最後必須保留統計資訊
+報告最後保留：
 📊 本週統計：共 N 則（技術新知 N 則 / 重大事故 N 則 / 營運政策 N 則 / 營運爭議 N 則 / 規範更新 N 則）
 ⏰ 報告產出時間：{today.strftime('%Y年%m月%d日')} 週{weekday}
 
@@ -3174,10 +3189,29 @@ def sanitize_report_text(text: str) -> str:
         .replace("(排除台灣)", "")
     )
     if not include_research_supplement:
-        text = re.sub(r"(?ms)^六、技術研究補充.*?(?=^📊|^⏰|\Z)", "", text)
+        text = re.sub(r"(?ms)^#{0,3}\s*六、技術研究補充.*?(?=^📊|^⏰|\Z)", "", text)
         text = re.sub(r"(?m)^.*技術研究補充.*$", "", text)
     text = normalize_report_source_lines(text)
     return strip_internal_report_fields(text)
+
+
+def enforce_research_section(report_md: str, journal_candidates: list[dict]) -> str:
+    if not include_research_supplement:
+        return report_md
+    if journal_candidates:
+        return report_md
+    fallback = "六、技術研究補充\n本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。"
+    if re.search(r"(?m)^#{0,3}\s*六、技術研究補充\s*$", report_md or ""):
+        return re.sub(
+            r"(?ms)^#{0,3}\s*六、技術研究補充\s*.*?(?=^📊|^⏰|\Z)",
+            fallback + "\n\n",
+            report_md,
+            count=1,
+        ).strip()
+    match = re.search(r"(?m)^📊", report_md or "")
+    if match:
+        return (report_md[:match.start()].rstrip() + "\n\n" + fallback + "\n\n" + report_md[match.start():].lstrip()).strip()
+    return (report_md.rstrip() + "\n\n" + fallback).strip()
 
 
 def compact_report_line_for_pdf(line: str) -> str:
@@ -3752,6 +3786,7 @@ if generate_btn:
             status_text.text("📄 完成 PDF / Email 輸出準備……")
             report_text = report_response
             report_text = sanitize_report_text(report_text)
+            report_text = enforce_research_section(report_text, journal_candidates)
             formal_count = count_report_items(report_text)
             category_counts = count_report_items_by_category(report_text)
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
