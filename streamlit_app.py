@@ -954,14 +954,7 @@ with st.sidebar:
         st.caption("規範追蹤僅作為更新監測清單；若未查得明確修訂、公告、草案、徵詢或新版發布，不會列入正式週報。")
 
     with st.expander("⚙️ 進階設定", expanded=False):
-        fast_mode = st.checkbox(
-            "快速展示模式",
-            value=True,
-            key="fast_mode",
-            help="減少搜尋來源與候選卡數量，加快展示產出；正式測試可關閉。",
-        )
-
-        st.markdown("**?瑟?頞典 / 閬?餈質馱璅∪?**")
+        st.markdown("**長期趨勢 / 規範追蹤模式**")
         long_term_mode = st.checkbox(
             "啟用長期趨勢 / 規範追蹤模式",
             key="long_term_mode",
@@ -979,6 +972,14 @@ with st.sidebar:
             value=False,
             key="show_developer_info",
             help="啟用後只顯示 AI 校正資料 JSON 下載按鈕，供排錯使用。",
+        )
+
+        st.markdown("**快速展示模式**")
+        fast_mode = st.checkbox(
+            "快速展示模式",
+            value=True,
+            key="fast_mode",
+            help="減少搜尋來源與候選卡數量，加快展示產出；正式測試可關閉。",
         )
 
     st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統")
