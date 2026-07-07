@@ -522,6 +522,20 @@ today = datetime.date.today()
 
 ADVANCED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議", "規範更新"]
 DEFAULT_SELECTED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議"]
+SECTION_NUMBER_BY_TYPE = {
+    "技術新知": "一",
+    "重大事故": "二",
+    "營運政策": "三",
+    "營運爭議": "四",
+    "規範更新": "五",
+}
+EMPTY_TEXT_BY_TYPE = {
+    "技術新知": "本期未發現符合條件之技術新知案例。",
+    "重大事故": "本期未發現符合條件之重大事故案例。",
+    "營運政策": "本期未發現符合條件之營運政策案例。",
+    "營運爭議": "本期未發現符合條件之營運爭議事件。",
+    "規範更新": "本期未發現符合條件之規範版本更新、修訂草案、公告或徵詢事件。",
+}
 MIN_REPORT_ITEMS = 15
 MAX_ITEMS_PER_SOURCE = 25
 DDGS_MAX_RESULTS = 25
@@ -728,6 +742,44 @@ SOURCE_QUALITY_A_DOMAINS = {
     "intelligenttransport.com", "metro-magazine.com",
 }
 
+SOURCE_TIER_OFFICIAL_DOMAINS = {
+    "tfl.gov.uk", "mta.info", "wmata.com", "ttc.ca", "translink.ca",
+    "ratp.fr", "lta.gov.sg", "smrt.com.sg", "mtr.com.hk",
+    "seoulmetro.co.kr", "tokyometro.jp", "metro.tokyo.lg.jp",
+    "metro-madrid.es", "tmb.cat", "wienerlinien.at", "sl.se",
+    "cph.dk", "rta.ae", "uitp.org", "societedesgrandsprojets.fr",
+}
+
+SOURCE_TIER_PROFESSIONAL_DOMAINS = {
+    "railwaygazette.com", "railjournal.com", "railway-technology.com",
+    "railway-news.com", "urban-transport-magazine.com", "masstransitmag.com",
+    "intelligenttransport.com", "metro-magazine.com", "railwayage.com",
+    "globalmasstransit.net", "globalmasstransit.com",
+}
+
+SOURCE_DISPLAY_BY_DOMAIN = {
+    "mta.info": "MTA 官方公告",
+    "tokyometro.jp": "Tokyo Metro 官方公告",
+    "mtr.com.hk": "港鐵官方資料",
+    "ttc.ca": "TTC 官方公告",
+    "tfl.gov.uk": "TfL 官方公告",
+    "wmata.com": "WMATA 官方公告",
+    "translink.ca": "TransLink 官方公告",
+    "ratp.fr": "RATP 官方資料",
+    "lta.gov.sg": "LTA 官方公告",
+    "smrt.com.sg": "SMRT 官方公告",
+    "seoulmetro.co.kr": "Seoul Metro 官方公告",
+    "railway-news.com": "Railway-News",
+    "railwaygazette.com": "Railway Gazette",
+    "railjournal.com": "International Railway Journal",
+    "urban-transport-magazine.com": "Urban Transport Magazine",
+    "globalmasstransit.net": "Global Mass Transit",
+    "globalmasstransit.com": "Global Mass Transit",
+    "masstransitmag.com": "Mass Transit Magazine",
+    "metro-magazine.com": "METRO Magazine",
+    "railwayage.com": "Railway Age",
+}
+
 SOURCE_QUALITY_C_DOMAINS = {
     "msn.com", "yahoo.com", "aol.com", "tripadvisor.com", "timeout.com",
     "lonelyplanet.com", "booking.com", "expedia.com", "trip.com",
@@ -743,12 +795,16 @@ LOW_QUALITY_CONTENT_TERMS = [
 LOW_INFORMATION_PAGE_TERMS = [
     "home", "homepage", "topic page", "archive", "category", "service page",
     "portal", "入口", "首頁", "分類頁", "服務頁", "旅客資訊", "活動資訊",
+    "archive page", "route page", "trip result", "journey planner", "route map",
+    "pdf map", "jobs", "vacancy", "career",
 ]
 
 LOW_INFORMATION_PATH_MARKERS = [
     "/topic", "/topics", "/archive", "/archives", "/category", "/categories",
     "/tag/", "/tags/", "/services", "/service", "/customer", "/passenger",
-    "/mobile", "/app", "/apps",
+    "/mobile", "/app", "/apps", "/route", "/routes", "/trip", "/trips",
+    "/journey", "/journey-planner", "/map", "/maps", "/search", "/jobs",
+    "/careers", ".pdf",
 ]
 
 JOURNAL_PRECISION_QUERIES = [
@@ -2013,6 +2069,15 @@ def _quality_rank(quality: str) -> int:
     return {"A": 0, "B": 1, "C": 2}.get((quality or "B").upper(), 1)
 
 
+def _source_tier_rank(tier: str) -> int:
+    return {
+        "A_official": 0,
+        "B_professional": 1,
+        "C_media": 2,
+        "D_proxy_low_value": 3,
+    }.get(tier or "C_media", 2)
+
+
 def classify_source_quality(source: str, url: str, source_href: str = "") -> tuple[str, str]:
     check_url = source_href or url
     host = _domain_from_url(check_url)
@@ -2027,6 +2092,59 @@ def classify_source_quality(source: str, url: str, source_href: str = "") -> tup
     if any(term.casefold() in text for term in LOW_QUALITY_CONTENT_TERMS):
         return "C", "旅遊、SEO 或內容農場線索"
     return "B", "一般新聞媒體或未分級來源"
+
+
+def classify_source_tier(source: str, url: str, source_href: str = "") -> tuple[str, str]:
+    check_url = source_href or url
+    host = _domain_from_url(check_url)
+    text = f"{source} {url} {source_href}".casefold()
+    path_lower = urlparse(url or "").path.casefold()
+
+    if any(marker in path_lower for marker in LOW_INFORMATION_PATH_MARKERS):
+        return "D_proxy_low_value", "入口頁、查詢頁、路線頁、PDF 或低資訊頁"
+    if any(term.casefold() in text for term in LOW_INFORMATION_PAGE_TERMS):
+        return "D_proxy_low_value", "入口頁、分類頁或低資訊內容"
+    if host and any(_host_matches(host, domain) for domain in SOURCE_TIER_OFFICIAL_DOMAINS):
+        return "A_official", "官方公告、政府交通主管機關或營運機構"
+    if any(term in text for term in ("官方", "政府", "transport authority", "metro operator", "official")):
+        return "A_official", "官方或交通機關線索"
+    if host and any(_host_matches(host, domain) for domain in SOURCE_TIER_PROFESSIONAL_DOMAINS):
+        return "B_professional", "專業鐵道或大眾運輸媒體"
+    if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_C_DOMAINS):
+        return "C_media", "一般媒體、轉載或入口媒體"
+    if "news.google.com" in _domain_from_url(url) and not source_href:
+        return "D_proxy_low_value", "Google News 代理且原始來源未明確辨識"
+    return "C_media", "一般新聞媒體或未分級來源"
+
+
+def source_label_for_report(source: str, url: str, source_href: str = "", tier: str = "") -> str:
+    host = _domain_from_url(source_href or url)
+    for domain, label in SOURCE_DISPLAY_BY_DOMAIN.items():
+        if host and _host_matches(host, domain):
+            return label
+
+    source_clean = re.sub(r"（.*?Google News.*?）", "", source or "", flags=re.IGNORECASE)
+    source_clean = re.sub(r"\(.*?Google News.*?\)", "", source_clean, flags=re.IGNORECASE)
+    source_clean = re.sub(r"Google News.*?代理|地區代理|fallback", "", source_clean, flags=re.IGNORECASE)
+    source_clean = re.sub(r"\s+", " ", source_clean).strip(" －-_/|")
+
+    if source_clean and source_clean not in {"RSS", "ddgs", "Google News"}:
+        if tier == "A_official" and "官方" not in source_clean:
+            return f"{source_clean} 官方公告"
+        return source_clean
+    if host and host != "news.google.com":
+        return host
+    if "news.google.com" in _domain_from_url(url):
+        return "Google News 代理來源，原始來源未明確辨識"
+    return "資料來源未明確辨識"
+
+
+def source_verb_for_report(tier: str, label: str) -> str:
+    if tier == "A_official" or "官方" in (label or ""):
+        return "公告"
+    if tier == "B_professional":
+        return "報導"
+    return "報導"
 
 
 def guess_region_from_text(text: str) -> str:
@@ -2102,6 +2220,9 @@ def _make_news_candidate(
     source_href: str = "",
 ) -> dict:
     quality, quality_reason = classify_source_quality(source, url, source_href)
+    source_tier, source_tier_reason = classify_source_tier(source, url, source_href)
+    source_display = source_label_for_report(source, url, source_href, source_tier)
+    source_verb = source_verb_for_report(source_tier, source_display)
     region_value = region if region and region != "未判定" else guess_region_from_text(
         f"{title} {snippet} {source} {query} {url} {source_href}"
     )
@@ -2117,6 +2238,10 @@ def _make_news_candidate(
         "source_href": (source_href or "").strip(),
         "source_quality": quality,
         "source_quality_reason": quality_reason,
+        "source_tier": source_tier,
+        "source_tier_reason": source_tier_reason,
+        "source_display": source_display,
+        "source_verb": source_verb,
         "source_domain": _domain_from_url(source_href or url),
     }
 
@@ -2223,6 +2348,7 @@ def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], dict[str, int
     sorted_candidates = sorted(
         candidates,
         key=lambda item: (
+            _source_tier_rank(item.get("source_tier", "C_media")),
             _quality_rank(item.get("source_quality", "B")),
             0 if item.get("source_type") in {"官方 RSS", "Google News 代理"} else 1,
             -_date_sort_key(item),
@@ -2291,7 +2417,14 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
         "cost overrun", "budget overrun", "service disruption", "public backlash",
         "罷工", "勞資爭議", "票價爭議", "合約糾紛", "工程延宕", "成本增加", "服務中斷", "民怨",
     ])
-    if (has_entry_path or has_entry_terms) and not (has_technical_detail or has_dispute_detail or _is_standard_update_candidate(text, require_url=True)):
+    has_policy_value = _contains_any_term(text, HIGH_VALUE_POLICY_TERMS) if "HIGH_VALUE_POLICY_TERMS" in globals() else False
+    is_low_value_tier = candidate.get("source_tier") == "D_proxy_low_value"
+    if (has_entry_path or has_entry_terms or is_low_value_tier) and not (
+        has_technical_detail
+        or has_dispute_detail
+        or has_policy_value
+        or _is_standard_update_candidate(text, require_url=True)
+    ):
         return False, "入口頁/服務頁/分類頁且缺少明確事件"
 
     looks_like_standard = _is_standards_source(source) or any(
@@ -2334,6 +2467,7 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
     filtered_candidates = sorted(
         filtered_candidates,
         key=lambda item: (
+            _source_tier_rank(item.get("source_tier", "C_media")),
             _quality_rank(item.get("source_quality", "B")),
             0 if item.get("source_type") in {"官方 RSS", "Google News 代理"} else 1,
             -_date_sort_key(item),
@@ -2359,6 +2493,8 @@ def format_selection_candidate(candidate: dict) -> str:
         f"{candidate['id']}. title: {candidate.get('title', '')}\n"
         f"   date: {candidate.get('date', '')}\n"
         f"   source: {candidate.get('source', '')}\n"
+        f"   source_display: {candidate.get('source_display', candidate.get('source', ''))}\n"
+        f"   source_tier: {candidate.get('source_tier', '')}\n"
         f"   url: {source_url}\n"
         f"   snippet: {_shorten(candidate.get('snippet', ''), CANDIDATE_SNIPPET_CHARS)}\n"
         f"   source_quality: {candidate.get('source_quality', 'B')}\n"
@@ -2366,11 +2502,93 @@ def format_selection_candidate(candidate: dict) -> str:
     )
 
 
+def _selected_report_sections() -> str:
+    lines = [
+        f"{SECTION_NUMBER_BY_TYPE[category]}、{category}"
+        for category in ADVANCED_TYPES
+        if category in selected_types
+    ]
+    return "\n".join(lines) if lines else "無"
+
+
+def _selected_empty_section_rules() -> str:
+    lines = [
+        f"- {category}若無符合資料，請寫：「{EMPTY_TEXT_BY_TYPE[category]}」"
+        for category in ADVANCED_TYPES
+        if category in selected_types
+    ]
+    return "\n".join(lines) if lines else "- 未勾選新聞類型時，不得自行新增章節。"
+
+
+def _selected_stats_template() -> str:
+    parts = [f"{category} N 則" for category in ADVANCED_TYPES if category in selected_types]
+    return " / ".join(parts) if parts else "無"
+
+
+def _policy_selection_rule() -> str:
+    if "營運政策" not in selected_types:
+        return ""
+    weekly_limit = "7 天週報中，營運政策原則最多 4～5 則。" if lookback_int == 7 else "營運政策需保留具制度、系統或治理價值者。"
+    return f"""
+- {weekly_limit}
+- 營運政策優先：票價政策且涉及 AFC/票務系統、大型活動疏運且含班距/加班車/人流或車站管制、新線通車/試營運/系統轉換、建設治理/資產更新、維修窗口且有明確工程或系統影響。
+- 營運政策降權或排除：單純假日提醒、活動搭乘資訊、週末服務公告、路線查詢/trip result/route page，或沒有班距、加班車、車站管制、人流管理、設備或系統資訊者。
+- 同一週多則大型活動、假日或週末服務公告，請合併為 1 則綜合案例，不要逐則拆列；不得為了湊數納入低價值營運公告。
+""".strip()
+
+
+LOW_VALUE_POLICY_TERMS = [
+    "holiday service", "weekend service", "weekender", "service advisory",
+    "travel information", "trip result", "route page", "take transit",
+    "搭乘資訊", "假日服務", "週末服務", "服務提醒", "旅客資訊更新",
+]
+HIGH_VALUE_POLICY_TERMS = [
+    "fare", "afc", "ticketing", "headway", "special train", "extra train",
+    "crowd control", "station control", "passenger information system",
+    "trial operation", "system conversion", "asset renewal", "maintenance",
+    "票價", "票務", "班距", "加班車", "人流管制", "車站管制", "試營運",
+    "系統轉換", "資產更新", "維修", "工程",
+]
+
+
+def _is_low_value_policy_candidate(candidate: dict) -> bool:
+    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')}"
+    has_low = _contains_any_term(text, LOW_VALUE_POLICY_TERMS)
+    has_high = _contains_any_term(text, HIGH_VALUE_POLICY_TERMS)
+    return has_low and not has_high
+
+
+def rebalance_selected_candidates(selected: list[dict]) -> list[dict]:
+    if lookback_int != 7 or "營運政策" not in selected_types:
+        return selected
+    balanced: list[dict] = []
+    policy_count = 0
+    for candidate in selected:
+        if candidate.get("classification") != "營運政策":
+            balanced.append(candidate)
+            continue
+        if _is_low_value_policy_candidate(candidate):
+            candidate = dict(candidate)
+            candidate["selected_reason"] = (
+                f"{candidate.get('selected_reason', '')}；因屬一般服務公告，週報中降權。"
+            ).strip("；")
+            if policy_count >= 3:
+                continue
+        if policy_count >= 5:
+            continue
+        policy_count += 1
+        balanced.append(candidate)
+    return balanced
+
+
 def build_selection_prompt(candidates: list[dict]) -> str:
     candidate_block = "\n\n".join(format_selection_candidate(candidate) for candidate in candidates)
     if not candidate_block:
         candidate_block = "本期 Python 初篩後沒有候選新聞。請回傳空的 selected 清單。"
     selected_types_str = "、".join(selected_types) if selected_types else "無"
+    example_type = selected_types[0] if selected_types else "技術新知"
+    allowed_topic_types = " / ".join(selected_types) if selected_types else "無"
+    policy_rule = _policy_selection_rule()
     return f"""
 # 第一階段：候選新聞選題
 報告期間：{date_range}
@@ -2381,17 +2599,19 @@ def build_selection_prompt(candidates: list[dict]) -> str:
 硬性限制：
 - 只能使用候選清單編號，不得補新聞或自行上網。
 - 不得納入臺灣新聞、非都市軌道、旅遊/SEO 或無完整 URL 資料。
+- D_proxy_low_value 來源（入口頁、archive/topic/route/trip result、PDF 路線圖、職缺或查詢頁）若沒有明確事件、技術導入、系統變更或政策內容，不得納入。
 - 技術新知需優先明確機電/系統/維修/資安/測試/能源效率內容；單純上線、啟用或服務公告降權。
 - 營運爭議需有明確爭議性或重大營運影響；一般旅客資訊、週末調整、延誤證明、治安或乘客糾紛降權或排除。
+{policy_rule}
 
 請只回傳 JSON，不要加 Markdown 說明：
 {{
   "selected": [
     {{
       "id": 1,
-      "classification": "技術新知",
+      "classification": "{example_type}",
       "selected_reason": "入選理由",
-      "topic_type": "技術新知 / 重大事故 / 營運政策 / 營運爭議 / 規範更新",
+      "topic_type": "{allowed_topic_types}",
       "include_in_report": true
     }}
   ]
@@ -2467,6 +2687,8 @@ def parse_selection_response(response_text: str, candidates: list[dict]) -> list
         )
         if classification not in ADVANCED_TYPES:
             classification = next((category for category in ADVANCED_TYPES if category in str(item)), "技術新知")
+        if classification not in selected_types:
+            continue
         candidate = dict(candidate_map[candidate_id])
         candidate["classification"] = classification
         candidate["selected_reason"] = item.get("selected_reason") or item.get("入選理由") or item.get("reason") or "MaiAgent 第一階段選題入選。"
@@ -2494,7 +2716,7 @@ def parse_selection_response(response_text: str, candidates: list[dict]) -> list
 
     for candidate_id in fallback_ids[:SELECTION_MAX_ITEMS]:
         candidate = dict(candidate_map[candidate_id])
-        candidate["classification"] = next((category for category in ADVANCED_TYPES if category in response_text), "技術新知")
+        candidate["classification"] = next((category for category in selected_types if category in response_text), selected_types[0] if selected_types else "技術新知")
         candidate["selected_reason"] = "MaiAgent 第一階段回應未完全符合 JSON，已依回應中的候選編號納入。"
         candidate["include_in_report"] = True
         selected.append(candidate)
@@ -2505,7 +2727,10 @@ def parse_selection_response(response_text: str, candidates: list[dict]) -> list
     fallback_count = min(SELECTION_MIN_ITEMS, len(candidates), SELECTION_MAX_ITEMS)
     for candidate in candidates[:fallback_count]:
         backup = dict(candidate)
-        backup["classification"] = "規範更新" if _is_standard_update_candidate(f"{backup.get('title')} {backup.get('snippet')} {backup.get('url')}", True) else "技術新知"
+        if "規範更新" in selected_types and _is_standard_update_candidate(f"{backup.get('title')} {backup.get('snippet')} {backup.get('url')}", True):
+            backup["classification"] = "規範更新"
+        else:
+            backup["classification"] = selected_types[0] if selected_types else "技術新知"
         backup["selected_reason"] = "MaiAgent 第一階段回應格式無法解析；依 Python 初篩排序備援納入。"
         backup["include_in_report"] = True
         selected.append(backup)
@@ -2546,11 +2771,17 @@ def format_report_candidate(candidate: dict) -> str:
     source_url = _effective_source_url(candidate)
     proxy_url = candidate.get("url", "")
     proxy_hint = f"\n  google_news_proxy_url: {proxy_url}" if candidate.get("source_href") and proxy_url and proxy_url != source_url else ""
+    source_display = candidate.get("source_display") or source_label_for_report(
+        candidate.get("source", ""), candidate.get("url", ""), candidate.get("source_href", ""), candidate.get("source_tier", "")
+    )
     return (
         f"- 編號：{candidate.get('id', '')}\n"
         f"  title: {candidate.get('title', '')}\n"
         f"  date: {candidate.get('date', '')}\n"
         f"  source: {candidate.get('source', '')}\n"
+        f"  source_display: {source_display}\n"
+        f"  source_verb: {candidate.get('source_verb', source_verb_for_report(candidate.get('source_tier', ''), source_display))}\n"
+        f"  source_tier: {candidate.get('source_tier', '')}\n"
         f"  url: {source_url}\n"
         f"  snippet: {_shorten(candidate.get('snippet', ''), REPORT_SNIPPET_CHARS)}\n"
         f"  classification: {candidate.get('classification', '')}\n"
@@ -2727,9 +2958,13 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
 def build_report_prompt(selected_candidates: list[dict], journal_candidates: list[dict], search_count: int) -> str:
     weekday = ['一','二','三','四','五','六','日'][today.weekday()]
     selected_types_str = "、".join(selected_types) if selected_types else "無"
+    selected_sections = _selected_report_sections()
+    selected_empty_rules = _selected_empty_section_rules()
+    selected_stats = _selected_stats_template()
+    policy_rule = _policy_selection_rule()
     candidate_block = "\n\n".join(format_report_candidate(candidate) for candidate in selected_candidates)
     if not candidate_block:
-        candidate_block = "第一階段沒有入選新聞。請依固定章節輸出沒有符合資料的文字，不得自行補新聞。"
+        candidate_block = "第一階段沒有入選新聞。請只依已勾選章節輸出沒有符合資料的文字，不得自行補新聞。"
 
     journal_section_rule = ""
     journal_block = ""
@@ -2772,12 +3007,23 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 硬性限制：
 - 只能根據下方入選新聞與研究候選撰寫，不得補述、不得自行新增資料。
 - 正式報告開頭只保留：標題、資料涵蓋期間、報導範圍。
-- 章節維持：一、技術新知；二、重大事故；三、營運政策；四、營運爭議；五、規範更新；{('六、技術研究補充' if include_research_supplement else '不輸出技術研究補充章節')}。
+- 正式報告只輸出下列已勾選章節，不得輸出未勾選類型：
+{selected_sections}
+- 技術研究補充：{('啟用時於最後輸出「六、技術研究補充」' if include_research_supplement else '未啟用，不得輸出技術研究補充章節')}。
+- 空章節文字只限已勾選類型：
+{selected_empty_rules}
 - 每則新聞使用既定中文週報格式與分隔線「________________________________________」。
-- 資料來源優先使用入選新聞 url；若只有 google_news_proxy_url 才可用代理連結。
+- 正式週報語氣需像機電系統設計處整理給長官或評審閱讀的國際捷運技術週報，避免除錯、選題或模型處理語氣。
+- 不得在正式報告正文使用：「候選資料指出」「候選摘要指出」「入選資料指出」「原始候選資料」「raw data」「本次送入模型」「AI 入選」「模型判斷」「資料欄位顯示」「初篩資料指出」「本次候選資料」「來源健康」「Python 初篩」「MaiAgent 判斷」。
+- 事件摘要請以 source_display 與 source_verb 敘述，例如「依 MTA 官方公告……」「依 Railway-News 報導……」，不得以「候選資料」作為主詞。
+- 資料不足時可用自然正式語氣說明，例如「公告未載明相關設備調整細節」「報導未揭露更細部技術規格」，不得每則都重複「原始資料未提供，故不補述」。
+- source_tier / source_quality 只供判斷與除錯，不得寫入正式週報；D_proxy_low_value 不得包裝成技術新知。
+- 資料來源優先使用原始來源 url 與 source_display；若 url 為 Google News proxy，且 source_display 可辨識原始來源，正式報告只顯示 source_display，不要顯示 Google News 代理連結。
+- 資料來源格式請用「資料來源：來源名稱（完整 URL 或 domain）」；若無可辨識 URL，寫「資料來源：資料來源未提供完整 URL」。
 - 不得納入臺灣新聞。
 - 技術新知需優先明確機電/系統/維修/資安/測試/能源效率內容；單純上線、啟用或服務公告降權。
 - 營運爭議需有明確爭議性或重大營運影響；一般旅客資訊、週末調整、延誤證明、治安或乘客糾紛降權或排除。
+{policy_rule}
 {journal_section_rule}
 
 正式報告開頭固定：
@@ -2786,7 +3032,7 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 > 報導範圍：{report_scope_label}
 
 報告最後保留：
-📊 本週統計：共 N 則（技術新知 N 則 / 重大事故 N 則 / 營運政策 N 則 / 營運爭議 N 則 / 規範更新 N 則）
+📊 本週統計：共 N 則（{selected_stats}）
 ⏰ 報告產出時間：{today.strftime('%Y年%m月%d日')} 週{weekday}
 
 ## 第一階段入選新聞
@@ -3135,13 +3381,36 @@ def normalize_source_line(line: str) -> str:
     if "資料來源" not in (line or ""):
         return line
     prefix = line.split("資料來源", 1)[0] + "資料來源："
-    url = _extract_complete_url(line)
+    content = line.split("資料來源", 1)[1].lstrip("：:").strip()
+    url = _extract_complete_url(content)
+    label = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", content)
+    label = re.sub(r"https?://[^\s\)\]）＞>，,；;。]+", "", label)
+    label = re.sub(r"[（(]\s*[）)]", "", label)
+    label = label.strip(" ：:;；,，。-")
+    label = re.sub(r"\s+", " ", label)
+
     if url:
+        host = _domain_from_url(url)
+        if "news.google.com" in host:
+            domain = _extract_domain_hint(content.replace(url, ""))
+            if domain and domain != "news.google.com":
+                readable = label if label and "Google News" not in label else domain
+                return f"{prefix}{readable}（{domain}）"
+            if label and "Google News" not in label:
+                return f"{prefix}{label}"
+            return f"{prefix}Google News 代理來源，原始來源未明確辨識"
+        if label and label.casefold() not in {url.casefold(), host.casefold()}:
+            return f"{prefix}{label}（{url}）"
         return f"{prefix}{url}"
-    domain = _extract_domain_hint(line)
+
+    domain = _extract_domain_hint(content)
     if domain:
+        if label and label.casefold() != domain.casefold():
+            return f"{prefix}{label}（{domain}）"
         return f"{prefix}{domain}"
-    return f"{prefix}原始候選資料未提供完整 URL"
+    if label and label.casefold() not in {"http:", "https:", "google news"}:
+        return f"{prefix}{label}"
+    return f"{prefix}資料來源未提供完整 URL"
 
 
 def normalize_report_source_lines(text: str) -> str:
@@ -3203,12 +3472,12 @@ def strip_internal_report_fields(text: str) -> str:
         line = raw_line.strip()
         section_title = re.sub(r"^[#\s]+", "", line).strip()
 
-        if re.match(r"^候補觀察(?:（.*?）)?$", section_title):
+        if re.match(r"^(候補觀察(?:（.*?）)?|第一階段入選新聞|國際學術與技術研究補充候選)$", section_title):
             skip_candidate_section = True
             continue
 
         if skip_candidate_section:
-            if section_title.startswith(("報告摘要", "結尾")) or line.startswith(("📊", "⚠️", "⏰", "**本週統計", "本週統計", "**不足", "不足", "**報告產出時間", "報告產出時間")):
+            if section_title.startswith(("報告摘要", "結尾")) or re.match(r"^[一二三四五六]、", section_title) or line.startswith(("📊", "⚠️", "⏰", "**本週統計", "本週統計", "**不足", "不足", "**報告產出時間", "報告產出時間")):
                 skip_candidate_section = False
             else:
                 continue
@@ -3231,6 +3500,106 @@ def strip_internal_report_fields(text: str) -> str:
     return text.strip()
 
 
+def strip_unselected_report_sections(text: str) -> str:
+    if not text or not selected_types:
+        return text
+    cleaned = text
+    for category in ADVANCED_TYPES:
+        if category in selected_types:
+            continue
+        number = SECTION_NUMBER_BY_TYPE.get(category, "")
+        if number:
+            cleaned = re.sub(
+                rf"(?ms)^\s*#{{0,6}}\s*{re.escape(number)}\s*、\s*{re.escape(category)}\s*$.*?(?=^\s*#{{0,6}}\s*[一二三四五六]\s*、|^\s*📊|^\s*⏰|\Z)",
+                "",
+                cleaned,
+            )
+        cleaned = cleaned.replace(EMPTY_TEXT_BY_TYPE.get(category, ""), "")
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def strip_unselected_types_from_title(text: str) -> str:
+    if not text or not selected_types:
+        return text
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        if not line.lstrip().startswith("#"):
+            continue
+        title = line
+        for category in ADVANCED_TYPES:
+            if category in selected_types:
+                continue
+            title = title.replace(f"、{category}", "").replace(f"{category}、", "").replace(category, "")
+        title = re.sub(r"、{2,}", "、", title).replace("：、", "：").replace("、｜", "｜")
+        title = re.sub(r"[、\s]+$", "", title)
+        lines[idx] = title
+        break
+    return "\n".join(lines)
+
+
+def normalize_report_statistics_line(text: str) -> str:
+    if not text:
+        return text
+    selected_parts = [category for category in ADVANCED_TYPES if category in selected_types]
+    if not selected_parts:
+        return text
+    counts = count_report_items_by_category(text)
+    total = sum(counts.get(category, 0) for category in selected_parts)
+    stats_detail = " / ".join(f"{category} {counts.get(category, 0)} 則" for category in selected_parts)
+    stats_line = f"📊 本週統計：共 {total} 則（{stats_detail}）"
+    if re.search(r"(?m)^\s*📊\s*本週統計.*$", text):
+        return re.sub(r"(?m)^\s*📊\s*本週統計.*$", stats_line, text, count=1)
+    if re.search(r"(?m)^\s*本週統計.*$", text):
+        return re.sub(r"(?m)^\s*本週統計.*$", stats_line, text, count=1)
+    match = re.search(r"(?m)^\s*⏰", text)
+    if match:
+        return text[:match.start()].rstrip() + "\n" + stats_line + "\n" + text[match.start():].lstrip()
+    return text.rstrip() + "\n\n" + stats_line
+
+
+INTERNAL_REPORT_REPLACEMENTS = {
+    "候選資料指出": "資料顯示",
+    "候選摘要指出": "摘要資料顯示",
+    "入選資料指出": "資料顯示",
+    "初篩資料指出": "資料顯示",
+    "資料欄位顯示": "資料顯示",
+    "本次候選資料": "本次資料",
+    "原始候選資料": "資料來源",
+    "raw data": "原始資料",
+    "Raw data": "原始資料",
+    "本次送入模型": "本次整理",
+    "AI 入選": "本期納入",
+    "模型判斷": "本週報歸類",
+    "Python 初篩": "初步整理",
+    "MaiAgent 判斷": "本週報整理",
+    "來源健康": "來源狀態",
+    "原始資料僅提供": "資料來源僅載明",
+    "原始資料未提供": "資料來源未載明",
+    "故不補述。": "",
+    "故不補述": "",
+    "原始資料未提供，故不補述。": "資料來源未載明更細部技術資料。",
+    "原始資料未提供，故不補述": "資料來源未載明更細部技術資料",
+}
+
+
+def clean_internal_report_language(text: str) -> str:
+    if not text:
+        return text
+    cleaned = text
+    for old, new in INTERNAL_REPORT_REPLACEMENTS.items():
+        cleaned = cleaned.replace(old, new)
+    cleaned = re.sub(r"候選資料(?:指出|顯示|記載|提及)?", "資料", cleaned)
+    cleaned = re.sub(r"候選摘要(?:指出|顯示|記載|提及)?", "摘要資料", cleaned)
+    cleaned = re.sub(r"入選資料(?:指出|顯示|記載|提及)?", "資料", cleaned)
+    cleaned = re.sub(r"初篩資料(?:指出|顯示|記載|提及)?", "資料", cleaned)
+    cleaned = re.sub(r"(?im)^.*(?:來源健康|prompt\s*字數|MaiAgent\s*呼叫|本次送入模型).*$", "", cleaned)
+    cleaned = re.sub(r"(?i)\braw data\b", "原始資料", cleaned)
+    cleaned = re.sub(r"資料來源未提供完整 URL（[^）]*）", "資料來源未提供完整 URL", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def sanitize_report_text(text: str) -> str:
     text = (
         text.replace("全球（排除台灣）", "全球（安全白名單來源）")
@@ -3238,11 +3607,15 @@ def sanitize_report_text(text: str) -> str:
         .replace("（排除台灣）", "")
         .replace("(排除台灣)", "")
     )
+    text = clean_internal_report_language(text)
     if not include_research_supplement:
         text = re.sub(r"(?ms)^#{0,3}\s*六、技術研究補充.*?(?=^📊|^⏰|\Z)", "", text)
         text = re.sub(r"(?m)^.*技術研究補充.*$", "", text)
+    text = strip_unselected_types_from_title(text)
+    text = strip_unselected_report_sections(text)
     text = normalize_report_source_lines(text)
-    return strip_internal_report_fields(text)
+    text = strip_internal_report_fields(text)
+    return normalize_report_statistics_line(text)
 
 
 def enforce_research_section(report_md: str, journal_candidates: list[dict]) -> str:
@@ -3824,7 +4197,7 @@ if generate_btn:
             selection_prompt = build_selection_prompt(model_candidates)
             selection_response = call_maiagent_cloud(selection_prompt)
             maiagent_call_count += 1
-            selected_candidates = parse_selection_response(selection_response, model_candidates)
+            selected_candidates = rebalance_selected_candidates(parse_selection_response(selection_response, model_candidates))
             ai_unselected_stats = build_ai_unselected_stats(model_candidates, selected_candidates)
             progress_bar.progress(0.70)
 
@@ -3913,14 +4286,18 @@ if generate_btn:
                 progress_bar.progress(0.95)
 
             summary = st.session_state["latest_report_summary"]
+            standards_note = (
+                f"｜規範更新：{'包含' if summary['has_standards'] else '未包含'}"
+                if standards_enabled
+                else ""
+            )
             progress_bar.progress(1.0)
             status_text.markdown(
                 f"""
                 <div class="notice-success">
                   <strong>✅ 報告已完成</strong><br>
                   可於下方查看正式{report_period_label}、下載 PDF 或手動寄送 Email。<br>
-                  正式新聞：{formal_count} 則｜
-                  規範更新：{'包含' if summary['has_standards'] else '未包含'}｜
+                  正式新聞：{formal_count} 則{standards_note}｜
                   {email_note}。
                 </div>
                 """,
@@ -4040,7 +4417,9 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
             "date": item.get("date", ""),
             "title": item.get("title", ""),
             "source": item.get("source", ""),
+            "source_display": item.get("source_display", ""),
             "quality": item.get("source_quality", ""),
+            "source_tier": item.get("source_tier", ""),
             "region": item.get("region", ""),
             "type": item.get("source_type", ""),
             "url": item.get("url", ""),
@@ -4050,10 +4429,129 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
     return rows
 
 
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {str(key): _json_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.isoformat()
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_statuses: list[dict]) -> dict:
+    latest_stats = debug_info.get("report_stats", report_stats or {}) if debug_info else (report_stats or {})
+    return _json_safe({
+        "run_info": {
+            "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "report_date": today.isoformat(),
+            "lookback_days": lookback_int,
+            "date_range": date_range,
+            "selected_types": selected_types,
+            "selected_regions": ["全球"] if is_global_scope else active_regions,
+            "scope_mode": scope_mode,
+            "include_standards": standards_enabled,
+            "include_research_supplement": include_research_supplement,
+            "app_source_hash": st.session_state.get("_app_source_hash", ""),
+        },
+        "stats": {
+            "raw_count": latest_stats.get("raw_count", 0),
+            "dedup_count": latest_stats.get("deduped_count", 0),
+            "filtered_count": latest_stats.get("filtered_count", 0),
+            "selected_count": latest_stats.get("ai_selected_count", 0),
+            "final_report_count": latest_stats.get("formal_count", 0),
+            "prompt_chars": latest_stats.get("prompt_chars", 0),
+            "raw_chars": latest_stats.get("raw_chars", 0),
+            "maiagent_calls": latest_stats.get("maiagent_call_count", 0),
+            "category_counts": latest_stats.get("category_counts", {}),
+            "journal_count": latest_stats.get("journal_count", 0),
+        },
+        "source_health": debug_info.get("source_statuses", source_statuses) if debug_info else (source_statuses or []),
+        "raw_candidates": debug_info.get("raw_candidates", []) if debug_info else [],
+        "deduped_candidates": debug_info.get("deduped_candidates", []) if debug_info else [],
+        "filtered_candidates": debug_info.get("filtered_candidates", []) if debug_info else [],
+        "selected_candidates": debug_info.get("selected_candidates", []) if debug_info else [],
+        "excluded_candidates": debug_info.get("excluded_candidates", []) if debug_info else [],
+        "exclusion_stats": debug_info.get("exclusion_stats", {}) if debug_info else {},
+        "dedupe_stats": debug_info.get("dedupe_stats", {}) if debug_info else {},
+        "ai_unselected_stats": debug_info.get("ai_unselected_stats", {}) if debug_info else {},
+        "journal_candidates": debug_info.get("journal_candidates", []) if debug_info else [],
+        "journal_statuses": debug_info.get("journal_statuses", []) if debug_info else [],
+        "maiagent": {
+            "selection_prompt": debug_info.get("selection_prompt", "") if debug_info else "",
+            "selection_response": debug_info.get("selection_response", "") if debug_info else "",
+            "report_prompt": debug_info.get("report_prompt", "") if debug_info else "",
+            "report_response": debug_info.get("report_response", "") if debug_info else "",
+        },
+        "final_report_md": debug_info.get("latest_report_md", st.session_state.get("latest_report_md", "")) if debug_info else st.session_state.get("latest_report_md", ""),
+    })
+
+
+def build_developer_debug_markdown(payload: dict) -> str:
+    def json_block(value) -> str:
+        return "```json\n" + json.dumps(_json_safe(value), ensure_ascii=False, indent=2) + "\n```"
+
+    maiagent = payload.get("maiagent", {})
+    sections = [
+        "# 開發者除錯資訊",
+        "## 本次設定",
+        json_block(payload.get("run_info", {})),
+        "## 本次統計",
+        json_block(payload.get("stats", {})),
+        "## 來源健康狀態",
+        json_block(payload.get("source_health", [])),
+        "## AI 入選候選",
+        json_block(payload.get("selected_candidates", [])),
+        "## 排除候選與原因",
+        json_block({
+            "excluded_candidates": payload.get("excluded_candidates", []),
+            "exclusion_stats": payload.get("exclusion_stats", {}),
+            "dedupe_stats": payload.get("dedupe_stats", {}),
+            "ai_unselected_stats": payload.get("ai_unselected_stats", {}),
+        }),
+        "## 研究補充候選",
+        json_block(payload.get("journal_candidates", [])),
+        "## MaiAgent 第一階段 Prompt",
+        "```text\n" + (maiagent.get("selection_prompt") or "") + "\n```",
+        "## MaiAgent 第一階段回應",
+        "```text\n" + (maiagent.get("selection_response") or "") + "\n```",
+        "## MaiAgent 第二階段 Prompt",
+        "```text\n" + (maiagent.get("report_prompt") or "") + "\n```",
+        "## MaiAgent 第二階段回應",
+        "```text\n" + (maiagent.get("report_response") or "") + "\n```",
+        "## 最終正式報告 Markdown",
+        payload.get("final_report_md", ""),
+    ]
+    return "\n\n".join(sections)
+
+
 debug_info = st.session_state.get("latest_debug_info", {})
 if show_developer_info and (debug_info or (show_raw_debug and (raw_rss or raw_ddg))):
     with st.expander("開發者除錯資訊", expanded=False):
         st.caption("候選新聞、排除原因、raw data、MaiAgent prompt、MaiAgent 回應與來源健康狀態集中於此，預設收合供展示時保持簡潔。")
+
+        debug_payload = build_developer_debug_payload(debug_info, report_stats, source_statuses)
+        debug_json = json.dumps(debug_payload, ensure_ascii=False, indent=2)
+        debug_markdown = build_developer_debug_markdown(debug_payload)
+        download_cols = st.columns(2)
+        with download_cols[0]:
+            st.download_button(
+                "下載開發者除錯 JSON",
+                data=debug_json.encode("utf-8"),
+                file_name=f"developer_debug_{today.strftime('%Y%m%d')}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+        with download_cols[1]:
+            st.download_button(
+                "下載開發者除錯 Markdown",
+                data=debug_markdown.encode("utf-8"),
+                file_name=f"developer_debug_{today.strftime('%Y%m%d')}.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
 
         latest_stats = debug_info.get("report_stats", report_stats or {})
         debug_stats = [
