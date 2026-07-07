@@ -502,6 +502,7 @@ def clear_old_report_state() -> None:
         "latest_raw_data", "latest_stats", "latest_candidates",
         "latest_selected_candidates", "latest_journal_candidates",
         "latest_source_health", "latest_prompt", "latest_response",
+        "latest_debug_payload", "latest_debug_md", "latest_run_config",
         "report_generated", "email_sent", "last_run_result",
         "latest_report", "latest_report_summary", "latest_report_stats",
         "latest_debug_info", "latest_rss_raw", "latest_ddg_raw",
@@ -548,15 +549,15 @@ REPORT_TARGET_BY_DAYS = {
 }
 LONG_TERM_TARGET_LABELS = {
     90: "趨勢回顧",
-    180: "半年回顧",
+    180: "半年報",
     365: "年度回顧",
 }
 REPORT_PERIOD_LABELS = {
     7: "週報",
-    14: "雙周報",
+    14: "雙週報",
     30: "月報",
     90: "季報",
-    180: "半年回顧",
+    180: "半年報",
     365: "年度回顧",
 }
 
@@ -971,35 +972,42 @@ with st.sidebar:
     )
     if "selected_regions_state" not in st.session_state:
         st.session_state["selected_regions_state"] = DEFAULT_REGIONS.copy()
+    st.session_state["selected_regions_state"] = list(dict.fromkeys(st.session_state["selected_regions_state"]))
 
-    selected_regions = []
+    stored_selected_regions = list(st.session_state["selected_regions_state"])
+    selected_regions = stored_selected_regions.copy()
+    global_scope_selected = scope_mode == "全球（安全白名單來源）"
     if scope_mode == "全球（安全白名單來源）":
-        selected_regions = st.session_state["selected_regions_state"]
         st.caption("報導範圍：全球模式")
     else:
-        st.caption(f"已選 {len(st.session_state['selected_regions_state'])} / {len(ADVANCED_REGIONS)} 個國家")
+        st.caption(f"已選 {len(stored_selected_regions)} / {len(ADVANCED_REGIONS)} 個國家")
 
     with st.expander("展開選擇國家", expanded=False):
         col_all, col_clear = st.columns(2)
-        if col_all.button("全選國家", use_container_width=True, key="select_all_regions"):
+        if col_all.button("全選國家", use_container_width=True, key="select_all_regions", disabled=global_scope_selected):
             st.session_state["selected_regions_state"] = ADVANCED_REGIONS.copy()
             for region in ADVANCED_REGIONS:
                 st.session_state[f"region_{region}"] = True
             st.rerun()
 
-        if col_clear.button("清除全選", use_container_width=True, key="clear_all_regions"):
+        if col_clear.button("清除全選", use_container_width=True, key="clear_all_regions", disabled=global_scope_selected):
             st.session_state["selected_regions_state"] = []
             for region in ADVANCED_REGIONS:
                 st.session_state[f"region_{region}"] = False
             st.rerun()
 
+        next_selected_regions = []
         region_cols = st.columns(2)
         for idx, region in enumerate(ADVANCED_REGIONS):
-            checked = region in st.session_state["selected_regions_state"]
-            if region_cols[idx % 2].checkbox(region, value=checked, key=f"region_{region}"):
-                selected_regions.append(region)
+            checked = region in stored_selected_regions
+            if region_cols[idx % 2].checkbox(region, value=checked, key=f"region_{region}", disabled=global_scope_selected):
+                next_selected_regions.append(region)
 
-    st.session_state["selected_regions_state"] = selected_regions
+    if not global_scope_selected:
+        selected_regions = list(dict.fromkeys(next_selected_regions))
+        st.session_state["selected_regions_state"] = selected_regions
+    else:
+        selected_regions = stored_selected_regions
     if scope_mode != "全球（安全白名單來源）" and not selected_regions:
         st.warning("請至少選擇一個國家/地區。")
 
@@ -1098,6 +1106,26 @@ report_title = f"【{today.strftime('%Y/%m/%d')}】國際捷運{selected_report_
 is_global_scope = scope_mode == "全球（安全白名單來源）"
 active_regions = [] if is_global_scope else selected_regions
 report_scope_label = "全球" if is_global_scope else "、".join(active_regions)
+
+
+def build_current_run_config() -> dict:
+    return {
+        "report_date": today.isoformat(),
+        "report_date_label": today.strftime("%Y/%m/%d"),
+        "lookback_days": lookback_int,
+        "date_range": date_range,
+        "report_label": report_period_label,
+        "report_title": report_title,
+        "selected_types": selected_types.copy(),
+        "scope_mode": scope_mode,
+        "selected_regions": ["全球"] if is_global_scope else active_regions.copy(),
+        "report_scope_label": report_scope_label,
+        "include_standards": standards_enabled,
+        "include_research_supplement": include_research_supplement,
+    }
+
+
+current_run_config = build_current_run_config()
 
 
 def google_news_search_url(query: str, hl: str = "en-US", gl: str = "US", ceid_lang: str = "en") -> str:
@@ -2487,6 +2515,36 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
     }
 
 
+def build_long_term_coverage_warning(candidates: list[dict]) -> dict:
+    if lookback_int not in ADVANCED_LOOKBACK_OPTIONS:
+        return {"long_term_coverage_warning": False, "reason": ""}
+    date_objs = [
+        date_obj for date_obj in (_candidate_date_obj(candidate.get("date", "")) for candidate in candidates or [])
+        if date_obj
+    ]
+    if not date_objs:
+        return {
+            "long_term_coverage_warning": True,
+            "reason": "長期回顧候選資料缺少可解析日期，無法確認是否完整涵蓋本期。",
+        }
+    earliest = min(date_objs)
+    expected_start = today - datetime.timedelta(days=lookback_int)
+    recent_cutoff = today - datetime.timedelta(days=min(60, max(30, lookback_int // 5)))
+    if earliest > recent_cutoff:
+        return {
+            "long_term_coverage_warning": True,
+            "reason": "來源回傳資料多集中於近期，年度回顧可能無法完整代表全年。" if lookback_int == 365 else "來源回傳資料多集中於近期，長期回顧可能無法完整代表整個期間。",
+            "earliest_candidate_date": earliest.isoformat(),
+            "expected_start": expected_start.isoformat(),
+        }
+    return {
+        "long_term_coverage_warning": False,
+        "reason": "",
+        "earliest_candidate_date": earliest.isoformat(),
+        "expected_start": expected_start.isoformat(),
+    }
+
+
 def format_selection_candidate(candidate: dict) -> str:
     source_url = _effective_source_url(candidate)
     return (
@@ -2591,6 +2649,7 @@ def build_selection_prompt(candidates: list[dict]) -> str:
     policy_rule = _policy_selection_rule()
     return f"""
 # 第一階段：候選新聞選題
+run_config：{json.dumps(current_run_config, ensure_ascii=False)}
 報告期間：{date_range}
 報導範圍：{report_scope_label}
 勾選類型：{selected_types_str}
@@ -2999,6 +3058,7 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 
     return f"""
 # 第二階段：正式週報產出
+run_config：{json.dumps(current_run_config, ensure_ascii=False)}
 報告期間：{date_range}
 報導範圍：{report_scope_label}
 勾選類型：{selected_types_str}
@@ -3012,7 +3072,23 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 - 技術研究補充：{('啟用時於最後輸出「六、技術研究補充」' if include_research_supplement else '未啟用，不得輸出技術研究補充章節')}。
 - 空章節文字只限已勾選類型：
 {selected_empty_rules}
-- 每則新聞使用既定中文週報格式與分隔線「________________________________________」。
+- 每則新聞固定使用下列格式，不得新增「技術關鍵字」、可能影響系統、可參考作法、後續追蹤建議等欄位：
+🔹 [新聞類型] 新聞標題
+
+• 發布/事件日期：
+• 國家/地區：
+• 相關機電系統：
+• 事件摘要：
+- 重點 1
+- 重點 2
+- 重點 3
+• 【臺北捷運局啟示】：
+100 字以內一段文字，不分點，不得過度延伸資料未提供的內容。
+• 資料來源：
+________________________________________
+- 相關機電系統只能填機電範疇，例如車輛、號誌、通訊、供電、AFC、月臺門、車站電梯、電扶梯、旅客資訊系統、SCADA、資通訊與資安、車站機電設備；不得填無障礙服務、旅客服務、活動疏運、營運政策、土建工程、站體改善或道路交通。
+- 同一則新聞若只有單一來源，第一個事件摘要 bullet 寫一次「依 XXX 公告/報導」即可，後續 bullet 不要重複相同來源主詞。
+- 資料來源必須放在每則最後。
 - 正式週報語氣需像機電系統設計處整理給長官或評審閱讀的國際捷運技術週報，避免除錯、選題或模型處理語氣。
 - 不得在正式報告正文使用：「候選資料指出」「候選摘要指出」「入選資料指出」「原始候選資料」「raw data」「本次送入模型」「AI 入選」「模型判斷」「資料欄位顯示」「初篩資料指出」「本次候選資料」「來源健康」「Python 初篩」「MaiAgent 判斷」。
 - 事件摘要請以 source_display 與 source_verb 敘述，例如「依 MTA 官方公告……」「依 Railway-News 報導……」，不得以「候選資料」作為主詞。
@@ -3032,7 +3108,7 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 > 報導範圍：{report_scope_label}
 
 報告最後保留：
-📊 本週統計：共 N 則（{selected_stats}）
+📊 本期統計：共 N 則（{selected_stats}）
 ⏰ 報告產出時間：{today.strftime('%Y年%m月%d日')} 週{weekday}
 
 ## 第一階段入選新聞
@@ -3159,20 +3235,17 @@ def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str
 ### [填入該則所屬之分類：{allowed_heading_options}] 國家/地區或標準編號：（一句有力主標題）
 * **發布/事件日期**：（原文發布年月日）
 * **國家/地區**：（全球模式仍需標示；規範更新可填公告機構/標準體系）
-* **相關機電系統**：車輛/號誌/通訊/供電/月臺門/機廠設備/系統整合/資安/土建界面
+* **相關機電系統**：限車輛、號誌、通訊、供電、AFC、月臺門、車站電梯、電扶梯、旅客資訊系統、SCADA、資通訊與資安、車站機電設備等機電範疇
 * **事件摘要**：
   - （列點精要說明，3–5 點）
+* **【臺北捷運局啟示】**：100 字以內一段文字，不分點。
 * **資料來源**：[來源名稱](完整 https:// 網址)
-* **【臺北捷運局啟示】**
-  - **可能影響系統**：
-  - **可參考作法**：
-  - **後續追蹤建議**：
 
 ---
 
 ## 報告摘要（必填）
 ---
-**本週統計**：共 N 則 
+**本期統計**：共 N 則 
 {report_shortfall_summary_line}
 **報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
 """
@@ -3477,7 +3550,7 @@ def strip_internal_report_fields(text: str) -> str:
             continue
 
         if skip_candidate_section:
-            if section_title.startswith(("報告摘要", "結尾")) or re.match(r"^[一二三四五六]、", section_title) or line.startswith(("📊", "⚠️", "⏰", "**本週統計", "本週統計", "**不足", "不足", "**報告產出時間", "報告產出時間")):
+            if section_title.startswith(("報告摘要", "結尾")) or re.match(r"^[一二三四五六]、", section_title) or line.startswith(("📊", "⚠️", "⏰", "**本週統計", "本週統計", "**本期統計", "本期統計", "**不足", "不足", "**報告產出時間", "報告產出時間")):
                 skip_candidate_section = False
             else:
                 continue
@@ -3547,11 +3620,11 @@ def normalize_report_statistics_line(text: str) -> str:
     counts = count_report_items_by_category(text)
     total = sum(counts.get(category, 0) for category in selected_parts)
     stats_detail = " / ".join(f"{category} {counts.get(category, 0)} 則" for category in selected_parts)
-    stats_line = f"📊 本週統計：共 {total} 則（{stats_detail}）"
-    if re.search(r"(?m)^\s*📊\s*本週統計.*$", text):
-        return re.sub(r"(?m)^\s*📊\s*本週統計.*$", stats_line, text, count=1)
-    if re.search(r"(?m)^\s*本週統計.*$", text):
-        return re.sub(r"(?m)^\s*本週統計.*$", stats_line, text, count=1)
+    stats_line = f"📊 本期統計：共 {total} 則（{stats_detail}）"
+    if re.search(r"(?m)^\s*📊\s*(?:本週|本期)統計.*$", text):
+        return re.sub(r"(?m)^\s*📊\s*(?:本週|本期)統計.*$", stats_line, text, count=1)
+    if re.search(r"(?m)^\s*(?:本週|本期)統計.*$", text):
+        return re.sub(r"(?m)^\s*(?:本週|本期)統計.*$", stats_line, text, count=1)
     match = re.search(r"(?m)^\s*⏰", text)
     if match:
         return text[:match.start()].rstrip() + "\n" + stats_line + "\n" + text[match.start():].lstrip()
@@ -3600,6 +3673,118 @@ def clean_internal_report_language(text: str) -> str:
     return cleaned.strip()
 
 
+SERVICE_OR_CIVIL_SYSTEM_TERMS = [
+    "無障礙設施", "無障礙服務", "車站人流管理", "旅客服務", "活動疏運",
+    "營運政策", "土建工程", "站體改善", "道路交通", "一般客服",
+]
+
+
+def normalize_electromechanical_system_line(line: str) -> str:
+    if "相關機電系統" not in line:
+        return line
+    prefix = line.split("相關機電系統", 1)[0] + "相關機電系統："
+    value = line.split("相關機電系統", 1)[1].lstrip("：:").strip()
+    if "電梯" in value or "升降機" in value:
+        value = value.replace("無障礙設施", "車站電梯").replace("無障礙服務", "車站電梯")
+    if "票閘" in value or "閘門" in value:
+        value = value.replace("旅客服務", "AFC 自動收費系統")
+    for term in SERVICE_OR_CIVIL_SYSTEM_TERMS:
+        value = value.replace(term, "")
+    value = re.sub(r"[、,\s]+", "、", value).strip("、 ，,")
+    if not value:
+        value = "未明確載明機電系統"
+    return f"{prefix}{value}"
+
+
+def _short_formal_sentence(text: str, limit: int = 100) -> str:
+    text = re.sub(r"^\s*[-•]\s*", "", text or "").strip()
+    text = re.sub(r"^(可能影響系統|可參考作法|後續追蹤建議)\s*[：:]\s*", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" ；;，,")
+    if len(text) > limit:
+        text = text[:limit].rstrip("，,；;。 ") + "。"
+    return text
+
+
+def simplify_taipei_insight(text: str) -> str:
+    lines = (text or "").splitlines()
+    output: list[str] = []
+    idx = 0
+    while idx < len(lines):
+        raw_line = lines[idx]
+        line = raw_line.strip()
+        if "【臺北捷運局啟示】" not in line:
+            output.append(raw_line)
+            idx += 1
+            continue
+
+        prefix = raw_line.split("【臺北捷運局啟示】", 1)[0]
+        header = f"{prefix}【臺北捷運局啟示】："
+        inline_text = line.split("【臺北捷運局啟示】", 1)[1].lstrip("：:").strip()
+        idx += 1
+        collected: list[str] = []
+        while idx < len(lines):
+            next_line = lines[idx].strip()
+            if (
+                next_line.startswith("• 資料來源")
+                or next_line.startswith("• 發布/事件日期")
+                or next_line.startswith("🔹")
+                or next_line.startswith("________________________________________")
+                or re.match(r"^[一二三四五六]、", next_line)
+                or next_line.startswith("📊")
+                or next_line.startswith("⏰")
+            ):
+                break
+            if next_line:
+                collected.append(next_line)
+            idx += 1
+        insight = _short_formal_sentence("；".join([inline_text] + collected))
+        output.append(header)
+        if insight:
+            output.append(insight)
+        continue
+    return "\n".join(output)
+
+
+def remove_legacy_report_fields(text: str) -> str:
+    lines = []
+    skip_legacy_insight_bullets = False
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if re.match(r"^•\s*技術關鍵字\s*[：:]", line):
+            continue
+        if re.match(r"^[-•]\s*(可能影響系統|可參考作法|後續追蹤建議)\s*[：:]", line):
+            continue
+        if "相關機電系統" in raw_line:
+            raw_line = normalize_electromechanical_system_line(raw_line)
+        lines.append(raw_line)
+    return "\n".join(lines)
+
+
+def reduce_repeated_source_subjects(text: str) -> str:
+    output: list[str] = []
+    seen_subjects: set[str] = set()
+    for raw_line in (text or "").splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith("🔹") or stripped.startswith("________________________________________"):
+            seen_subjects = set()
+        match = re.match(r"^(\s*-\s*)(依\s*[^，。；;]{2,40}(?:公告|報導|官方資料|發布))(?:，|指出，|顯示，)?\s*(.*)$", raw_line)
+        if match:
+            subject = re.sub(r"\s+", "", match.group(2))
+            if subject in seen_subjects and match.group(3):
+                raw_line = f"{match.group(1)}{match.group(3)}"
+            else:
+                seen_subjects.add(subject)
+        output.append(raw_line)
+    return "\n".join(output)
+
+
+def simplify_formal_report_format(text: str) -> str:
+    text = remove_legacy_report_fields(text)
+    text = simplify_taipei_insight(text)
+    text = reduce_repeated_source_subjects(text)
+    return text
+
+
 def sanitize_report_text(text: str) -> str:
     text = (
         text.replace("全球（排除台灣）", "全球（安全白名單來源）")
@@ -3608,6 +3793,7 @@ def sanitize_report_text(text: str) -> str:
         .replace("(排除台灣)", "")
     )
     text = clean_internal_report_language(text)
+    text = simplify_formal_report_format(text)
     if not include_research_supplement:
         text = re.sub(r"(?ms)^#{0,3}\s*六、技術研究補充.*?(?=^📊|^⏰|\Z)", "", text)
         text = re.sub(r"(?m)^.*技術研究補充.*$", "", text)
@@ -4082,7 +4268,8 @@ def try_markdown_to_pdf_bytes(md: str) -> bytes | None:
 
 def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: str) -> bool:
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = report_title
+    email_run_config = st.session_state.get("latest_run_config", current_run_config)
+    msg["Subject"] = email_run_config.get("report_title", report_title)
     msg["From"]    = gmail_user
     msg["To"]      = ", ".join(recipients)
     msg.attach(MIMEText(text, "plain", "utf-8"))
@@ -4140,6 +4327,11 @@ if generate_btn:
     elif not is_global_scope and not active_regions:
         status_placeholder.error("❌ 指定先進國家/地區模式下，請至少勾選一個國家/地區。")
     else:
+        run_config = current_run_config.copy()
+        clear_old_report_state()
+        st.session_state["latest_run_config"] = run_config
+        st.session_state["report_generated"] = False
+        st.session_state["email_sent"] = False
         progress_bar = progress_placeholder.progress(0.10)
         status_text = status_placeholder
 
@@ -4179,6 +4371,7 @@ if generate_btn:
             status_text.text("🧹 去重與初步篩選……")
             candidate_pool = prepare_candidate_pool(rss_results, ddg_results)
             model_candidates = candidate_pool["model_candidates"]
+            long_term_coverage = build_long_term_coverage_warning(candidate_pool["filtered_candidates"])
             progress_bar.progress(0.52)
 
             status_text.text("🛡️ 排除舊聞與低品質來源……")
@@ -4245,6 +4438,8 @@ if generate_btn:
                 "category_counts": category_counts,
                 "journal_count": len(journal_candidates),
                 "model_candidate_count": len(model_candidates),
+                "long_term_coverage": long_term_coverage,
+                "run_config": run_config,
             }
             st.session_state["latest_report_md"] = report_text
             st.session_state["latest_report"] = report_text
@@ -4254,7 +4449,10 @@ if generate_btn:
                 "category_counts": category_counts,
             }
             st.session_state["latest_report_stats"] = report_stats
+            st.session_state["latest_run_config"] = run_config
+            st.session_state["report_generated"] = True
             st.session_state["latest_debug_info"] = {
+                "run_config": run_config,
                 "raw_candidates": candidate_pool["raw_candidates"],
                 "deduped_candidates": candidate_pool["deduped_candidates"],
                 "filtered_candidates": candidate_pool["filtered_candidates"],
@@ -4272,6 +4470,7 @@ if generate_btn:
                 "exclusion_stats": candidate_pool["exclusion_stats"],
                 "source_statuses": source_statuses,
                 "report_stats": report_stats,
+                "long_term_coverage": long_term_coverage,
             }
 
             email_note = "未自動寄送 Email"
@@ -4282,6 +4481,7 @@ if generate_btn:
                     progress_target=progress_bar,
                 )
                 email_note = "Email 已寄送" if email_ok else "Email 未寄出，請檢查收件設定或 Secrets"
+                st.session_state["email_sent"] = bool(email_ok)
             else:
                 progress_bar.progress(0.95)
 
@@ -4314,11 +4514,13 @@ st.markdown("---")
 raw_rss = st.session_state.get("latest_rss_raw", "")
 raw_ddg = st.session_state.get("latest_ddg_raw", "")
 source_statuses = st.session_state.get("latest_source_statuses", [])
+display_run_config = st.session_state.get("latest_run_config", current_run_config)
+display_report_label = display_run_config.get("report_label", report_period_label)
 
 if show_developer_info and source_statuses:
     render_source_health_dashboard(source_statuses)
 
-st.markdown(f'<div class="section-title">正式{report_period_label}</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="section-title">正式{display_report_label}</div>', unsafe_allow_html=True)
 
 report_stats = st.session_state.get("latest_report_stats", {})
 if show_developer_info and report_stats:
@@ -4349,9 +4551,9 @@ if not report_to_show:
     try:
         with open("reports/latest.md", "r", encoding="utf-8") as f:
             report_to_show = f.read()
+            report_to_show = sanitize_report_text(report_to_show)
     except FileNotFoundError:
         pass
-report_to_show = sanitize_report_text(report_to_show)
 
 if report_to_show:
     st.markdown(display_report_markdown(report_to_show))
@@ -4367,14 +4569,14 @@ if report_to_show:
     with out1:
         if pdf_bytes:
             st.download_button(
-                f"📄 下載正式{report_period_label} PDF",
+                f"📄 下載正式{display_report_label} PDF",
                 data=pdf_bytes,
                 file_name=f"metro_report_{today.strftime('%Y%m%d')}.pdf",
                 mime="application/octet-stream",
                 use_container_width=True,
             )
         else:
-            st.button(f"📄 下載正式{report_period_label} PDF", disabled=True, use_container_width=True)
+            st.button(f"📄 下載正式{display_report_label} PDF", disabled=True, use_container_width=True)
             st.caption("請先產生本次報告；PDF 會使用 latest_report_md。")
     if show_developer_info and out2:
         with out2:
@@ -4394,11 +4596,11 @@ if report_to_show:
             send_latest_btn = st.button("📧 寄送目前報告", use_container_width=True)
             if send_latest_btn:
                 email_progress = progress_placeholder.progress(0.95)
-                send_current_report_email(
+                st.session_state["email_sent"] = bool(send_current_report_email(
                     st.session_state["latest_report_md"],
                     status_target=status_placeholder,
                     progress_target=email_progress,
-                )
+                ))
         else:
             st.button("📧 寄送目前報告", disabled=True, use_container_width=True)
             st.caption("請先產生報告。")
@@ -4443,18 +4645,29 @@ def _json_safe(value):
 
 def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_statuses: list[dict]) -> dict:
     latest_stats = debug_info.get("report_stats", report_stats or {}) if debug_info else (report_stats or {})
+    run_config = (
+        debug_info.get("run_config")
+        or latest_stats.get("run_config")
+        or st.session_state.get("latest_run_config")
+        or current_run_config
+    )
+    long_term_coverage = debug_info.get("long_term_coverage") or latest_stats.get("long_term_coverage") or {}
     return _json_safe({
         "run_info": {
             "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
-            "report_date": today.isoformat(),
-            "lookback_days": lookback_int,
-            "date_range": date_range,
-            "selected_types": selected_types,
-            "selected_regions": ["全球"] if is_global_scope else active_regions,
-            "scope_mode": scope_mode,
-            "include_standards": standards_enabled,
-            "include_research_supplement": include_research_supplement,
+            "report_date": run_config.get("report_date"),
+            "lookback_days": run_config.get("lookback_days"),
+            "date_range": run_config.get("date_range"),
+            "report_label": run_config.get("report_label"),
+            "report_title": run_config.get("report_title"),
+            "selected_types": run_config.get("selected_types", []),
+            "selected_regions": run_config.get("selected_regions", []),
+            "scope_mode": run_config.get("scope_mode"),
+            "include_standards": run_config.get("include_standards"),
+            "include_research_supplement": run_config.get("include_research_supplement"),
             "app_source_hash": st.session_state.get("_app_source_hash", ""),
+            "long_term_coverage_warning": long_term_coverage.get("long_term_coverage_warning", False),
+            "long_term_coverage_reason": long_term_coverage.get("reason", ""),
         },
         "stats": {
             "raw_count": latest_stats.get("raw_count", 0),
@@ -4535,6 +4748,8 @@ if show_developer_info and (debug_info or (show_raw_debug and (raw_rss or raw_dd
         debug_payload = build_developer_debug_payload(debug_info, report_stats, source_statuses)
         debug_json = json.dumps(debug_payload, ensure_ascii=False, indent=2)
         debug_markdown = build_developer_debug_markdown(debug_payload)
+        st.session_state["latest_debug_payload"] = debug_payload
+        st.session_state["latest_debug_md"] = debug_markdown
         download_cols = st.columns(2)
         with download_cols[0]:
             st.download_button(
