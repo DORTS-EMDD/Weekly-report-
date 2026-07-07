@@ -670,6 +670,30 @@ SOURCE_DISPLAY_BY_DOMAIN = {
     "railwayage.com": "Railway Age",
 }
 
+SOURCE_DOMAIN_HINT_BY_LABEL = {
+    "mta": "mta.info",
+    "tokyo metro": "tokyometro.jp",
+    "mtr": "mtr.com.hk",
+    "ttc": "ttc.ca",
+    "tfl": "tfl.gov.uk",
+    "wmata": "wmata.com",
+    "translink": "translink.ca",
+    "ratp": "ratp.fr",
+    "lta": "lta.gov.sg",
+    "smrt": "smrt.com.sg",
+    "seoul metro": "seoulmetro.co.kr",
+    "railway-news": "railway-news.com",
+    "railway news": "railway-news.com",
+    "railway gazette": "railwaygazette.com",
+    "international railway journal": "railjournal.com",
+    "irj": "railjournal.com",
+    "urban transport magazine": "urban-transport-magazine.com",
+    "global mass transit": "globalmasstransit.net",
+    "mass transit magazine": "masstransitmag.com",
+    "metro magazine": "metro-magazine.com",
+    "railway age": "railwayage.com",
+}
+
 SOURCE_QUALITY_C_DOMAINS = {
     "msn.com", "yahoo.com", "aol.com", "tripadvisor.com", "timeout.com",
     "lonelyplanet.com", "booking.com", "expedia.com", "trip.com",
@@ -679,6 +703,8 @@ SOURCE_QUALITY_C_DOMAINS = {
 LOW_QUALITY_CONTENT_TERMS = [
     "wikipedia", "travel guide", "tourist", "hotel", "airport parking",
     "things to do", "itinerary", "visitor guide", "seo", "sponsored",
+    "minor delay", "detour", "service alert", "service advisory",
+    "customer notice", "take transit", "temporary stop closure",
     "一般旅遊", "旅遊攻略", "景點", "飯店", "酒店",
 ]
 
@@ -686,6 +712,7 @@ LOW_INFORMATION_PAGE_TERMS = [
     "home", "homepage", "topic page", "archive", "category", "service page",
     "portal", "入口", "首頁", "分類頁", "服務頁", "旅客資訊", "活動資訊",
     "archive page", "route page", "trip result", "journey planner", "route map",
+    "route number", "RouteNumber", "trip planner", "travel information",
     "pdf map", "jobs", "vacancy", "career",
 ]
 
@@ -693,7 +720,8 @@ LOW_INFORMATION_PATH_MARKERS = [
     "/topic", "/topics", "/archive", "/archives", "/category", "/categories",
     "/tag/", "/tags/", "/services", "/service", "/customer", "/passenger",
     "/mobile", "/app", "/apps", "/route", "/routes", "/trip", "/trips",
-    "/journey", "/journey-planner", "/map", "/maps", "/search", "/jobs",
+    "/journey", "/journey-planner", "/trip-planner", "/travel-information",
+    "/map", "/maps", "/search", "/jobs",
     "/careers", ".pdf",
 ]
 
@@ -934,7 +962,7 @@ with st.sidebar:
         )
 
         st.markdown("**排程說明**")
-        st.caption("GitHub Actions 排程版負責固定自動寄送核心週報；實際時間依 weekly.yml 設定。")
+        st.caption("由 GitHub Actions 自動寄送週報；預設每周一早上8時30分寄出報告。")
 
         st.markdown("**AI 模型設定**")
         st.caption("目前使用：MaiAgent 雲端 API")
@@ -1388,6 +1416,64 @@ def _contains_any_term(text: str, terms: list[str]) -> bool:
     return False
 
 
+def _domain_hint_from_source_label(text: str) -> str:
+    text_lower = (text or "").casefold()
+    for label, domain in SOURCE_DOMAIN_HINT_BY_LABEL.items():
+        if label.casefold() in text_lower:
+            return domain
+    return ""
+
+
+def _original_source_domain(source: str = "", url: str = "", source_href: str = "", query: str = "") -> str:
+    for value in (source_href, url):
+        host = _domain_from_url(value)
+        if host and host != "news.google.com":
+            return host
+    for value in (url, source_href, query):
+        domain = _extract_site_domain_from_google_news(value)
+        if domain and domain != "news.google.com":
+            return domain
+    return _domain_hint_from_source_label(f"{source} {query}")
+
+
+def _has_high_value_operational_detail(text: str) -> bool:
+    return (
+        _contains_any_term(text, HIGH_VALUE_POLICY_TERMS)
+        or _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS)
+        or _contains_any_term(text, ACCIDENT_SIGNAL_TERMS)
+        or _is_standard_update_candidate(text, require_url=True)
+    )
+
+
+def _is_low_value_service_notice_text(text: str) -> bool:
+    return _contains_any_term(text, LOW_VALUE_POLICY_TERMS + LOW_INFORMATION_PAGE_TERMS)
+
+
+def _wordish_count(text: str) -> int:
+    return len(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", text or ""))
+
+
+def _information_quality_issue(candidate: dict) -> str:
+    title = candidate.get("title", "")
+    snippet = candidate.get("snippet", "")
+    source = candidate.get("source", "")
+    text = f"{title} {snippet} {source} {candidate.get('query', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
+    title_count = _wordish_count(title)
+    snippet_count = _wordish_count(snippet)
+    is_official = candidate.get("source_tier") == "A_official"
+    has_high_value = _has_high_value_operational_detail(text)
+
+    if _is_low_value_service_notice_text(text) and not has_high_value:
+        if _contains_any_term(text, ["route page", "route number", "RouteNumber", "trip planner"]):
+            return "低價值路線公告"
+        return "日常服務推播"
+    if title_count < 4 and snippet_count < 10 and not (is_official and has_high_value):
+        return "摘要資訊不足"
+    if snippet_count < 8 and not has_high_value:
+        return "摘要資訊不足"
+    return ""
+
+
 def _strip_source_name_noise(text: str) -> str:
     cleaned = text or ""
     for term in SOURCE_NAME_NOISE_TERMS:
@@ -1574,6 +1660,8 @@ def _fetch_feed(session: requests.Session, url: str):
 
     if response.status_code == 403:
         raise FeedFetchError("403", "HTTP 403 Forbidden")
+    if response.status_code in (404, 405):
+        raise FeedFetchError(str(response.status_code), f"HTTP {response.status_code}")
     if response.status_code >= 400:
         raise FeedFetchError("parse error", f"HTTP {response.status_code}")
 
@@ -1653,13 +1741,21 @@ def _items_from_parsed_feed(
     return items, invalid_count, blocked_count, duplicate_count, topic_filtered_count
 
 
-def _status_record(source_name: str, method: str, status: str, item_count: int, error_message: str = "") -> dict:
+def _status_record(
+    source_name: str,
+    method: str,
+    status: str,
+    item_count: int,
+    error_message: str = "",
+    fallback_used: bool = False,
+) -> dict:
     return {
         "source_name": source_name,
         "method": method,
         "status": status,
         "item_count": item_count,
         "error_message": error_message,
+        "fallback_used": fallback_used,
     }
 
 
@@ -1735,17 +1831,17 @@ def fetch_rss_feeds(
                     if items_found:
                         all_blocks.append(_format_items_block(f"{source_name}（fallback Google News）", items_found))
                         source_statuses.append(
-                            _status_record(source_name, "Google News fallback", "fallback 成功", min(len(items_found), MAX_ITEMS_PER_SOURCE), f"官方 RSS 失敗：{exc.message}")
+                            _status_record(source_name, "Google News fallback", "fallback 成功", min(len(items_found), MAX_ITEMS_PER_SOURCE), f"官方 RSS 失敗：{exc.message}", True)
                         )
                     else:
                         status = "非都市軌道" if topic_filtered_count and not (invalid_count or blocked_count) else "被安全規則排除" if blocked_count and not invalid_count else "無文章"
                         message = f"官方 RSS 失敗：{exc.message}；fallback 無有效候選；非都市軌道 {topic_filtered_count}、無效連結 {invalid_count}、安全排除 {blocked_count}、重複 {duplicate_count}"
                         all_blocks.append(f"【RSS來源：{source_name}】（{status}）")
-                        source_statuses.append(_status_record(source_name, "Google News fallback", status, 0, message))
+                        source_statuses.append(_status_record(source_name, "Google News fallback", status, 0, message, True))
                 except FeedFetchError as fallback_exc:
                     all_blocks.append(f"【RSS來源：{source_name}】（{exc.status}）")
                     source_statuses.append(
-                        _status_record(source_name, method, exc.status, 0, f"官方 RSS：{exc.message}；fallback：{fallback_exc.message}")
+                        _status_record(source_name, method, exc.status, 0, f"官方 RSS：{exc.message}；fallback：{fallback_exc.message}", True)
                     )
             else:
                 all_blocks.append(f"【RSS來源：{source_name}】（{exc.status}）")
@@ -1979,7 +2075,20 @@ def _shorten(text: str, max_chars: int = CANDIDATE_SNIPPET_CHARS) -> str:
 
 
 def _effective_source_url(candidate: dict) -> str:
-    return _clean_candidate_url(candidate.get("source_href") or candidate.get("url") or "")
+    source_href = candidate.get("source_href") or ""
+    url = candidate.get("url") or ""
+    source_domain = (candidate.get("source_domain") or "").strip().lower()
+    raw_url = source_href or url
+    if "news.google.com" in _domain_from_url(raw_url):
+        domain = source_domain or _original_source_domain(
+            candidate.get("source", ""),
+            url,
+            source_href,
+            candidate.get("query", ""),
+        )
+        if domain and domain != "news.google.com":
+            return f"https://{domain}"
+    return _clean_candidate_url(raw_url)
 
 
 def _clean_candidate_url(value: str) -> str:
@@ -2007,8 +2116,7 @@ def _source_tier_rank(tier: str) -> int:
 
 
 def classify_source_quality(source: str, url: str, source_href: str = "") -> tuple[str, str]:
-    check_url = source_href or url
-    host = _domain_from_url(check_url)
+    host = _original_source_domain(source, url, source_href)
     text = f"{source} {url} {source_href}".casefold()
 
     if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_A_DOMAINS):
@@ -2023,8 +2131,7 @@ def classify_source_quality(source: str, url: str, source_href: str = "") -> tup
 
 
 def classify_source_tier(source: str, url: str, source_href: str = "") -> tuple[str, str]:
-    check_url = source_href or url
-    host = _domain_from_url(check_url)
+    host = _original_source_domain(source, url, source_href)
     text = f"{source} {url} {source_href}".casefold()
     path_lower = urlparse(url or "").path.casefold()
 
@@ -2040,13 +2147,13 @@ def classify_source_tier(source: str, url: str, source_href: str = "") -> tuple[
         return "B_professional", "專業鐵道或大眾運輸媒體"
     if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_C_DOMAINS):
         return "C_media", "一般媒體、轉載或入口媒體"
-    if "news.google.com" in _domain_from_url(url) and not source_href:
+    if "news.google.com" in _domain_from_url(url) and not host:
         return "D_proxy_low_value", "Google News 代理且原始來源未明確辨識"
     return "C_media", "一般新聞媒體或未分級來源"
 
 
 def source_label_for_report(source: str, url: str, source_href: str = "", tier: str = "") -> str:
-    host = _domain_from_url(source_href or url)
+    host = _original_source_domain(source, url, source_href)
     for domain, label in SOURCE_DISPLAY_BY_DOMAIN.items():
         if host and _host_matches(host, domain):
             return label
@@ -2147,6 +2254,7 @@ def _make_news_candidate(
     source_type: str,
     source_href: str = "",
 ) -> dict:
+    original_domain = _original_source_domain(source, url, source_href, query)
     quality, quality_reason = classify_source_quality(source, url, source_href)
     source_tier, source_tier_reason = classify_source_tier(source, url, source_href)
     source_display = source_label_for_report(source, url, source_href, source_tier)
@@ -2170,7 +2278,7 @@ def _make_news_candidate(
         "source_tier_reason": source_tier_reason,
         "source_display": source_display,
         "source_verb": source_verb,
-        "source_domain": _domain_from_url(source_href or url),
+        "source_domain": original_domain or _domain_from_url(source_href or url),
     }
 
 
@@ -2335,6 +2443,10 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
     if any(term.casefold() in text_lower for term in LOW_QUALITY_CONTENT_TERMS):
         return False, "旅遊/SEO/內容農場"
 
+    information_issue = _information_quality_issue(candidate)
+    if information_issue:
+        return False, information_issue
+
     parsed_url = urlparse(url)
     path_lower = (parsed_url.path or "").casefold()
     has_entry_path = any(marker in path_lower for marker in LOW_INFORMATION_PATH_MARKERS)
@@ -2497,12 +2609,20 @@ def _policy_selection_rule() -> str:
 LOW_VALUE_POLICY_TERMS = [
     "holiday service", "weekend service", "weekender", "service advisory",
     "travel information", "trip result", "route page", "take transit",
+    "RouteNumber", "route number", "minor delay", "detour", "service alert",
+    "trip planner", "schedule change", "planned service change",
+    "bus replacement", "shuttle bus", "customer notice", "service update",
+    "temporary stop closure",
     "搭乘資訊", "假日服務", "週末服務", "服務提醒", "旅客資訊更新",
 ]
 HIGH_VALUE_POLICY_TERMS = [
     "fare", "afc", "ticketing", "headway", "special train", "extra train",
     "crowd control", "station control", "passenger information system",
     "trial operation", "system conversion", "asset renewal", "maintenance",
+    "engineering works", "track renewal", "rail replacement", "signal testing",
+    "system testing", "station equipment", "equipment upgrade",
+    "fare adjustment", "major event", "event service", "station access control",
+    "platform crowding", "passenger flow control",
     "票價", "票務", "班距", "加班車", "人流管制", "車站管制", "試營運",
     "系統轉換", "資產更新", "維修", "工程",
 ]
@@ -2575,6 +2695,7 @@ def infer_preliminary_type(candidate: dict) -> str:
 def build_candidate_flags(candidate: dict) -> list[str]:
     text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('query', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
     flags: list[str] = []
+    information_issue = _information_quality_issue(candidate)
     if candidate.get("source_tier") == "A_official":
         flags.append("official_source")
     if candidate.get("source_tier") == "B_professional":
@@ -2585,8 +2706,16 @@ def build_candidate_flags(candidate: dict) -> list[str]:
         flags.append("source_domain_detected")
     if "news.google.com" in _domain_from_url(candidate.get("url", "")):
         flags.append("google_news_proxy")
+        if not (candidate.get("source_domain") or _original_source_domain(
+            candidate.get("source", ""),
+            candidate.get("url", ""),
+            candidate.get("source_href", ""),
+            candidate.get("query", ""),
+        )):
+            flags.append("source_domain_unresolved")
     if _candidate_date_obj(candidate.get("date", "")):
         flags.append("date_detected")
+
     if _is_urban_rail_candidate(text, candidate.get("source", "")):
         flags.append("urban_rail")
     if _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS):
@@ -2595,8 +2724,10 @@ def build_candidate_flags(candidate: dict) -> list[str]:
         flags.append("incident_or_safety_signal")
     if _contains_any_term(text, HIGH_VALUE_POLICY_TERMS):
         flags.append("high_value_policy")
-    if _contains_any_term(text, LOW_VALUE_POLICY_TERMS):
+    if _contains_any_term(text, LOW_VALUE_POLICY_TERMS) or information_issue in {"日常服務推播", "低價值路線公告"}:
         flags.append("low_value_service_notice")
+    if information_issue == "摘要資訊不足":
+        flags.append("insufficient_information")
     if len(candidate.get("title", "")) < 20:
         flags.append("short_title")
     if len(candidate.get("snippet", "")) < 80:
@@ -2630,6 +2761,10 @@ def score_news_candidate(candidate: dict) -> dict:
         reasons.append("日期不明 -20")
 
     source_url = _effective_source_url(candidate)
+    unresolved_google_proxy = (
+        "news.google.com" in _domain_from_url(candidate.get("url", ""))
+        and "news.google.com" in _domain_from_url(source_url)
+    )
     if _extract_complete_url(source_url):
         score += 8
         reasons.append("完整 URL +8")
@@ -2639,6 +2774,10 @@ def score_news_candidate(candidate: dict) -> dict:
     else:
         score -= 15
         reasons.append("URL 不完整 -15")
+
+    if unresolved_google_proxy:
+        score -= 10
+        reasons.append("Google News proxy unresolved original source -10")
 
     if _is_urban_rail_candidate(text, candidate.get("source", "")):
         score += 15
@@ -2671,6 +2810,17 @@ def score_news_candidate(candidate: dict) -> dict:
     if len(candidate.get("snippet", "")) < 80:
         score -= 8
         reasons.append("摘要過短 -8")
+
+    information_issue = _information_quality_issue(candidate)
+    if information_issue == "日常服務推播":
+        score -= 25
+        reasons.append("日常服務推播 -25")
+    elif information_issue == "低價值路線公告":
+        score -= 30
+        reasons.append("低價值路線公告 -30")
+    elif information_issue == "摘要資訊不足":
+        score -= 18
+        reasons.append("摘要資訊不足 -18")
 
     flags = build_candidate_flags(candidate)
     preliminary_type = infer_preliminary_type(candidate)
