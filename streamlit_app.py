@@ -954,7 +954,14 @@ with st.sidebar:
         st.caption("規範追蹤僅作為更新監測清單；若未查得明確修訂、公告、草案、徵詢或新版發布，不會列入正式週報。")
 
     with st.expander("⚙️ 進階設定", expanded=False):
-        st.markdown("**長期趨勢 / 規範追蹤模式**")
+        fast_mode = st.checkbox(
+            "快速展示模式",
+            value=True,
+            key="fast_mode",
+            help="減少搜尋來源與候選卡數量，加快展示產出；正式測試可關閉。",
+        )
+
+        st.markdown("**?瑟?頞典 / 閬?餈質馱璅∪?**")
         long_term_mode = st.checkbox(
             "啟用長期趨勢 / 規範追蹤模式",
             key="long_term_mode",
@@ -987,6 +994,7 @@ include_research_supplement = bool(
 if not include_research_supplement:
     if not research_option_available:
         st.session_state["include_research_supplement"] = False
+fast_mode_enabled = bool(st.session_state.get("fast_mode", True))
 report_period_label = REPORT_PERIOD_LABELS.get(lookback_int, "週報")
 target_is_enforced = lookback_int in REPORT_TARGET_BY_DAYS
 min_report_items = REPORT_TARGET_BY_DAYS.get(lookback_int, 0)
@@ -1039,6 +1047,7 @@ def build_current_run_config() -> dict:
         "report_scope_label": report_scope_label,
         "include_standards": standards_enabled,
         "include_research_supplement": include_research_supplement,
+        "fast_mode": fast_mode_enabled,
     }
 
 
@@ -1223,12 +1232,15 @@ REGION_NEWS_QUERIES: dict[str, list[tuple[str, str, str, str, str]]] = {
 }
 
 
-def build_region_news_sources(regions: list[str], days: int) -> list[tuple[str, str]]:
+def build_region_news_sources(regions: list[str], days: int, fast_mode: bool = False) -> list[tuple[str, str]]:
     """依勾選國家動態組出 Google News 地區代理 RSS 來源清單。"""
     sources: list[tuple[str, str]] = []
     days = max(1, min(int(days), 365))
     for region in regions:
-        for label, keyword, hl, gl, lang in REGION_NEWS_QUERIES.get(region, []):
+        region_queries = REGION_NEWS_QUERIES.get(region, [])
+        if fast_mode:
+            region_queries = region_queries[:1]
+        for label, keyword, hl, gl, lang in region_queries:
             query = f"{keyword} when:{days}d"
             url = (
                 "https://news.google.com/rss/search?q="
@@ -1248,6 +1260,48 @@ def build_standards_news_sources(days: int) -> list[tuple[str, str]]:
             query = f'"{standard}" ({update_terms}) when:{days}d'
             sources.append((f"規範更新代理－{category}－{standard}", google_news_search_url(query)))
     return sources
+
+
+FAST_SOURCE_KEYWORDS = (
+    "railway-news",
+    "railway gazette",
+    "urban transport magazine",
+    "mass transit magazine",
+    "metro magazine",
+    "mta",
+    "tfl",
+    "lta",
+    "mtr",
+    "tokyo metro",
+    "ttc",
+    "wmata",
+    "translink",
+)
+
+
+def select_fast_rss_sources(sources: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    selected: list[tuple[str, str]] = []
+    seen_keys: set[str] = set()
+    for source_name, url in sources:
+        haystack = f"{source_name} {url}".casefold()
+        if not any(keyword in haystack for keyword in FAST_SOURCE_KEYWORDS):
+            continue
+        netloc = urlparse(url).netloc.lower().removeprefix("www.")
+        dedupe_key = source_name.casefold() if netloc == "news.google.com" else (netloc or source_name.casefold())
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        selected.append((source_name, url))
+    return selected or sources[: min(12, len(sources))]
+
+
+def build_run_news_sources(
+    region_sources: list[tuple[str, str]],
+    standards_sources: list[tuple[str, str]],
+    fast_mode: bool,
+) -> list[tuple[str, str]]:
+    base_sources = select_fast_rss_sources(RSS_SOURCES) if fast_mode else RSS_SOURCES
+    return base_sources + region_sources + standards_sources
 
 
 def render_main_dashboard(source_count: int, standards_count: int):
@@ -1282,10 +1336,11 @@ def render_main_dashboard(source_count: int, standards_count: int):
     return generate_clicked, send_after_generate, progress_placeholder, status_placeholder
 
 
-initial_region_sources = build_region_news_sources(active_regions, int(lookback_days))
+initial_region_sources = build_region_news_sources(active_regions, int(lookback_days), fast_mode=fast_mode_enabled)
 initial_standard_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
+initial_combined_sources = build_run_news_sources(initial_region_sources, initial_standard_sources, fast_mode_enabled)
 generate_btn, send_after_generate, progress_placeholder, status_placeholder = render_main_dashboard(
-    source_count=len(RSS_SOURCES) + len(initial_region_sources) + len(initial_standard_sources),
+    source_count=len(initial_combined_sources),
     standards_count=sum(len(v) for v in STANDARDS_WATCHLIST.values()),
 )
 
@@ -1856,6 +1911,55 @@ def fetch_rss_feeds(
 # ═══════════════════════════════════════════════════════
 #  精簡化 DDGS 關鍵字搜尋 (加速優化版)
 # ═══════════════════════════════════════════════════════
+def _fast_query_bucket(query: str) -> str:
+    q = (query or "").casefold()
+    if any(standard.casefold() in q for standards in STANDARDS_WATCHLIST.values() for standard in standards):
+        return "standards"
+    if any(term in q for term in ("derailment", "collision", "incident", "fire", "suspended", "accident")):
+        return "incident"
+    if any(term in q for term in ("strike", "controversy", "dispute", "protest", "budget overrun")):
+        return "controversy"
+    if any(term in q for term in ("policy", "fare", "accessibility", "ridership", "frequency", "regulation")):
+        return "policy"
+    if any(term in q for term in ("cbtc", "signalling", "signaling", "rolling stock", "driverless", "power", "depot", "automation")):
+        return "technology"
+    return "general"
+
+
+def limit_fast_search_queries(queries: list[str], news_query_indices: set[int]) -> tuple[list[str], set[int]]:
+    max_queries = 10 if not is_global_scope else 8
+    selected_pairs: list[tuple[int, str]] = []
+    seen_buckets: set[str] = set()
+
+    for original_idx, query in enumerate(queries, 1):
+        bucket = _fast_query_bucket(query)
+        if bucket in seen_buckets:
+            continue
+        seen_buckets.add(bucket)
+        selected_pairs.append((original_idx, query))
+        if len(selected_pairs) >= max_queries:
+            break
+
+    if not is_global_scope and len(selected_pairs) < max_queries:
+        selected_original_indices = {idx for idx, _ in selected_pairs}
+        for original_idx, query in reversed(list(enumerate(queries, 1))):
+            if original_idx in selected_original_indices:
+                continue
+            selected_pairs.append((original_idx, query))
+            selected_original_indices.add(original_idx)
+            if len(selected_pairs) >= max_queries:
+                break
+        selected_pairs.sort(key=lambda item: item[0])
+
+    limited_queries = [query for _, query in selected_pairs]
+    remapped_news_indices = {
+        new_idx
+        for new_idx, (old_idx, _) in enumerate(selected_pairs, 1)
+        if old_idx in news_query_indices
+    }
+    return limited_queries, remapped_news_indices
+
+
 def build_search_queries() -> tuple[list[str], set[int]]:
     """依據勾選的選項動態合併搜尋字，大幅減少發送次數"""
     queries = []
@@ -1927,6 +2031,8 @@ def build_search_queries() -> tuple[list[str], set[int]]:
             queries.append(f"{term} metro subway light rail incident strike policy controversy {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}")
             news_indices.add(idx)
 
+    if fast_mode_enabled:
+        return limit_fast_search_queries(queries, news_indices)
     return queries, news_indices
 
 
@@ -2519,7 +2625,7 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
             -_date_sort_key(item),
         ),
     )
-    candidate_limit = min(get_selection_candidate_limit(lookback_int), MAX_SELECTION_CANDIDATES)
+    candidate_limit = min(get_selection_candidate_limit(lookback_int, fast_mode=fast_mode_enabled), MAX_SELECTION_CANDIDATES)
     model_candidates = [dict(item, id=idx) for idx, item in enumerate(filtered_candidates[:candidate_limit], 1)]
     candidate_cards = [build_candidate_card(candidate) for candidate in model_candidates]
     return {
@@ -2529,6 +2635,7 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
         "excluded_candidates": excluded_candidates,
         "model_candidates": model_candidates,
         "candidate_cards": candidate_cards,
+        "candidate_card_limit": candidate_limit,
         "dedupe_stats": dedupe_stats,
         "exclusion_stats": exclusion_stats,
         "raw_count": len(raw_candidates),
@@ -2647,11 +2754,19 @@ WORK_ZONE_TECH_DETAIL_TERMS = [
 ]
 
 
-def get_selection_candidate_limit(days: int) -> int:
+def get_selection_candidate_limit(days: int, fast_mode: bool = False) -> int:
     try:
         days = int(days)
     except (TypeError, ValueError):
         days = 7
+    if fast_mode:
+        if days >= 90:
+            return 100
+        if days >= 30:
+            return 80
+        if days >= 14:
+            return 70
+        return 60
     if days >= 90:
         return 150
     if days >= 30:
@@ -2901,7 +3016,7 @@ def build_selection_prompt(candidates: list[dict]) -> str:
     allowed_topic_types = " / ".join(selected_types) if selected_types else "無"
     policy_rule = _policy_selection_rule()
     output_range = get_selection_output_range(lookback_int)
-    card_limit = min(get_selection_candidate_limit(lookback_int), MAX_SELECTION_CANDIDATES)
+    card_limit = min(get_selection_candidate_limit(lookback_int, fast_mode=fast_mode_enabled), MAX_SELECTION_CANDIDATES)
     return f"""
 # 第一階段：候選新聞選題
 run_config：{json.dumps(current_run_config, ensure_ascii=False)}
@@ -4609,27 +4724,44 @@ if generate_btn:
 
         try:
             maiagent_call_count = 0
+            run_start = time.perf_counter()
+            timings = {
+                "elapsed_seconds_total": 0.0,
+                "elapsed_seconds_rss": 0.0,
+                "elapsed_seconds_ddgs": 0.0,
+                "elapsed_seconds_candidate_pool": 0.0,
+                "elapsed_seconds_selection": 0.0,
+                "elapsed_seconds_report": 0.0,
+                "elapsed_seconds_pdf": 0.0,
+            }
 
             # Step 1：RSS 訂閱源 + 指定模式地區代理 + 規範更新代理
-            region_sources = build_region_news_sources(active_regions, int(lookback_days))
+            region_sources = build_region_news_sources(active_regions, int(lookback_days), fast_mode=fast_mode_enabled)
             standards_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
-            combined_sources = RSS_SOURCES + region_sources + standards_sources
+            combined_sources = build_run_news_sources(region_sources, standards_sources, fast_mode_enabled)
             status_text.text(
                 f"🔎 蒐集國際新聞來源……（RSS / Google News 代理共 {len(combined_sources)} 個來源）"
             )
+            stage_start = time.perf_counter()
             rss_results, source_statuses = fetch_rss_feeds(
                 combined_sources, status_text=status_text, return_status=True
             )
+            timings["elapsed_seconds_rss"] = round(time.perf_counter() - stage_start, 2)
             progress_bar.progress(0.25)
             st.session_state["latest_source_statuses"] = source_statuses
 
             status_text.text("🔍 蒐集國際新聞來源……（ddgs 多後端搜尋）")
             ddg_progress = ProgressRange(progress_bar, 0.25, 0.40)
+            search_count = len(build_search_queries()[0])
+            stage_start = time.perf_counter()
             ddg_results = run_duckduckgo_searches(ddg_progress, status_text)
+            timings["elapsed_seconds_ddgs"] = round(time.perf_counter() - stage_start, 2)
             progress_bar.progress(0.42)
 
             status_text.text("🧹 去重與初步篩選……")
+            stage_start = time.perf_counter()
             candidate_pool = prepare_candidate_pool(rss_results, ddg_results)
+            timings["elapsed_seconds_candidate_pool"] = round(time.perf_counter() - stage_start, 2)
             model_candidates = candidate_pool["model_candidates"]
             long_term_coverage = build_long_term_coverage_warning(candidate_pool["filtered_candidates"])
             progress_bar.progress(0.52)
@@ -4641,7 +4773,9 @@ if generate_btn:
             # Step 2：MaiAgent 第一階段選題
             status_text.text("🤖 MaiAgent 選題分析……")
             selection_prompt = build_selection_prompt(model_candidates)
+            stage_start = time.perf_counter()
             selection_response = call_maiagent_cloud(selection_prompt)
+            timings["elapsed_seconds_selection"] = round(time.perf_counter() - stage_start, 2)
             maiagent_call_count += 1
             selected_candidates = rebalance_selected_candidates(parse_selection_response(selection_response, model_candidates))
             selected_ids = [int(item.get("id", 0) or 0) for item in selected_candidates]
@@ -4656,13 +4790,15 @@ if generate_btn:
 
             # Step 3：MaiAgent 第二階段正式報告
             status_text.text("📝 MaiAgent 產生正式週報……")
-            search_count = len(build_search_queries()[0])
             report_prompt = build_report_prompt(selected_candidates, journal_candidates, search_count)
+            stage_start = time.perf_counter()
             report_response = call_maiagent_cloud(report_prompt)
+            timings["elapsed_seconds_report"] = round(time.perf_counter() - stage_start, 2)
             maiagent_call_count += 1
             progress_bar.progress(0.88)
 
             status_text.text("📄 完成 PDF / Email 輸出準備……")
+            pdf_stage_start = time.perf_counter()
             report_text = report_response
             report_text = sanitize_report_text(report_text)
             report_text = enforce_research_section(report_text, journal_candidates)
@@ -4694,7 +4830,17 @@ if generate_btn:
                 "category_counts": category_counts,
                 "journal_count": len(journal_candidates),
                 "model_candidate_count": len(model_candidates),
+                "source_count": len(combined_sources),
+                "ddgs_query_count": search_count,
+                "candidate_card_limit": candidate_pool.get("candidate_card_limit", len(candidate_pool["candidate_cards"])),
                 "candidate_card_count": len(candidate_pool["candidate_cards"]),
+                "elapsed_seconds_total": timings["elapsed_seconds_total"],
+                "elapsed_seconds_rss": timings["elapsed_seconds_rss"],
+                "elapsed_seconds_ddgs": timings["elapsed_seconds_ddgs"],
+                "elapsed_seconds_candidate_pool": timings["elapsed_seconds_candidate_pool"],
+                "elapsed_seconds_selection": timings["elapsed_seconds_selection"],
+                "elapsed_seconds_report": timings["elapsed_seconds_report"],
+                "elapsed_seconds_pdf": timings["elapsed_seconds_pdf"],
                 "long_term_coverage": long_term_coverage,
                 "run_config": run_config,
             }
@@ -4745,6 +4891,12 @@ if generate_btn:
                 st.session_state["email_sent"] = bool(email_ok)
             else:
                 progress_bar.progress(0.95)
+
+            timings["elapsed_seconds_pdf"] = round(time.perf_counter() - pdf_stage_start, 2)
+            timings["elapsed_seconds_total"] = round(time.perf_counter() - run_start, 2)
+            report_stats.update(timings)
+            st.session_state["latest_report_stats"] = report_stats
+            st.session_state["latest_debug_info"]["report_stats"] = report_stats
 
             summary = st.session_state["latest_report_summary"]
             standards_note = (
@@ -4895,6 +5047,7 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "scope_mode": run_config.get("scope_mode"),
             "include_standards": run_config.get("include_standards"),
             "include_research_supplement": run_config.get("include_research_supplement"),
+            "fast_mode": run_config.get("fast_mode", True),
             "app_source_hash": st.session_state.get("_app_source_hash", ""),
             "long_term_coverage_warning": long_term_coverage.get("long_term_coverage_warning", False),
             "long_term_coverage_reason": long_term_coverage.get("reason", ""),
@@ -4910,7 +5063,17 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "maiagent_calls": latest_stats.get("maiagent_call_count", 0),
             "category_counts": latest_stats.get("category_counts", {}),
             "journal_count": latest_stats.get("journal_count", 0),
+            "source_count": latest_stats.get("source_count", 0),
+            "ddgs_query_count": latest_stats.get("ddgs_query_count", 0),
+            "candidate_card_limit": latest_stats.get("candidate_card_limit", 0),
             "candidate_card_count": latest_stats.get("candidate_card_count", 0),
+            "elapsed_seconds_total": latest_stats.get("elapsed_seconds_total", 0),
+            "elapsed_seconds_rss": latest_stats.get("elapsed_seconds_rss", 0),
+            "elapsed_seconds_ddgs": latest_stats.get("elapsed_seconds_ddgs", 0),
+            "elapsed_seconds_candidate_pool": latest_stats.get("elapsed_seconds_candidate_pool", 0),
+            "elapsed_seconds_selection": latest_stats.get("elapsed_seconds_selection", 0),
+            "elapsed_seconds_report": latest_stats.get("elapsed_seconds_report", 0),
+            "elapsed_seconds_pdf": latest_stats.get("elapsed_seconds_pdf", 0),
         },
         "source_health": debug_info.get("source_statuses", source_statuses) if debug_info else (source_statuses or []),
         "raw_candidates": debug_info.get("raw_candidates", []) if debug_info else [],
