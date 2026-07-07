@@ -1020,9 +1020,6 @@ with st.sidebar:
         st.caption("規範追蹤僅作為更新監測清單；若未查得明確修訂、公告、草案、徵詢或新版發布，不會列入正式週報。")
 
     with st.expander("⚙️ 進階設定", expanded=False):
-        st.markdown("**AI 模型設定**")
-        st.caption("目前使用：MaiAgent 雲端 API")
-
         st.markdown("**長期趨勢 / 規範追蹤模式**")
         long_term_mode = st.checkbox(
             "啟用長期趨勢 / 規範追蹤模式",
@@ -1032,6 +1029,9 @@ with st.sidebar:
 
         st.markdown("**排程說明**")
         st.caption("GitHub Actions 排程版負責固定自動寄送核心週報；實際時間依 weekly.yml 設定。")
+
+        st.markdown("**AI 模型設定**")
+        st.caption("目前使用：MaiAgent 雲端 API")
 
         show_developer_info = st.checkbox(
             "開發者資訊顯示",
@@ -1112,6 +1112,8 @@ def build_current_run_config() -> dict:
     return {
         "report_date": today.isoformat(),
         "report_date_label": today.strftime("%Y/%m/%d"),
+        "start_date": week_start.isoformat(),
+        "end_date": today.isoformat(),
         "lookback_days": lookback_int,
         "date_range": date_range,
         "report_label": report_period_label,
@@ -1126,6 +1128,61 @@ def build_current_run_config() -> dict:
 
 
 current_run_config = build_current_run_config()
+
+
+def get_report_type_code(report_label: str, lookback_days: int) -> str:
+    label = (report_label or "").strip()
+    try:
+        days = int(lookback_days)
+    except (TypeError, ValueError):
+        days = 0
+    if days == 7 or label == "週報":
+        return "weekly"
+    if days == 30 or label == "月報":
+        return "monthly"
+    if days == 90 or label == "季報":
+        return "quarterly"
+    if days == 180 or label in {"半年報", "半年度報告"}:
+        return "halfyear"
+    if days == 365 or label in {"年報", "年度回顧"}:
+        return "annual"
+    return f"{days}days" if days else "report"
+
+
+def _compact_date(value, fallback: datetime.date | None = None) -> str:
+    if isinstance(value, datetime.datetime):
+        return value.strftime("%Y%m%d")
+    if isinstance(value, datetime.date):
+        return value.strftime("%Y%m%d")
+    text = str(value or "").strip()
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
+        try:
+            return datetime.datetime.strptime(text, fmt).strftime("%Y%m%d")
+        except ValueError:
+            continue
+    match = re.search(r"(20\d{2})\D?(\d{1,2})\D?(\d{1,2})", text)
+    if match:
+        return f"{int(match.group(1)):04d}{int(match.group(2)):02d}{int(match.group(3)):02d}"
+    return (fallback or today).strftime("%Y%m%d")
+
+
+def build_report_download_filename(prefix: str, extension: str, run_config: dict | None = None) -> str:
+    config = run_config or current_run_config
+    days = int(config.get("lookback_days") or lookback_int)
+    report_date_obj = today
+    try:
+        report_date_obj = datetime.date.fromisoformat(str(config.get("report_date") or today.isoformat()))
+    except ValueError:
+        pass
+    start_fallback = report_date_obj - datetime.timedelta(days=days)
+    end_fallback = report_date_obj
+    report_type_code = get_report_type_code(config.get("report_label", report_period_label), days)
+    report_date = _compact_date(config.get("report_date"), report_date_obj)
+    start_date = _compact_date(config.get("start_date"), start_fallback)
+    end_date = _compact_date(config.get("end_date"), end_fallback)
+    clean_prefix = re.sub(r"[^A-Za-z0-9_]+", "_", str(prefix or "report")).strip("_")
+    clean_extension = re.sub(r"[^A-Za-z0-9]+", "", str(extension or "")).lower()
+    return f"{clean_prefix}_{report_type_code}_{report_date}_{start_date}_{end_date}.{clean_extension}"
 
 
 def google_news_search_url(query: str, hl: str = "en-US", gl: str = "US", ceid_lang: str = "en") -> str:
@@ -1290,10 +1347,9 @@ def render_main_dashboard(source_count: int, standards_count: int):
           <div class="hero-eyebrow">臺北市政府捷運工程局｜機電系統設計處</div>
           <div class="hero-title">國際捷運技術{report_period_label} AI 自動產生系統</div>
           <div class="hero-subtitle">國際技術新知、重大事故、營運政策、營運爭議與規範更新之自動化監測</div>
-          <div class="hero-meta">
+            <div class="hero-meta">
             <span class="hero-pill">今日日期：{today.strftime('%Y/%m/%d')}</span>
             <span class="hero-pill">資料涵蓋：{week_start.strftime('%Y/%m/%d')} - {today.strftime('%Y/%m/%d')}</span>
-            <span class="hero-pill">模型：{model_choice}</span>
             <span class="hero-pill">範圍：{scope_mode}</span>
           </div>
         </div>
@@ -3072,30 +3128,29 @@ run_config：{json.dumps(current_run_config, ensure_ascii=False)}
 - 技術研究補充：{('啟用時於最後輸出「六、技術研究補充」' if include_research_supplement else '未啟用，不得輸出技術研究補充章節')}。
 - 空章節文字只限已勾選類型：
 {selected_empty_rules}
-- 每則新聞固定使用下列格式，不得新增「技術關鍵字」、可能影響系統、可參考作法、後續追蹤建議等欄位：
+- 正式報告每則新聞請使用以下固定格式，不得自行增減欄位，不得新增「技術關鍵字」、可能影響系統、可參考作法、後續追蹤建議等欄位：
 🔹 [新聞類型] 新聞標題
 
-• 發布/事件日期：
-• 國家/地區：
-• 相關機電系統：
-• 事件摘要：
-- 重點 1
-- 重點 2
-- 重點 3
-• 【臺北捷運局啟示】：
-100 字以內一段文字，不分點，不得過度延伸資料未提供的內容。
-• 資料來源：
+• 發布/事件日期：YYYY-MM-DD
+• 國家/地區：國家或地區
+• 相關機電系統：限捷運機電範疇
+• 事件摘要：請寫成 2 至 4 句完整段落，不要條列，不要使用 - 或多層 bullet；每則新聞最多只在第一句提一次來源名稱。
+• 臺北捷運局啟示：請寫成 100 個中文字以內之一段文字，不要條列，不得過度延伸資料未提供的內容。
+• 資料來源：來源名稱，YYYY-MM-DD，URL
 ________________________________________
 - 相關機電系統只能填機電範疇，例如車輛、號誌、通訊、供電、AFC、月臺門、車站電梯、電扶梯、旅客資訊系統、SCADA、資通訊與資安、車站機電設備；不得填無障礙服務、旅客服務、活動疏運、營運政策、土建工程、站體改善或道路交通。
-- 同一則新聞若只有單一來源，第一個事件摘要 bullet 寫一次「依 XXX 公告/報導」即可，後續 bullet 不要重複相同來源主詞。
+- 不得在事件摘要下方使用 `-`，不得出現空的 `•`，不得出現 `• 事件摘要：-`。
+- 不得使用 `【臺北捷運局啟示】`，統一使用 `• 臺北捷運局啟示：`。
+- 同一則新聞若只有單一來源，事件摘要第一句寫一次「依 XXX 公告/報導」即可，後續句子不要重複相同來源主詞。
 - 資料來源必須放在每則最後。
 - 正式週報語氣需像機電系統設計處整理給長官或評審閱讀的國際捷運技術週報，避免除錯、選題或模型處理語氣。
-- 不得在正式報告正文使用：「候選資料指出」「候選摘要指出」「入選資料指出」「原始候選資料」「raw data」「本次送入模型」「AI 入選」「模型判斷」「資料欄位顯示」「初篩資料指出」「本次候選資料」「來源健康」「Python 初篩」「MaiAgent 判斷」。
+- 不得在正式報告正文使用：「模型：MaiAgent 雲端 API」「候選資料指出」「候選摘要指出」「入選資料指出」「原始候選資料」「raw data」「本次送入模型」「AI 入選」「模型判斷」「資料欄位顯示」「初篩資料指出」「本次候選資料」「來源健康」「Python 初篩」「MaiAgent 判斷」「developer debug」「python_score」「初步分類」「入選原因」。
 - 事件摘要請以 source_display 與 source_verb 敘述，例如「依 MTA 官方公告……」「依 Railway-News 報導……」，不得以「候選資料」作為主詞。
 - 資料不足時可用自然正式語氣說明，例如「公告未載明相關設備調整細節」「報導未揭露更細部技術規格」，不得每則都重複「原始資料未提供，故不補述」。
 - source_tier / source_quality 只供判斷與除錯，不得寫入正式週報；D_proxy_low_value 不得包裝成技術新知。
-- 資料來源優先使用原始來源 url 與 source_display；若 url 為 Google News proxy，且 source_display 可辨識原始來源，正式報告只顯示 source_display，不要顯示 Google News 代理連結。
-- 資料來源格式請用「資料來源：來源名稱（完整 URL 或 domain）」；若無可辨識 URL，寫「資料來源：資料來源未提供完整 URL」。
+- 資料來源優先使用原始來源 url 與 source_display；若 url 為 Google News proxy，且 source_display 可辨識原始來源，正式報告不得顯示 Google News 代理連結，請改用可辨識原始來源 domain URL。
+- 資料來源格式固定為「資料來源：來源名稱，YYYY-MM-DD，URL」；若只有 domain，使用「https://domain」；若完全沒有 URL，寫「資料來源：來源名稱，YYYY-MM-DD，未提供完整 URL」。
+- 不得使用「資料來源：來源名稱（URL」或「來源連結（domain）」格式。
 - 不得納入臺灣新聞。
 - 技術新知需優先明確機電/系統/維修/資安/測試/能源效率內容；單純上線、啟用或服務公告降權。
 - 營運爭議需有明確爭議性或重大營運影響；一般旅客資訊、週末調整、延誤證明、治安或乘客糾紛降權或排除。
@@ -3450,40 +3505,70 @@ def _extract_domain_hint(text: str) -> str:
     return match.group(0).lower() if match else ""
 
 
+def _normalize_report_date_text(text: str) -> str:
+    text = text or ""
+    match = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", text)
+    if not match:
+        match = re.search(r"(20\d{2})年\s*(\d{1,2})月\s*(\d{1,2})日", text)
+    if match:
+        return f"{int(match.group(1)):04d}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+    return "日期未知"
+
+
+def _domain_to_url(domain: str) -> str:
+    domain = (domain or "").strip().strip("/").lower()
+    if not domain:
+        return ""
+    if domain.startswith(("http://", "https://")):
+        return domain
+    return f"https://{domain}"
+
+
+def _clean_source_label(content: str, url: str, domain: str) -> str:
+    label = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", content or "")
+    label = re.sub(r"https?://[^\s\)\]）＞>，,；;。]+", "", label)
+    if domain:
+        label = re.sub(re.escape(domain), "", label, flags=re.IGNORECASE)
+    label = re.sub(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", "", label)
+    label = re.sub(r"20\d{2}年\s*\d{1,2}月\s*\d{1,2}日", "", label)
+    label = re.sub(r"來源連結\s*[（(][^）)]*[）)]", "", label)
+    label = re.sub(r"未提供完整\s*URL", "", label, flags=re.IGNORECASE)
+    label = re.sub(r"Google\s*News.*?(?:代理|proxy|來源)?", "", label, flags=re.IGNORECASE)
+    label = re.sub(r"[（(]\s*[）)]", "", label)
+    label = re.sub(r"\s+", " ", label)
+    label = label.strip(" ：:;；,，。-（）()[]【】")
+    if label.casefold() in {"http", "https", "google news", url.casefold(), domain.casefold()}:
+        label = ""
+    if not label and domain:
+        label = domain
+    return label or "資料來源未明確辨識"
+
+
 def normalize_source_line(line: str) -> str:
     if "資料來源" not in (line or ""):
         return line
-    prefix = line.split("資料來源", 1)[0] + "資料來源："
-    content = line.split("資料來源", 1)[1].lstrip("：:").strip()
+    match = re.match(
+        r"^\s*(?:[-*]\s*)?(?:•\s*)?(?:\*\*)?資料來源(?:\*\*)?\s*[：:]\s*(.*)$",
+        line or "",
+    )
+    if not match:
+        return line
+    content = match.group(1).strip()
+    date_text = _normalize_report_date_text(content)
     url = _extract_complete_url(content)
-    label = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", content)
-    label = re.sub(r"https?://[^\s\)\]）＞>，,；;。]+", "", label)
-    label = re.sub(r"[（(]\s*[）)]", "", label)
-    label = label.strip(" ：:;；,，。-")
-    label = re.sub(r"\s+", " ", label)
+    host = _domain_from_url(url)
 
-    if url:
-        host = _domain_from_url(url)
-        if "news.google.com" in host:
-            domain = _extract_domain_hint(content.replace(url, ""))
-            if domain and domain != "news.google.com":
-                readable = label if label and "Google News" not in label else domain
-                return f"{prefix}{readable}（{domain}）"
-            if label and "Google News" not in label:
-                return f"{prefix}{label}"
-            return f"{prefix}Google News 代理來源，原始來源未明確辨識"
-        if label and label.casefold() not in {url.casefold(), host.casefold()}:
-            return f"{prefix}{label}（{url}）"
-        return f"{prefix}{url}"
+    if url and "news.google.com" in host:
+        url = ""
+        host = ""
 
-    domain = _extract_domain_hint(content)
-    if domain:
-        if label and label.casefold() != domain.casefold():
-            return f"{prefix}{label}（{domain}）"
-        return f"{prefix}{domain}"
-    if label and label.casefold() not in {"http:", "https:", "google news"}:
-        return f"{prefix}{label}"
-    return f"{prefix}資料來源未提供完整 URL"
+    domain = _extract_domain_hint(content.replace(url, "")) if not url else host
+    if domain == "news.google.com":
+        domain = ""
+    source_url = url or _domain_to_url(domain)
+    source_label = _clean_source_label(content, source_url, domain or host)
+    url_text = source_url or "未提供完整 URL"
+    return f"• 資料來源：{source_label}，{date_text}，{url_text}"
 
 
 def normalize_report_source_lines(text: str) -> str:
@@ -3491,30 +3576,36 @@ def normalize_report_source_lines(text: str) -> str:
 
 
 def compact_report_urls(text: str) -> str:
-    """正式報告只顯示短連結文字；完整 URL 保留在 raw debug。"""
+    """Keep formal source URLs complete while compacting incidental long URLs elsewhere."""
     text = normalize_report_source_lines(text)
-    placeholders: list[str] = []
 
-    def _replace_markdown_link(match: re.Match) -> str:
-        label, url = match.group(1), match.group(2)
-        if len(url) < 72 and "news.google.com" not in url:
-            replacement = match.group(0)
-        else:
-            replacement = f"[{label or short_url_label(url)}]({url})"
-        placeholders.append(replacement)
-        return f"__REPORT_LINK_{len(placeholders) - 1}__"
+    def _compact_line(line: str) -> str:
+        if "資料來源" in line:
+            return line
+        placeholders: list[str] = []
 
-    text = re.sub(r"\[([^\]]+)\]\((https?://[^\s\)]+)\)", _replace_markdown_link, text)
+        def _replace_markdown_link(match: re.Match) -> str:
+            label, url = match.group(1), match.group(2)
+            if len(url) < 72 and "news.google.com" not in url:
+                replacement = match.group(0)
+            else:
+                replacement = f"[{label or short_url_label(url)}]({url})"
+            placeholders.append(replacement)
+            return f"__REPORT_LINK_{len(placeholders) - 1}__"
 
-    def _replace_plain_url(match: re.Match) -> str:
-        url = match.group(0).rstrip("。；;,，)")
-        suffix = match.group(0)[len(url):]
-        return f"{short_url_label(url)}{suffix}"
+        line = re.sub(r"\[([^\]]+)\]\((https?://[^\s\)]+)\)", _replace_markdown_link, line)
 
-    text = re.sub(r"https?://[^\s\)\]]+", _replace_plain_url, text)
-    for idx, original in enumerate(placeholders):
-        text = text.replace(f"__REPORT_LINK_{idx}__", original)
-    return text
+        def _replace_plain_url(match: re.Match) -> str:
+            url = match.group(0).rstrip("。；;,，)")
+            suffix = match.group(0)[len(url):]
+            return f"{short_url_label(url)}{suffix}"
+
+        line = re.sub(r"https?://[^\s\)\]]+", _replace_plain_url, line)
+        for idx, original in enumerate(placeholders):
+            line = line.replace(f"__REPORT_LINK_{idx}__", original)
+        return line
+
+    return "\n".join(_compact_line(line) for line in text.splitlines())
 
 
 def strip_internal_report_fields(text: str) -> str:
@@ -3527,14 +3618,14 @@ def strip_internal_report_fields(text: str) -> str:
     skip_candidate_section = False
     internal_field_pattern = re.compile(
         r"^\s*[*-]?\s*(?:\*\*)?"
-        r"(信心水準|納入理由|技術/政策關鍵字)"
+        r"(信心水準|納入理由|技術/政策關鍵字|技術關鍵字|入選原因|初步分類|python_score)"
         r"(?:\*\*)?\s*[：:].*$"
     )
     internal_system_pattern = re.compile(
         r"^\s*(?:>\s*)?(?:[*-]\s*)?"
         r"(篩選類型|本次\s*ddgs\s*搜尋次數|ddgs\s*搜尋次數|系統內部搜尋次數|"
         r"prompt\s*字數|Prompt\s*字數|MaiAgent\s*呼叫次數|MaiAgent\s*呼叫|"
-        r"來源健康|原始蒐集|去重後|初篩後)"
+        r"來源健康|原始蒐集|去重後|初篩後|developer\s*debug|模型)"
         r"\s*[：:].*$",
         flags=re.IGNORECASE,
     )
@@ -3632,6 +3723,7 @@ def normalize_report_statistics_line(text: str) -> str:
 
 
 INTERNAL_REPORT_REPLACEMENTS = {
+    "模型：MaiAgent 雲端 API": "",
     "候選資料指出": "資料顯示",
     "候選摘要指出": "摘要資料顯示",
     "入選資料指出": "資料顯示",
@@ -3646,6 +3738,11 @@ INTERNAL_REPORT_REPLACEMENTS = {
     "模型判斷": "本週報歸類",
     "Python 初篩": "初步整理",
     "MaiAgent 判斷": "本週報整理",
+    "developer debug": "",
+    "Developer debug": "",
+    "python_score": "",
+    "入選原因": "",
+    "初步分類": "",
     "來源健康": "來源狀態",
     "原始資料僅提供": "資料來源僅載明",
     "原始資料未提供": "資料來源未載明",
@@ -3666,7 +3763,7 @@ def clean_internal_report_language(text: str) -> str:
     cleaned = re.sub(r"候選摘要(?:指出|顯示|記載|提及)?", "摘要資料", cleaned)
     cleaned = re.sub(r"入選資料(?:指出|顯示|記載|提及)?", "資料", cleaned)
     cleaned = re.sub(r"初篩資料(?:指出|顯示|記載|提及)?", "資料", cleaned)
-    cleaned = re.sub(r"(?im)^.*(?:來源健康|prompt\s*字數|MaiAgent\s*呼叫|本次送入模型).*$", "", cleaned)
+    cleaned = re.sub(r"(?im)^.*(?:模型：MaiAgent\s*雲端\s*API|來源健康|prompt\s*字數|MaiAgent\s*呼叫|本次送入模型|developer\s*debug|python_score|入選原因|初步分類).*$", "", cleaned)
     cleaned = re.sub(r"(?i)\braw data\b", "原始資料", cleaned)
     cleaned = re.sub(r"資料來源未提供完整 URL（[^）]*）", "資料來源未提供完整 URL", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -3750,7 +3847,7 @@ def remove_legacy_report_fields(text: str) -> str:
     skip_legacy_insight_bullets = False
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
-        if re.match(r"^•\s*技術關鍵字\s*[：:]", line):
+        if re.match(r"^•\s*(技術關鍵字|技術/政策關鍵字|入選原因|初步分類|python_score)\s*[：:]", line, flags=re.IGNORECASE):
             continue
         if re.match(r"^[-•]\s*(可能影響系統|可參考作法|後續追蹤建議)\s*[：:]", line):
             continue
@@ -3785,6 +3882,135 @@ def simplify_formal_report_format(text: str) -> str:
     return text
 
 
+REPORT_FIELD_ALIASES = {
+    "發布/事件日期": "發布/事件日期",
+    "國家/地區": "國家/地區",
+    "相關機電系統": "相關機電系統",
+    "事件摘要": "事件摘要",
+    "臺北捷運局啟示": "臺北捷運局啟示",
+    "資料來源": "資料來源",
+}
+
+
+def _match_report_field_line(line: str) -> tuple[str, str] | None:
+    match = re.match(
+        r"^\s*(?:[-*]\s*)?(?:•\s*)?(?:\*\*)?(?:【)?"
+        r"(發布/事件日期|國家/地區|相關機電系統|事件摘要|臺北捷運局啟示|資料來源)"
+        r"(?:】)?(?:\*\*)?\s*[：:]\s*(.*)$",
+        line or "",
+    )
+    if not match:
+        return None
+    return REPORT_FIELD_ALIASES[match.group(1)], match.group(2).strip()
+
+
+def _is_report_block_boundary(line: str) -> bool:
+    stripped = (line or "").strip()
+    if not stripped:
+        return False
+    if _match_report_field_line(stripped):
+        return True
+    if stripped == "---" or stripped.startswith(("🔹", "📊", "⏰", "#", ">", "________________________________________")):
+        return True
+    return bool(re.match(r"^[一二三四五六]\s*、", stripped))
+
+
+def _strip_nested_bullet_text(text: str) -> str:
+    text = re.sub(r"^\s*[-*•]\s*", "", text or "")
+    text = re.sub(r"^\s*(?:重點\s*\d+|[-*•])\s*[：:]?\s*", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip(" ；;，,")
+
+
+def _join_field_parts(parts: list[str]) -> str:
+    cleaned = [_strip_nested_bullet_text(part) for part in parts if _strip_nested_bullet_text(part)]
+    text = " ".join(cleaned)
+    text = re.sub(r"\s*[-*•]\s+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _dedupe_source_mentions_in_paragraph(text: str) -> str:
+    seen: set[str] = set()
+
+    def _replace(match: re.Match) -> str:
+        subject = re.sub(r"\s+", "", match.group(1))
+        if subject in seen:
+            return ""
+        seen.add(subject)
+        return match.group(0)
+
+    text = re.sub(
+        r"(依\s*[^，。；;]{2,40}(?:公告|報導|官方資料|發布)(?:指出|顯示)?[，,]?)",
+        _replace,
+        text or "",
+    )
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def normalize_final_report_md(md: str) -> str:
+    text = md or ""
+    text = re.sub(r"(?m)^\s*[-*]\s*\*\*(發布/事件日期|國家/地區|相關機電系統|事件摘要|臺北捷運局啟示|資料來源)\*\*\s*[：:]", r"• \1：", text)
+    text = re.sub(r"(?m)^\s*[-*]\s*\*\*【臺北捷運局啟示】\*\*\s*[：:]", "• 臺北捷運局啟示：", text)
+    text = re.sub(r"(?m)^\s*•\s*【臺北捷運局啟示】\s*[：:]", "• 臺北捷運局啟示：", text)
+    text = re.sub(r"(?m)^#{3,6}\s+\[([^\]]+)\]\s*(.+)$", r"🔹 [\1] \2", text)
+
+    lines = text.splitlines()
+    output: list[str] = []
+    idx = 0
+    while idx < len(lines):
+        raw_line = lines[idx]
+        stripped = raw_line.strip()
+        if not stripped:
+            output.append(raw_line)
+            idx += 1
+            continue
+        if stripped in {"•", "-", "*"}:
+            idx += 1
+            continue
+
+        field = _match_report_field_line(raw_line)
+        if not field:
+            output.append(raw_line)
+            idx += 1
+            continue
+
+        label, value = field
+        idx += 1
+        collected = [value]
+        while idx < len(lines):
+            next_line = lines[idx].strip()
+            if not next_line:
+                idx += 1
+                continue
+            if _is_report_block_boundary(next_line):
+                break
+            collected.append(next_line)
+            idx += 1
+
+        field_text = _join_field_parts(collected)
+        if label == "事件摘要":
+            field_text = _dedupe_source_mentions_in_paragraph(field_text)
+            if field_text:
+                output.append(f"• 事件摘要：{field_text}")
+        elif label == "臺北捷運局啟示":
+            insight = _short_formal_sentence(field_text, 100)
+            if insight:
+                output.append(f"• 臺北捷運局啟示：{insight}")
+        elif label == "資料來源":
+            output.append(normalize_source_line(f"• 資料來源：{field_text}"))
+        else:
+            if field_text:
+                output.append(f"• {label}：{field_text}")
+
+    text = "\n".join(output)
+    text = normalize_report_source_lines(text)
+    text = re.sub(r"(?m)^\s*(?:[-*]\s*)?•\s*$", "", text)
+    text = re.sub(r"(?m)^•\s*事件摘要：\s*[-*•]\s*", "• 事件摘要：", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def sanitize_report_text(text: str) -> str:
     text = (
         text.replace("全球（排除台灣）", "全球（安全白名單來源）")
@@ -3800,6 +4026,8 @@ def sanitize_report_text(text: str) -> str:
     text = strip_unselected_types_from_title(text)
     text = strip_unselected_report_sections(text)
     text = normalize_report_source_lines(text)
+    text = strip_internal_report_fields(text)
+    text = normalize_final_report_md(text)
     text = strip_internal_report_fields(text)
     return normalize_report_statistics_line(text)
 
@@ -4277,7 +4505,11 @@ def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: st
     pdf_bytes = try_markdown_to_pdf_bytes(text)
     if pdf_bytes:
         pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")
-        pdf_part.add_header("Content-Disposition", "attachment", filename=f"metro_report_{today.strftime('%Y%m%d')}.pdf")
+        pdf_part.add_header(
+            "Content-Disposition",
+            "attachment",
+            filename=build_report_download_filename("metro_report", "pdf", email_run_config),
+        )
         msg.attach(pdf_part)
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
@@ -4412,6 +4644,8 @@ if generate_btn:
             report_text = report_response
             report_text = sanitize_report_text(report_text)
             report_text = enforce_research_section(report_text, journal_candidates)
+            report_text = normalize_final_report_md(report_text)
+            report_text = normalize_report_statistics_line(report_text)
             formal_count = count_report_items(report_text)
             category_counts = count_report_items_by_category(report_text)
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
@@ -4554,6 +4788,10 @@ if not report_to_show:
             report_to_show = sanitize_report_text(report_to_show)
     except FileNotFoundError:
         pass
+if report_to_show and not latest_report_md:
+    report_to_show = normalize_final_report_md(report_to_show)
+    st.session_state["latest_report_md"] = report_to_show
+    latest_report_md = report_to_show
 
 if report_to_show:
     st.markdown(display_report_markdown(report_to_show))
@@ -4571,7 +4809,7 @@ if report_to_show:
             st.download_button(
                 f"📄 下載正式{display_report_label} PDF",
                 data=pdf_bytes,
-                file_name=f"metro_report_{today.strftime('%Y%m%d')}.pdf",
+                file_name=build_report_download_filename("metro_report", "pdf", display_run_config),
                 mime="application/octet-stream",
                 use_container_width=True,
             )
@@ -4584,7 +4822,7 @@ if report_to_show:
                 st.download_button(
                     "🧾 下載原始資料 PDF",
                     data=raw_pdf_bytes,
-                    file_name=f"raw_search_data_{today.strftime('%Y%m%d')}.pdf",
+                    file_name=build_report_download_filename("raw_search_data", "pdf", display_run_config),
                     mime="application/octet-stream",
                     use_container_width=True,
                 )
@@ -4656,6 +4894,8 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
         "run_info": {
             "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
             "report_date": run_config.get("report_date"),
+            "start_date": run_config.get("start_date"),
+            "end_date": run_config.get("end_date"),
             "lookback_days": run_config.get("lookback_days"),
             "date_range": run_config.get("date_range"),
             "report_label": run_config.get("report_label"),
@@ -4755,7 +4995,7 @@ if show_developer_info and (debug_info or (show_raw_debug and (raw_rss or raw_dd
             st.download_button(
                 "下載開發者除錯 JSON",
                 data=debug_json.encode("utf-8"),
-                file_name=f"developer_debug_{today.strftime('%Y%m%d')}.json",
+                file_name=build_report_download_filename("developer_debug", "json", display_run_config),
                 mime="application/json",
                 use_container_width=True,
             )
@@ -4763,7 +5003,7 @@ if show_developer_info and (debug_info or (show_raw_debug and (raw_rss or raw_dd
             st.download_button(
                 "下載開發者除錯 Markdown",
                 data=debug_markdown.encode("utf-8"),
-                file_name=f"developer_debug_{today.strftime('%Y%m%d')}.md",
+                file_name=build_report_download_filename("developer_debug", "md", display_run_config),
                 mime="text/markdown",
                 use_container_width=True,
             )
