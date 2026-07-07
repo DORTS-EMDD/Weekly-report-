@@ -183,79 +183,6 @@ st.markdown("""
     color: var(--metro-blue); font-size: 1.25rem; font-weight: 800;
     margin: 22px 0 10px;
   }
-  .kpi-card {
-    background: var(--paper); border: 1px solid #dbe4ee; border-radius: 8px;
-    padding: 16px; min-height: 118px; box-shadow: 0 6px 18px rgba(15, 45, 74, .08);
-  }
-  .kpi-icon { font-size: 1.25rem; color: var(--gold); margin-bottom: 8px; }
-  .kpi-num { font-size: 1.9rem; font-weight: 800; color: var(--metro-blue); line-height: 1.1; }
-  .kpi-label { color: #334155; font-size: .9rem; font-weight: 700; margin-top: 4px; }
-  .kpi-note { color: #64748b; font-size: .78rem; margin-top: 4px; }
-  .compact-kpi-bar {
-    background: #f8fafc;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 10px 14px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 16px;
-    align-items: center;
-    font-size: .9rem;
-    margin: 12px 0 6px;
-  }
-  .compact-kpi-item {
-    white-space: nowrap;
-    color: #111827;
-    font-weight: 700;
-  }
-  .compact-detail-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-  }
-  .compact-detail-card {
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 10px 12px;
-  }
-  .compact-detail-value {
-    color: #111827;
-    font-size: 1.08rem;
-    font-weight: 800;
-    line-height: 1.25;
-  }
-  .compact-detail-label {
-    color: #334155;
-    font-size: .84rem;
-    font-weight: 700;
-    margin-top: 3px;
-  }
-  .compact-detail-note {
-    color: #64748b;
-    font-size: .76rem;
-    margin-top: 2px;
-  }
-
-  .workflow-card {
-    background: #f8fbfd; border: 1px solid #dbe4ee; border-left: 4px solid var(--metro-blue-2);
-    border-radius: 8px; padding: 14px; min-height: 112px;
-  }
-  .workflow-step { color: var(--gold); font-weight: 800; font-size: .82rem; }
-  .workflow-title { color: var(--metro-blue); font-weight: 800; margin-top: 4px; }
-  .workflow-desc { color: #475569; font-size: .84rem; margin-top: 4px; }
-  .flow-summary {
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
-    border-left: 4px solid var(--dorts-blue);
-    border-radius: 8px;
-    padding: 10px 14px;
-    color: #374151;
-    font-size: .9rem;
-    font-weight: 700;
-    margin: 8px 0 4px;
-  }
-
   .notice-success {
     background: #eef8f1; border: 1px solid #b9dfc6; border-left: 5px solid #2f855a;
     border-radius: 8px; padding: 14px 16px; margin: 16px 0;
@@ -276,7 +203,7 @@ st.markdown("""
     padding: 12px 14px; margin: 10px 0 16px;
   }
   .report-summary-card .report-card-body { line-height: 1.45; }
-  .type-badge, .status-badge {
+  .type-badge {
     display: inline-block; border-radius: 999px; padding: 4px 10px;
     font-size: .78rem; font-weight: 800; margin-right: 6px;
   }
@@ -286,32 +213,6 @@ st.markdown("""
   .badge-dispute { background: #ffedd5; color: #c2410c; }
   .badge-standard { background: #ede9fe; color: #6d28d9; }
   .badge-neutral { background: #e2e8f0; color: #334155; }
-  .badge-success { background: #dcfce7; color: #166534; }
-  .badge-fallback { background: #e0f2fe; color: #075985; }
-  .badge-empty { background: #f1f5f9; color: #475569; }
-  .badge-warning { background: #fef3c7; color: #92400e; }
-  .badge-error { background: #fee2e2; color: #991b1b; }
-  .badge-blocked { background: #e5e7eb; color: #111827; }
-
-  .source-health-table {
-    width: 100%; border-collapse: collapse; font-size: .88rem; background: #ffffff;
-    border: 1px solid #dbe4ee; border-radius: 8px; overflow: hidden;
-  }
-  .source-health-table th {
-    background: #12385b; color: #ffffff; text-align: left; padding: 10px;
-  }
-  .source-health-table td {
-    border-top: 1px solid #e5edf5; padding: 9px 10px; vertical-align: top;
-  }
-  .source-health-table tr:nth-child(even) td { background: #f8fbfd; }
-  .source-summary-card {
-    background: #ffffff; border: 1px solid #dbe4ee; border-radius: 8px;
-    padding: 13px 14px; min-height: 88px; box-shadow: 0 4px 14px rgba(15,45,74,.06);
-  }
-  .source-summary-num { font-size: 1.55rem; font-weight: 800; color: #12385b; line-height: 1.15; }
-  .source-summary-label { font-size: .86rem; color: #334155; font-weight: 800; margin-top: 3px; }
-  .source-summary-note { font-size: .76rem; color: #64748b; margin-top: 4px; }
-
   div.stButton > button[kind="primary"] {
     background: #12385b !important; border-color: #12385b !important;
     color: #ffffff !important; font-weight: 800 !important;
@@ -394,16 +295,6 @@ st.markdown("""
     font-size: 1.05rem !important;
     margin: 28px 0 10px !important;
   }
-  .kpi-card, .workflow-card, .source-summary-card {
-    box-shadow: none !important;
-    border: 1px solid #e5e7eb !important;
-    background: #ffffff !important;
-  }
-  .kpi-card { padding: 14px !important; min-height: 102px !important; }
-  .kpi-icon { color: var(--dorts-blue) !important; }
-  .kpi-num { color: #111827 !important; font-size: 1.65rem !important; }
-  .workflow-card { border-left: 2px solid var(--dorts-blue) !important; min-height: 96px !important; }
-  .workflow-step { color: var(--dorts-blue) !important; }
   .report-card {
     border: 1px solid #e5e7eb !important;
     box-shadow: none !important;
@@ -424,7 +315,7 @@ st.markdown("""
   .report-line.list { padding-left: 1rem; text-indent: -0.72rem; }
   .report-line.meta { color: #4b5563; }
   .report-spacer { height: 4px; }
-  .type-badge, .status-badge {
+  .type-badge {
     border-radius: 999px !important;
     padding: 3px 8px !important;
     font-size: .72rem !important;
@@ -483,7 +374,6 @@ st.markdown("""
     .hero-card { padding: 22px !important; background: #ffffff !important; }
     .hero-title { font-size: 1.65rem !important; }
     .hero-meta { margin-top: 20px; }
-    .kpi-card, .workflow-card { min-height: auto; }
   }
 </style>
 """, unsafe_allow_html=True)
@@ -498,15 +388,11 @@ def get_app_source_hash() -> str:
 
 def clear_old_report_state() -> None:
     keys_to_clear = [
-        "latest_report_md", "latest_report_html", "latest_pdf", "latest_raw_pdf",
-        "latest_raw_data", "latest_stats", "latest_candidates",
-        "latest_selected_candidates", "latest_journal_candidates",
-        "latest_source_health", "latest_prompt", "latest_response",
-        "latest_debug_payload", "latest_debug_md", "latest_run_config",
+        "latest_report_md", "latest_report_html", "latest_pdf",
+        "latest_debug_payload", "latest_run_config",
         "report_generated", "email_sent", "last_run_result",
         "latest_report", "latest_report_summary", "latest_report_stats",
-        "latest_debug_info", "latest_rss_raw", "latest_ddg_raw",
-        "latest_source_statuses",
+        "latest_debug_info", "latest_source_statuses",
     ]
     for key in keys_to_clear:
         st.session_state.pop(key, None)
@@ -1057,27 +943,8 @@ with st.sidebar:
             "開發者資訊顯示",
             value=False,
             key="show_developer_info",
-            help="啟用後才顯示來源健康、系統狀態、raw debug、prompt 與 MaiAgent 原始回應。",
+            help="啟用後只顯示 AI 校正資料 JSON 下載按鈕，供排錯使用。",
         )
-
-        if show_developer_info:
-            st.markdown("**系統狀態**")
-            st.markdown(f"MaiAgent API Key：{'✅' if maiagent_api_key else '❌'}")
-            st.markdown(f"MaiAgent Chatbot ID：{'✅' if maiagent_chatbot_id else '❌'}")
-            st.markdown(f"MaiAgent API Base：{maiagent_api_base}")
-            st.markdown(f"Gmail 帳號：{'✅' if gmail_user else '❌'}")
-            st.markdown(f"Gmail 密碼：{'✅' if gmail_pass else '❌'}")
-            st.markdown(f"ddgs 套件：{'✅' if DDGS else '❌'}")
-            st.markdown(f"feedparser 套件：{'✅' if feedparser else '❌'}")
-
-            st.markdown("**原始資料除錯模式**")
-            show_raw_debug = st.checkbox(
-                "在網頁顯示原始資料",
-                value=False,
-                help="只控制網頁下方是否展開 raw 文字；原始資料 PDF 仍會在產生報告後提供下載。",
-            )
-        else:
-            show_raw_debug = False
 
     st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統")
 
@@ -1383,45 +1250,6 @@ def render_main_dashboard(source_count: int, standards_count: int):
     )
     progress_placeholder = st.empty()
     status_placeholder = st.empty()
-
-    if show_developer_info:
-        kpi_items = [
-            ("📑", len(selected_types), "追蹤主題數", "固定依報告排序輸出"),
-            ("🌏", selected_regions_note, "預設/選取國家數", "指定模式套用國家邊界"),
-            ("🗓️", f"{lookback_days} 天", f"新聞搜尋期間（{report_period_label}）", date_range),
-            ("📚", standards_count if standards_enabled else "未啟用", "規範追蹤數量", "勾選規範更新後啟用"),
-            ("🧪", "啟用" if include_research_supplement else "未啟用", "技術研究補充", "只進入第六章，不列入新聞統計"),
-        ]
-        with st.expander("查看詳細關鍵指標", expanded=False):
-            detail_cols = st.columns(3)
-            for idx, (icon, num, label, note) in enumerate(kpi_items):
-                detail_cols[idx % 3].markdown(
-                    f'<div class="compact-detail-card">'
-                    f'<div class="compact-detail-value">{escape(str(icon))} {escape(str(num))}</div>'
-                    f'<div class="compact-detail-label">{escape(str(label))}</div>'
-                    f'<div class="compact-detail-note">{escape(str(note))}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-        workflow_items = [
-            ("01", "蒐集候選資料", "RSS / Google News / ddgs"),
-            ("02", "去重與初步篩選", "排除重複、舊聞與低品質來源"),
-            ("03", "MaiAgent 選題分析", "只看精簡候選清單"),
-            ("04", "產生正式週報", "只送入選新聞與必要補充"),
-            ("05", "輸出與寄送", "下載 PDF 或依勾選寄送"),
-        ]
-        with st.expander("查看系統流程", expanded=False):
-            wcols = st.columns(5)
-            for idx, (step, title, desc) in enumerate(workflow_items):
-                wcols[idx].markdown(
-                    f'<div class="workflow-card">'
-                    f'<div class="workflow-step">STEP {escape(step)}</div>'
-                    f'<div class="workflow-title">{escape(title)}</div>'
-                    f'<div class="workflow-desc">{escape(desc)}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
 
     return generate_clicked, send_after_generate, progress_placeholder, status_placeholder
 
@@ -3430,169 +3258,6 @@ ________________________________________
 """.strip()
 
 
-# ── Prompt 建立 ───────────────────────────────────────
-def build_prompt(rss_results: str, ddg_results: str, rss_sources: list[tuple[str, str]] | None = None) -> str:
-    if rss_sources is None:
-        rss_sources = RSS_SOURCES
-    weekday = ['一','二','三','四','五','六','日'][today.weekday()]
-    search_count = len(build_search_queries()[0])
-    selected_types_str = "、".join(selected_types) if selected_types else "無"
-    report_order = "、".join(ADVANCED_TYPES)
-    selected_section_headings = "\n".join(f"## {t}" for t in ADVANCED_TYPES if t in selected_types)
-    allowed_heading_options = "/".join(t for t in ADVANCED_TYPES if t in selected_types)
-    source_names = "\n".join("   - " + name for name, _ in rss_sources)
-    if is_global_scope:
-        scope_instruction = (
-            "本次採全球模式：不得用國家/地區清單刪除新聞。仍須套用來源安全規則、有效 URL 規則，"
-            "並嚴格聚焦都市捷運、地下鐵、中運量、輕軌、AGT、LRRT/LRT。"
-        )
-        scope_list = "全球（安全白名單來源）；不套用 ADVANCED_REGIONS 國家邊界。"
-    else:
-        scope_instruction = (
-            "本次採指定先進國家/地區模式：完成主題判斷後，必須再確認事件發生地或標準公告主體"
-            "落在指定清單內；不在清單內者不得納入正式新聞。"
-        )
-        scope_list = "\n".join("- " + r for r in active_regions)
-
-    standards_instruction = ""
-    if "規範更新" in selected_types:
-        standards_instruction = f"""
-## 規範更新特別規則
-
-1. 「規範更新」只可列入本期確實發生之標準版本、草案、修訂、勘誤、撤回、取代、公告或公開徵詢事件。
-2. 每一則規範更新必須同時具備以下四項：
-   - 明確標準編號，例如 EN 50126、NFPA 130、IEC 60076。
-   - 明確更新動作，例如 new edition、revision、amendment、corrigendum、draft、public comment、published、withdrawn、superseded。
-   - 明確日期，且日期必須落在本期搜尋期間內。
-   - 可查證的完整來源 URL。
-3. 不可重製、翻譯或摘要標準全文，只能整理公開的版本狀態、公告摘要與可能影響。
-4. 僅出現標準編號、標準名稱、官方首頁、標準體系網站、catalog、webstore，或僅屬「持續追蹤中」者，不得列入正式規範更新。
-5. 不得把 STANDARDS_WATCHLIST 追蹤清單改寫成規範更新新聞。
-6. 不得輸出「持續追蹤中」作為正式規範更新。
-7. 不得輸出「此為標準體系公告，無單一新聞連結」作為正式規範更新。
-8. 規範追蹤清單只能作為系統監測範圍，不得列入正式新聞數量統計。
-9. 若本期沒有符合條件的規範更新，請在「規範更新」章節只寫：
-   「本期未發現符合條件之規範版本更新、修訂草案、公告或徵詢事件。」
-10. 關鍵字範圍包含：{", ".join(STANDARD_UPDATE_TERMS)}。
-
-每則真正規範更新請使用固定格式：
-### [規範更新] 標準編號：主題
-- **更新狀態**：
-- **涉及風險類別**：
-- **可能影響機電系統**：
-- **對捷運機電規劃/規範之啟示**：
-- **資料來源**：[來源名稱](完整 https:// URL)
-"""
-
-    return f"""
-# 角色
-你是專業捷運機電技術分析師，服務對象為台北市政府捷運工程局處長及技術同仁。
-
-# 任務
-以下是透過「RSS 訂閱源」與「ddgs 多後端搜尋」蒐集到的原始資料。
-請依照使用者勾選的類型，整理出具參考價值的週報（目標期間：{date_range}）。
-你只能根據下方 raw RSS/ddgs 候選資料輸出；不得使用模型記憶、常識推測或外部未提供資訊補寫。
-
-## ━━ 第一部分：RSS 訂閱源（涵蓋 {len(rss_sources)} 個媒體/地區代理，見下方權重清單）━━
-{rss_results}
-
-## ━━ 第二部分：關鍵字搜尋結果━━
-{ddg_results}
-
-## 篩選與優先級指示
-1. **新聞類型過濾**：本次報告**只能**包含以下使用者勾選的新聞類型：【{selected_types_str}】。若不屬於這些類型，請直接忽略。
-   - **技術新知**：只收「新聞本身」明確描述都會軌道機電/系統技術、測試、導入或維修方法者，例如車輛、號誌/CBTC/GoA4、通訊、供電、月臺門、AFC/閘門、機廠設備、即時監控、資安、系統整合、試運轉與技術驗證。單純路線規劃、預算、人事、開幕預覽、服務調整、事故、罷工、行銷列車、禁止規定、害蟲防治、公車/電動巴士採購、一般工程進度或沒有技術細節的擴建消息，均不得列為技術新知。
-   - **重大事故**：出軌、追撞、火災、嚴重系統當機。
-   - **營運政策**：捷運站內安檢新規、乘車規則變動（如禁帶大型鋰電池/滑板車）、安全管理政策。
-   - **營運爭議**：罷工、預算超支、票價爭議、合約糾紛、服務品質爭議。
-   - **規範更新**：僅限本期確實發生且原始資料可查證的標準版本、修訂、勘誤、草案、徵詢、公告、撤回、取代等公開狀態；單純標準追蹤清單、官方首頁、catalog/webstore 或「持續追蹤中」不得列入。
-2. **最高優先級（只收都會軌道，不以一般鐵路湊數）**：
-   - 正式新聞必須直接屬於都市軌道系統：Metro / Subway / Underground / MRT / Metrorail、LRRT / LRT / Light Rail / Tram / Tramway / Streetcar、AGT / Automated Guideway Transit / People Mover、都市單軌或其他明確城市大眾捷運系統。
-   - 只有「事件本身」發生於上述系統，或新聞明確寫出技術/設備將用於上述系統時，才可列為正式新聞。不能因為 ETCS、FRMCS、GSM-R、CBTC、車輛、供電、維修、AI、資產管理等技術「理論上可參考」就列入正式新聞。
-   - 明確排除正式新聞：高速鐵路/HSR/Shinkansen/新幹線/高鐵、台鐵/臺鐵/TRA/JR一般鐵路、城際鐵路、區域鐵路、通勤鐵路、國鐵/主線鐵路、貨運鐵路、機車/客車、長途公路運輸、公車/客運/coach/highway/BRT，以及只談一般鐵路供應鏈或國家鐵路政策的新聞。
-   - London Underground、Tokyo Metro、Seoul Metro、MTR、LTA MRT/LRT、WMATA Metrorail、TTC subway/streetcar、Vancouver SkyTrain、RATP metro/tram、Madrid/Barcelona Metro 等官方都市軌道系統可優先；但同一機構若新聞主體是公車、長途鐵路或一般通勤鐵路，仍不得列入正式新聞。
-   - 高鐵、主線鐵路或公車新聞最多只能在「候補觀察」中一行點出，而且必須說明「非都市軌道，僅作背景追蹤」；不得計入正式新聞數。
-3. **來源權重**：請優先採納「第一部分：RSS 訂閱源」中實際出現的來源（本次共 {len(rss_sources)} 個，清單如下），這些是本次真正抓取到的媒體，**不要**引用或想像清單以外的媒體名稱：
-{source_names}
-4. **報告排序固定**：正式報告必須依序輸出已勾選類型，順序參照：{report_order}。**未勾選的類型絕對不得出現在章節標題、每則標題、正式新聞、統計或結尾文字**。若只勾選「技術新知」，整份報告只能有「技術新知」類新聞；遇到事故、政策、爭議、勞資、人事、開幕活動、行銷、一般路線規劃或非都市軌道新聞，必須剔除，不得改寫成技術新知。
-5. **【絕對禁止腦補、嚴格日期查核與來源查核】（違反本條視為報告失敗）**：
-   - 每一則新聞的「發布/事件日期」**必須**直接取自原始資料中該則內容本身標註的日期字串（RSS 的「日期：」欄位，或關鍵字搜尋結果摘要中出現的日期）。**禁止**依你自己知識庫中對該事件、公司或專案的既有印象去推測、換算或臆造日期。
-   - 若某則原始資料**沒有**明確可辨識的日期，或日期含糊到無法判斷是哪一天，**直接捨棄該則**，不要用「近期」「今年」等模糊字眼帶過，也不要自行補上一個日期。
-   - 判斷「未來日期」時，**只看該則報導本身的發布/刊登日期**是否晚於今天（{today.strftime('%Y-%m-%d')}）；若是，才視為不合理並剔除。**但**如果報導本身發布日期是合理的過去/現在日期，只是內文「引述」了某項政策的未來生效日（例如報導於 6 月底刊出，內容提到「規定將於 7 月 1 日起實施」），這屬於政策內容的一部分，**不可**僅因內文出現未來日期就整則剔除——請保留該則，並在內容中如實寫出「即將於某日起生效」。
-   - 若同一事件在原始資料中找不到，但你「記得」曾經發生過類似新聞，**一律視為未提供資料**，不要用記憶內容補寫。你只能整理「第一部分」與「第二部分」中實際出現的文字，不能新增任何未出現於原始資料的事實、數字或日期。
-   - 若原始資料只有標題，事件摘要只能重述標題可確認的事實；不得自行補上「旨在提升效率、改善乘客體驗、提升容量、降低成本」等目的、成效、數字或技術細節。這類推論若必要，只能放在「臺北捷運局啟示」並明確寫成建議，不可當作新聞事實。
-   - **來源必須是該則事件本身的具體新聞文章連結**：「資料來源」欄位填入的網址，**必須**是原始資料中該則內容自己標註的「連結：」網址，且該網址指向的必須是報導這件事本身的新聞文章頁面。**嚴禁**引用網站首頁、路網圖、票務頁面、會員名錄、活動總覽頁等非新聞頁面來充當來源，也**嚴禁**在原始資料中找不到對應連結時，挪用同一媒體其他頁面的網址頂替。若某則事件在原始資料中沒有對應的具體文章連結，即使內容看起來合理，也必須**整則捨棄**。
-   - Google News RSS 的 `news.google.com/rss/articles/...` 連結若搭配原始資料中的「原始來源」或標題來源，可視為可追查來源連結；不要僅因其為 Google News 轉址而剔除。
-    - 不得為了湊數引用無具體新聞頁、首頁、社群頁、會員頁、活動首頁或模型記憶。
-6. **數量要求**：{report_quantity_instruction}
-7. **國家/地區規則**：{scope_instruction}
-8. **內部國際新聞邊界**：台灣、臺灣、Taiwan、Taipei、台北/臺北捷運、北捷、新北、桃園/桃捷、台中、台南、高雄/高捷等國內新聞或國內案例，不得列入正式新聞或候補觀察。這是內部篩選條件，報告中不得呈現本條內容或其原因。
-
-## 國家/地區範圍
-{scope_list}
-
-{standards_instruction}
-
-## 輸出格式（每則獨立區塊，{report_output_requirement}）
-
-# {report_title}
-> 資料涵蓋期間：{date_range} 
-> 篩選類型：{selected_types_str}
-> 報導範圍：{scope_mode}
-
----
-
-{selected_section_headings}
-
-### [填入該則所屬之分類：{allowed_heading_options}] 國家/地區或標準編號：（一句有力主標題）
-* **發布/事件日期**：（原文發布年月日）
-* **國家/地區**：（全球模式仍需標示；規範更新可填公告機構/標準體系）
-* **相關機電系統**：限車輛、號誌、通訊、供電、AFC、月臺門、車站電梯、電扶梯、旅客資訊系統、SCADA、資通訊與資安、車站機電設備等機電範疇
-* **事件摘要**：
-  - （列點精要說明，3–5 點）
-* **【臺北捷運局啟示】**：100 字以內一段文字，不分點。
-* **資料來源**：[來源名稱](完整 https:// 網址)
-
----
-
-## 報告摘要（必填）
----
-**本期統計**：共 N 則 
-{report_shortfall_summary_line}
-**報告產出時間**：{today.strftime('%Y年%m月%d日')} 週{weekday}
-"""
-
-
-def build_revision_prompt(
-    rss_results: str,
-    ddg_results: str,
-    previous_report: str,
-    previous_count: int,
-    rss_sources: list[tuple[str, str]] | None = None,
-) -> str:
-    allowed_types = "、".join(selected_types)
-    return f"""
-{build_prompt(rss_results, ddg_results, rss_sources)}
-
-# 上一版報告需要修正
-上一版正式新聞只有 {previous_count} 則，或混入未勾選分類，未符合本期 {report_period_label} 目標。
-
-## 必須修正
-1. 請重寫「完整報告」，不是只補充差額。
-2. 本次只允許下列分類：{allowed_types}。
-3. 未勾選分類不得出現在章節、標題、正文與統計。
-4. {report_quantity_instruction}
-5. 僅能使用 raw RSS/ddgs 候選資料，不得補腦。
-6. 正式新聞只允許都市捷運/MRT/metro/subway/LRRT/LRT/light rail/tram/AGT/people mover；高鐵、新幹線、台鐵/國鐵、城際/區域/通勤鐵路、貨運鐵路、公車/客運/長途公路運輸不得用來補足正式新聞數。
-7. 若上一版曾納入 ETCS/FRMCS/GSM-R、電池列車、混合動力列車、一般鐵路資產管理、主線事故、bus strike 等非都市軌道題材，請移除正式新聞；除非 raw 明確寫出該事件發生在 metro/subway/light rail/tram 等都市軌道系統。
-8. 若本次只允許「技術新知」，請移除事故、政策、爭議、勞資、人事、開幕活動、行銷、一般路線規劃、害蟲防治、公車/電動巴士採購，以及未具體描述機電/系統技術的工程進度。
-9. 不要輸出「信心水準」「納入理由」「技術/政策關鍵字」「候補觀察」「執行搜尋次數」等內部稽核欄位。
-
-## 上一版報告
-{previous_report}
-"""
-
-
 def _extract_maiagent_text(data) -> str:
     """寬鬆解析 MaiAgent 不同版本可能回傳的文字欄位。"""
     if isinstance(data, str):
@@ -4630,83 +4295,6 @@ def render_report_cards(report_md: str) -> None:
         )
 
 
-def status_badge(status: str) -> str:
-    class_name = {
-        "成功": "badge-success",
-        "fallback 成功": "badge-fallback",
-        "無文章": "badge-empty",
-        "timeout": "badge-warning",
-        "403": "badge-error",
-        "parse error": "badge-error",
-        "被安全規則排除": "badge-blocked",
-        "範圍排除": "badge-blocked",
-        "非都市軌道": "badge-neutral",
-    }.get(status, "badge-neutral")
-    label = {
-        "成功": "✅ 成功",
-        "fallback 成功": "↪ fallback 成功",
-        "無文章": "○ 無文章",
-        "timeout": "⏱ timeout",
-        "403": "403",
-        "parse error": "parse error",
-        "被安全規則排除": "安全排除",
-        "範圍排除": "範圍排除",
-        "非都市軌道": "非都市軌道",
-    }.get(status, status)
-    return f'<span class="status-badge {class_name}">{escape(label)}</span>'
-
-
-def render_source_health_dashboard(statuses: list[dict]) -> None:
-    if not statuses:
-        st.info("尚無來源健康資料；產生報告後會在此顯示各來源狀態。")
-        return
-
-    st.markdown('<div class="section-title">來源健康儀表板</div>', unsafe_allow_html=True)
-    status_order = ["成功", "fallback 成功", "無文章", "非都市軌道", "timeout", "403", "parse error", "被安全規則排除", "範圍排除"]
-    counts = {status: sum(1 for row in statuses if row.get("status") == status) for status in status_order}
-    healthy_count = counts["成功"] + counts["fallback 成功"]
-    issue_count = counts["timeout"] + counts["403"] + counts["parse error"]
-    total_candidates = sum(int(row.get("item_count", 0) or 0) for row in statuses)
-    summary_items = [
-        ("可用來源", healthy_count, f"成功 {counts['成功']}｜fallback {counts['fallback 成功']}"),
-        ("無文章來源", counts["無文章"], f"非都市軌道 {counts['非都市軌道']}｜本期無候選"),
-        ("需注意來源", issue_count, f"timeout {counts['timeout']}｜403 {counts['403']}｜parse {counts['parse error']}"),
-        ("候選資料", total_candidates, "已通過 URL 與安全規則"),
-    ]
-    cols = st.columns(4)
-    for idx, (label, num, note) in enumerate(summary_items):
-        cols[idx].markdown(
-            f"""
-            <div class="source-summary-card">
-              <div class="source-summary-num">{escape(str(num))}</div>
-              <div class="source-summary-label">{escape(label)}</div>
-              <div class="source-summary-note">{escape(note)}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    rows = []
-    for row in statuses:
-        rows.append(
-            "<tr>"
-            f"<td>{escape(row.get('source_name', ''))}</td>"
-            f"<td>{escape(row.get('method', ''))}</td>"
-            f"<td>{status_badge(row.get('status', ''))}</td>"
-            f"<td>{escape(str(row.get('item_count', 0)))}</td>"
-            f"<td>{escape(row.get('error_message', ''))}</td>"
-            "</tr>"
-        )
-    table = (
-        '<table class="source-health-table">'
-        "<thead><tr><th>來源</th><th>方法</th><th>狀態</th><th>候選數</th><th>訊息</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table>"
-    )
-    with st.expander("查看每個來源詳細狀態", expanded=False):
-        st.caption("這裡保留完整稽核資訊，展示時可收合，承辦檢查時再展開。")
-        st.markdown(table, unsafe_allow_html=True)
-
-
 def markdown_to_pdf_bytes(md: str) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
@@ -4777,59 +4365,6 @@ def _soft_wrap_long_tokens(text: str, chunk: int = 45) -> str:
             w = "\u200b".join(w[i:i + chunk] for i in range(0, len(w), chunk))
         out.append(w)
     return " ".join(out)
-
-
-def raw_debug_to_pdf_bytes(raw_rss: str, raw_ddg: str) -> bytes:
-    """把「原始搜尋資料（MaiAgent 篩選前）」的純文字內容轉成 PDF，
-    方便使用者下載保存，不用再從網頁手動複製。"""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
-
-    cjk_font, latin_font = register_pdf_fonts()
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36,
-    )
-    styles = getSampleStyleSheet()
-    for style_name in ("Title", "Heading2", "BodyText"):
-        styles[style_name].fontName = cjk_font
-        styles[style_name].leading = max(styles[style_name].leading, 13)
-    styles["BodyText"].fontSize = 8.5
-    styles["BodyText"].leading = 12
-
-    def _section(title: str, content: str, story: list):
-        story.append(Paragraph(pdf_rich_text(title, cjk_font, latin_font), styles["Title"]))
-        story.append(Spacer(1, 10))
-        if not content.strip():
-            story.append(Paragraph(pdf_rich_text("（無資料）", cjk_font, latin_font), styles["BodyText"]))
-            return
-        for raw_line in content.splitlines():
-            line = raw_line.rstrip()
-            if not line:
-                story.append(Spacer(1, 4))
-                continue
-            wrapped = _soft_wrap_long_tokens(line)
-            if line.startswith("【"):
-                story.append(Spacer(1, 6))
-                story.append(Paragraph(pdf_rich_text(wrapped, cjk_font, latin_font), styles["Heading2"]))
-            else:
-                story.append(Paragraph(pdf_rich_text(wrapped, cjk_font, latin_font), styles["BodyText"]))
-
-    story: list = []
-    _section(f"RSS 原始資料（{today.strftime('%Y-%m-%d')}）", raw_rss, story)
-    story.append(PageBreak())
-    _section(f"ddgs 原始資料（{today.strftime('%Y-%m-%d')}）", raw_ddg, story)
-
-    doc.build(story)
-    return buffer.getvalue()
-
-
-def try_raw_debug_to_pdf_bytes(raw_rss: str, raw_ddg: str) -> bytes | None:
-    try:
-        return raw_debug_to_pdf_bytes(raw_rss, raw_ddg)
-    except ModuleNotFoundError:
-        return None
 
 
 def try_markdown_to_pdf_bytes(md: str) -> bytes | None:
@@ -4936,13 +4471,11 @@ if generate_btn:
                 combined_sources, status_text=status_text, return_status=True
             )
             progress_bar.progress(0.25)
-            st.session_state["latest_rss_raw"] = rss_results
             st.session_state["latest_source_statuses"] = source_statuses
 
             status_text.text("🔍 蒐集國際新聞來源……（ddgs 多後端搜尋）")
             ddg_progress = ProgressRange(progress_bar, 0.25, 0.40)
             ddg_results = run_duckduckgo_searches(ddg_progress, status_text)
-            st.session_state["latest_ddg_raw"] = ddg_results
             progress_bar.progress(0.42)
 
             status_text.text("🧹 去重與初步篩選……")
@@ -4954,13 +4487,6 @@ if generate_btn:
             status_text.text("🛡️ 排除舊聞與低品質來源……")
             time.sleep(0.1)
             progress_bar.progress(0.58)
-
-            if show_raw_debug:
-                os.makedirs("reports", exist_ok=True)
-                with open(f"reports/raw_rss_{today.strftime('%Y%m%d')}.txt", "w", encoding="utf-8") as f:
-                    f.write(rss_results)
-                with open(f"reports/raw_ddg_{today.strftime('%Y%m%d')}.txt", "w", encoding="utf-8") as f:
-                    f.write(ddg_results)
 
             # Step 2：MaiAgent 第一階段選題
             status_text.text("🤖 MaiAgent 選題分析……")
@@ -5096,40 +4622,13 @@ if generate_btn:
 
 # ── 報告顯示區 ──────────────────────────────────────
 st.markdown("---")
-raw_rss = st.session_state.get("latest_rss_raw", "")
-raw_ddg = st.session_state.get("latest_ddg_raw", "")
 source_statuses = st.session_state.get("latest_source_statuses", [])
 display_run_config = st.session_state.get("latest_run_config", current_run_config)
 display_report_label = display_run_config.get("report_label", report_period_label)
 
-if show_developer_info and source_statuses:
-    render_source_health_dashboard(source_statuses)
-
 st.markdown(f'<div class="section-title">正式{display_report_label}</div>', unsafe_allow_html=True)
 
 report_stats = st.session_state.get("latest_report_stats", {})
-if show_developer_info and report_stats:
-    st.markdown('<div class="section-title">本次統計</div>', unsafe_allow_html=True)
-    stats_items = [
-        f"原始蒐集 {report_stats.get('raw_count', 0)} 筆",
-        f"去重後 {report_stats.get('deduped_count', 0)} 筆",
-        f"初篩後 {report_stats.get('filtered_count', 0)} 筆",
-        f"AI 入選 {report_stats.get('ai_selected_count', 0)} 筆",
-        f"正式產出 {report_stats.get('formal_count', 0)} 則",
-        f"Prompt 約 {report_stats.get('prompt_chars', 0):,} 字元",
-        f"MaiAgent 呼叫 {report_stats.get('maiagent_call_count', 0)} 次",
-    ]
-    st.markdown(
-        "<div class=\"compact-kpi-bar\">"
-        + "".join(f"<span class=\"compact-kpi-item\">{escape(item)}</span>" for item in stats_items)
-        + "</div>",
-        unsafe_allow_html=True,
-    )
-    raw_chars = report_stats.get("raw_chars", 0)
-    prompt_chars = report_stats.get("prompt_chars", 0)
-    if raw_chars:
-        st.caption(f"本次送入 MaiAgent 的兩階段 prompt 約 {prompt_chars:,} 字元；原始 raw 文字約 {raw_chars:,} 字元。")
-
 latest_report_md = st.session_state.get("latest_report_md", "")
 report_to_show = latest_report_md or st.session_state.get("latest_report", "")
 if not report_to_show:
@@ -5150,11 +4649,9 @@ if report_to_show:
     st.markdown('<div class="section-title">輸出與寄送</div>', unsafe_allow_html=True)
     pdf_source_md = st.session_state.get("latest_report_md", "")
     pdf_bytes = try_markdown_to_pdf_bytes(pdf_source_md) if pdf_source_md else None
-    raw_pdf_bytes = try_raw_debug_to_pdf_bytes(raw_rss, raw_ddg) if (show_developer_info and (raw_rss or raw_ddg)) else None
-    output_cols = st.columns(3 if show_developer_info else 2)
+    output_cols = st.columns(2)
     out1 = output_cols[0]
-    out2 = output_cols[1] if show_developer_info else None
-    out3 = output_cols[2] if show_developer_info else output_cols[1]
+    out2 = output_cols[1]
     with out1:
         if pdf_bytes:
             st.download_button(
@@ -5167,20 +4664,7 @@ if report_to_show:
         else:
             st.button(f"📄 下載正式{display_report_label} PDF", disabled=True, use_container_width=True)
             st.caption("請先產生本次報告；PDF 會使用 latest_report_md。")
-    if show_developer_info and out2:
-        with out2:
-            if raw_pdf_bytes:
-                st.download_button(
-                    "🧾 下載原始資料 PDF",
-                    data=raw_pdf_bytes,
-                    file_name=build_report_download_filename("raw_search_data", "pdf", display_run_config),
-                    mime="application/octet-stream",
-                    use_container_width=True,
-                )
-            else:
-                st.button("🧾 下載原始資料 PDF", disabled=True, use_container_width=True)
-                st.caption("產生報告後會提供原始資料 PDF。")
-    with out3:
+    with out2:
         if latest_report_md:
             send_latest_btn = st.button("📧 寄送目前報告", use_container_width=True)
             if send_latest_btn:
@@ -5305,138 +4789,15 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
     })
 
 
-def build_developer_debug_markdown(payload: dict) -> str:
-    def json_block(value) -> str:
-        return "```json\n" + json.dumps(_json_safe(value), ensure_ascii=False, indent=2) + "\n```"
-
-    maiagent = payload.get("maiagent", {})
-    sections = [
-        "# 開發者除錯資訊",
-        "## 本次設定",
-        json_block(payload.get("run_info", {})),
-        "## 本次統計",
-        json_block(payload.get("stats", {})),
-        "## 來源健康狀態",
-        json_block(payload.get("source_health", [])),
-        "## 輕量候選卡",
-        json_block(payload.get("candidate_cards", [])),
-        "## MaiAgent 選出 ID",
-        json_block(payload.get("selected_ids", [])),
-        "## AI 入選候選",
-        json_block(payload.get("selected_candidates", [])),
-        "## Python 補齊後入選新聞詳情",
-        json_block(payload.get("enriched_selected_candidates", [])),
-        "## 排除候選與原因",
-        json_block({
-            "excluded_candidates": payload.get("excluded_candidates", []),
-            "exclusion_stats": payload.get("exclusion_stats", {}),
-            "dedupe_stats": payload.get("dedupe_stats", {}),
-            "ai_unselected_stats": payload.get("ai_unselected_stats", {}),
-        }),
-        "## 研究補充候選",
-        json_block(payload.get("journal_candidates", [])),
-        "## MaiAgent 第一階段 Prompt",
-        "```text\n" + (maiagent.get("selection_prompt") or "") + "\n```",
-        "## MaiAgent 第一階段回應",
-        "```text\n" + (maiagent.get("selection_response") or "") + "\n```",
-        "## MaiAgent 第二階段 Prompt",
-        "```text\n" + (maiagent.get("report_prompt") or "") + "\n```",
-        "## MaiAgent 第二階段回應",
-        "```text\n" + (maiagent.get("report_response") or "") + "\n```",
-        "## 最終正式報告 Markdown",
-        payload.get("final_report_md", ""),
-    ]
-    return "\n\n".join(sections)
-
-
 debug_info = st.session_state.get("latest_debug_info", {})
-if show_developer_info and (debug_info or (show_raw_debug and (raw_rss or raw_ddg))):
-    with st.expander("開發者除錯資訊", expanded=False):
-        st.caption("候選新聞、排除原因、raw data、MaiAgent prompt、MaiAgent 回應與來源健康狀態集中於此，預設收合供展示時保持簡潔。")
-
-        debug_payload = build_developer_debug_payload(debug_info, report_stats, source_statuses)
-        debug_json = json.dumps(debug_payload, ensure_ascii=False, indent=2)
-        debug_markdown = build_developer_debug_markdown(debug_payload)
-        st.session_state["latest_debug_payload"] = debug_payload
-        st.session_state["latest_debug_md"] = debug_markdown
-        download_cols = st.columns(2)
-        with download_cols[0]:
-            st.download_button(
-                "下載開發者除錯 JSON",
-                data=debug_json.encode("utf-8"),
-                file_name=build_report_download_filename("developer_debug", "json", display_run_config),
-                mime="application/json",
-                use_container_width=True,
-            )
-        with download_cols[1]:
-            st.download_button(
-                "下載開發者除錯 Markdown",
-                data=debug_markdown.encode("utf-8"),
-                file_name=build_report_download_filename("developer_debug", "md", display_run_config),
-                mime="text/markdown",
-                use_container_width=True,
-            )
-
-        latest_stats = debug_info.get("report_stats", report_stats or {})
-        debug_stats = [
-            f"原始候選 {latest_stats.get('raw_count', 0)}",
-            f"去重後 {latest_stats.get('deduped_count', 0)}",
-            f"初篩後 {latest_stats.get('filtered_count', 0)}",
-            f"AI 入選 {latest_stats.get('ai_selected_count', 0)}",
-            f"Prompt 字元 {latest_stats.get('prompt_chars', 0):,}",
-        ]
-        st.markdown(
-            "<div class=\"compact-kpi-bar\">"
-            + "".join(f"<span class=\"compact-kpi-item\">{escape(item)}</span>" for item in debug_stats)
-            + "</div>",
-            unsafe_allow_html=True,
-        )
-
-        with st.expander("原始候選新聞", expanded=False):
-            st.dataframe(_debug_candidate_rows(debug_info.get("raw_candidates", [])), use_container_width=True)
-        with st.expander("去重後新聞", expanded=False):
-            st.dataframe(_debug_candidate_rows(debug_info.get("deduped_candidates", [])), use_container_width=True)
-        with st.expander("初篩後新聞", expanded=False):
-            st.dataframe(_debug_candidate_rows(debug_info.get("filtered_candidates", [])), use_container_width=True)
-        with st.expander("輕量候選卡", expanded=False):
-            st.dataframe(debug_info.get("candidate_cards", []), use_container_width=True)
-        with st.expander("AI 入選新聞", expanded=False):
-            st.dataframe(_debug_candidate_rows(debug_info.get("selected_candidates", [])), use_container_width=True)
-
-        with st.expander("AI 未入選原因統計", expanded=False):
-            st.json(debug_info.get("ai_unselected_stats", {}))
-
-        with st.expander("排除原因統計", expanded=False):
-            st.json({
-                "去重統計": debug_info.get("dedupe_stats", {}),
-                "初篩排除": debug_info.get("exclusion_stats", {}),
-            })
-
-        with st.expander("正式報告 Markdown 原文", expanded=False):
-            st.text_area(
-                "latest_report_md",
-                debug_info.get("latest_report_md", st.session_state.get("latest_report_md", "")),
-                height=520,
-                label_visibility="collapsed",
-            )
-
-        with st.expander("第一階段 MaiAgent 選題 prompt", expanded=False):
-            st.text_area("selection_prompt", debug_info.get("selection_prompt", ""), height=360, label_visibility="collapsed")
-        with st.expander("第一階段 MaiAgent 回應", expanded=False):
-            st.text_area("selection_response", debug_info.get("selection_response", ""), height=260, label_visibility="collapsed")
-        with st.expander("第二階段正式報告 prompt", expanded=False):
-            st.text_area("report_prompt", debug_info.get("report_prompt", ""), height=420, label_visibility="collapsed")
-        with st.expander("第二階段 MaiAgent 回應", expanded=False):
-            st.text_area("report_response", debug_info.get("report_response", ""), height=360, label_visibility="collapsed")
-
-        with st.expander("來源健康狀態", expanded=False):
-            st.dataframe(debug_info.get("source_statuses", source_statuses), use_container_width=True)
-
-        if include_research_supplement:
-            with st.expander("國際學術與技術研究補充", expanded=False):
-                st.dataframe(_debug_candidate_rows(debug_info.get("journal_candidates", [])), use_container_width=True)
-                st.json(debug_info.get("journal_statuses", []))
-
-        with st.expander("raw data", expanded=False):
-            st.text_area("RSS raw", raw_rss, height=300)
-            st.text_area("ddgs raw", raw_ddg, height=300)
+if show_developer_info and debug_info:
+    debug_payload = build_developer_debug_payload(debug_info, report_stats, source_statuses)
+    debug_json = json.dumps(debug_payload, ensure_ascii=False, indent=2)
+    st.session_state["latest_debug_payload"] = debug_payload
+    st.download_button(
+        "下載 AI 校正資料 JSON",
+        data=debug_json.encode("utf-8"),
+        file_name=build_report_download_filename("developer_debug", "json", display_run_config),
+        mime="application/json",
+        use_container_width=True,
+    )
