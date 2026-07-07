@@ -543,9 +543,12 @@ DDGS_MAX_RESULTS = 25
 NORMAL_LOOKBACK_OPTIONS = [7, 14, 30]
 ADVANCED_LOOKBACK_OPTIONS = [90, 180, 365]
 REPORT_TARGET_BY_DAYS = {
-    7: 15,
-    14: 20,
-    30: 25,
+    7: 8,
+    14: 10,
+    30: 10,
+    90: 10,
+    180: 12,
+    365: 12,
 }
 LONG_TERM_TARGET_LABELS = {
     90: "趨勢回顧",
@@ -724,10 +727,10 @@ TECH_NEWS_SOFT_EXCLUDE_TERMS = [
     "行銷", "害蟲", "禁帶", "禁令", "公車", "電動巴士",
 ]
 
-MAX_SELECTION_CANDIDATES = 80
-SELECTION_MIN_ITEMS = 15
-SELECTION_MAX_ITEMS = 25
-CANDIDATE_SNIPPET_CHARS = 260
+MAX_SELECTION_CANDIDATES = 150
+SELECTION_MIN_ITEMS = 8
+SELECTION_MAX_ITEMS = 20
+CANDIDATE_SNIPPET_CHARS = 140
 REPORT_SNIPPET_CHARS = 420
 JOURNAL_MAX_RESULTS_PER_QUERY = 3
 JOURNAL_MAX_ITEMS = 10
@@ -972,7 +975,11 @@ with st.sidebar:
     )
     if "selected_regions_state" not in st.session_state:
         st.session_state["selected_regions_state"] = DEFAULT_REGIONS.copy()
-    st.session_state["selected_regions_state"] = list(dict.fromkeys(st.session_state["selected_regions_state"]))
+    st.session_state["selected_regions_state"] = [
+        region
+        for region in dict.fromkeys(st.session_state["selected_regions_state"])
+        if region in ADVANCED_REGIONS
+    ]
 
     stored_selected_regions = list(st.session_state["selected_regions_state"])
     selected_regions = stored_selected_regions.copy()
@@ -1174,15 +1181,11 @@ def build_report_download_filename(prefix: str, extension: str, run_config: dict
         report_date_obj = datetime.date.fromisoformat(str(config.get("report_date") or today.isoformat()))
     except ValueError:
         pass
-    start_fallback = report_date_obj - datetime.timedelta(days=days)
-    end_fallback = report_date_obj
     report_type_code = get_report_type_code(config.get("report_label", report_period_label), days)
     report_date = _compact_date(config.get("report_date"), report_date_obj)
-    start_date = _compact_date(config.get("start_date"), start_fallback)
-    end_date = _compact_date(config.get("end_date"), end_fallback)
     clean_prefix = re.sub(r"[^A-Za-z0-9_]+", "_", str(prefix or "report")).strip("_")
     clean_extension = re.sub(r"[^A-Za-z0-9]+", "", str(extension or "")).lower()
-    return f"{clean_prefix}_{report_type_code}_{report_date}_{start_date}_{end_date}.{clean_extension}"
+    return f"{clean_prefix}_{report_type_code}_{report_date}.{clean_extension}"
 
 
 def google_news_search_url(query: str, hl: str = "en-US", gl: str = "US", ceid_lang: str = "en") -> str:
@@ -2536,33 +2539,43 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
 
 
 def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
-    raw_candidates = parse_rss_candidates(raw_rss) + parse_ddg_candidates(raw_ddg)
+    raw_candidates = [
+        annotate_candidate_for_scheme_d(candidate)
+        for candidate in (parse_rss_candidates(raw_rss) + parse_ddg_candidates(raw_ddg))
+    ]
     deduped_candidates, dedupe_stats = dedupe_candidates(raw_candidates)
     filtered_candidates: list[dict] = []
+    excluded_candidates: list[dict] = []
     exclusion_stats: dict[str, int] = {}
 
     for candidate in deduped_candidates:
         keep, reason = preliminary_filter_candidate(candidate)
         if keep:
-            filtered_candidates.append(candidate)
+            filtered_candidates.append(annotate_candidate_for_scheme_d(candidate))
         else:
+            excluded_candidates.append(annotate_candidate_for_scheme_d(candidate, reason))
             exclusion_stats[reason] = exclusion_stats.get(reason, 0) + 1
 
     filtered_candidates = sorted(
         filtered_candidates,
         key=lambda item: (
+            -int(item.get("python_score", 0) or 0),
             _source_tier_rank(item.get("source_tier", "C_media")),
             _quality_rank(item.get("source_quality", "B")),
             0 if item.get("source_type") in {"官方 RSS", "Google News 代理"} else 1,
             -_date_sort_key(item),
         ),
     )
-    model_candidates = [dict(item, id=idx) for idx, item in enumerate(filtered_candidates[:MAX_SELECTION_CANDIDATES], 1)]
+    candidate_limit = min(get_selection_candidate_limit(lookback_int), MAX_SELECTION_CANDIDATES)
+    model_candidates = [dict(item, id=idx) for idx, item in enumerate(filtered_candidates[:candidate_limit], 1)]
+    candidate_cards = [build_candidate_card(candidate) for candidate in model_candidates]
     return {
         "raw_candidates": raw_candidates,
         "deduped_candidates": deduped_candidates,
         "filtered_candidates": filtered_candidates,
+        "excluded_candidates": excluded_candidates,
         "model_candidates": model_candidates,
+        "candidate_cards": candidate_cards,
         "dedupe_stats": dedupe_stats,
         "exclusion_stats": exclusion_stats,
         "raw_count": len(raw_candidates),
@@ -2602,18 +2615,7 @@ def build_long_term_coverage_warning(candidates: list[dict]) -> dict:
 
 
 def format_selection_candidate(candidate: dict) -> str:
-    source_url = _effective_source_url(candidate)
-    return (
-        f"{candidate['id']}. title: {candidate.get('title', '')}\n"
-        f"   date: {candidate.get('date', '')}\n"
-        f"   source: {candidate.get('source', '')}\n"
-        f"   source_display: {candidate.get('source_display', candidate.get('source', ''))}\n"
-        f"   source_tier: {candidate.get('source_tier', '')}\n"
-        f"   url: {source_url}\n"
-        f"   snippet: {_shorten(candidate.get('snippet', ''), CANDIDATE_SNIPPET_CHARS)}\n"
-        f"   source_quality: {candidate.get('source_quality', 'B')}\n"
-        f"   region: {candidate.get('region', '未判定')}"
-    )
+    return json.dumps(build_candidate_card(candidate), ensure_ascii=False)
 
 
 def _selected_report_sections() -> str:
@@ -2665,6 +2667,197 @@ HIGH_VALUE_POLICY_TERMS = [
 ]
 
 
+ACCIDENT_SIGNAL_TERMS = [
+    "derailment", "collision", "fire", "smoke", "power outage", "signal failure",
+    "service suspension", "disruption", "platform screen door", "train door",
+    "出軌", "脫軌", "追撞", "火災", "冒煙", "停駛", "供電異常", "號誌異常",
+    "通訊異常", "月臺門", "車門異常",
+]
+
+
+def get_selection_candidate_limit(days: int) -> int:
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 7
+    if days >= 90:
+        return 150
+    if days >= 30:
+        return 120
+    return 100
+
+
+def get_selection_output_range(days: int) -> str:
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 7
+    if days >= 365:
+        return "12～20"
+    if days >= 180:
+        return "12～18"
+    if days >= 90:
+        return "10～15"
+    if days >= 30:
+        return "10～15"
+    if days >= 14:
+        return "10～14"
+    return "8～12"
+
+
+def infer_preliminary_type(candidate: dict) -> str:
+    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')} {candidate.get('source', '')}"
+    if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
+        return "規範更新"
+    if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS):
+        return "重大事故"
+    if _contains_any_term(text, ["strike", "contract dispute", "lawsuit", "fare dispute", "budget overrun", "罷工", "合約糾紛", "票價爭議", "預算超支", "民怨"]):
+        return "營運爭議"
+    if _contains_any_term(text, HIGH_VALUE_POLICY_TERMS + LOW_VALUE_POLICY_TERMS):
+        return "營運政策"
+    return "技術新知"
+
+
+def build_candidate_flags(candidate: dict) -> list[str]:
+    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('query', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
+    flags: list[str] = []
+    if candidate.get("source_tier") == "A_official":
+        flags.append("official_source")
+    if candidate.get("source_tier") == "B_professional":
+        flags.append("professional_source")
+    if candidate.get("source_tier") == "D_proxy_low_value":
+        flags.append("low_value_proxy_or_page")
+    if _domain_from_url(_effective_source_url(candidate)):
+        flags.append("source_domain_detected")
+    if "news.google.com" in _domain_from_url(candidate.get("url", "")):
+        flags.append("google_news_proxy")
+    if _candidate_date_obj(candidate.get("date", "")):
+        flags.append("date_detected")
+    if _is_urban_rail_candidate(text, candidate.get("source", "")):
+        flags.append("urban_rail")
+    if _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS):
+        flags.append("technical_or_system_detail")
+    if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS):
+        flags.append("incident_or_safety_signal")
+    if _contains_any_term(text, HIGH_VALUE_POLICY_TERMS):
+        flags.append("high_value_policy")
+    if _contains_any_term(text, LOW_VALUE_POLICY_TERMS):
+        flags.append("low_value_service_notice")
+    if len(candidate.get("title", "")) < 20:
+        flags.append("short_title")
+    if len(candidate.get("snippet", "")) < 80:
+        flags.append("short_snippet")
+    return flags
+
+
+def score_news_candidate(candidate: dict) -> dict:
+    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('query', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
+    score = 50
+    reasons: list[str] = []
+    tier = candidate.get("source_tier", "C_media")
+    if tier == "A_official":
+        score += 20
+        reasons.append("官方來源 +20")
+    elif tier == "B_professional":
+        score += 14
+        reasons.append("專業鐵道媒體 +14")
+    elif tier == "C_media":
+        score -= 4
+        reasons.append("一般媒體 -4")
+    elif tier == "D_proxy_low_value":
+        score -= 25
+        reasons.append("低價值頁面/代理來源 -25")
+
+    if _candidate_date_obj(candidate.get("date", "")):
+        score += 10
+        reasons.append("明確日期 +10")
+    else:
+        score -= 20
+        reasons.append("日期不明 -20")
+
+    source_url = _effective_source_url(candidate)
+    if _extract_complete_url(source_url):
+        score += 8
+        reasons.append("完整 URL +8")
+    elif _extract_domain_hint(source_url):
+        score += 4
+        reasons.append("可辨識 domain +4")
+    else:
+        score -= 15
+        reasons.append("URL 不完整 -15")
+
+    if _is_urban_rail_candidate(text, candidate.get("source", "")):
+        score += 15
+        reasons.append("都市軌道明確 +15")
+    else:
+        score -= 30
+        reasons.append("都市軌道關聯不足 -30")
+
+    if _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS):
+        score += 15
+        reasons.append("機電/系統技術訊號 +15")
+    if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS):
+        score += 10
+        reasons.append("事故/安全訊號 +10")
+    if _contains_any_term(text, HIGH_VALUE_POLICY_TERMS):
+        score += 8
+        reasons.append("高價值營運政策訊號 +8")
+    if _contains_any_term(text, LOW_VALUE_POLICY_TERMS):
+        score -= 12
+        reasons.append("低價值服務提醒 -12")
+    if any(marker in urlparse(candidate.get("url", "")).path.casefold() for marker in LOW_INFORMATION_PATH_MARKERS):
+        score -= 18
+        reasons.append("入口/路線/查詢頁路徑 -18")
+    if any(term.casefold() in text.casefold() for term in LOW_QUALITY_CONTENT_TERMS):
+        score -= 15
+        reasons.append("旅遊/SEO/低價值內容 -15")
+    if len(candidate.get("title", "")) < 20:
+        score -= 5
+        reasons.append("標題過短 -5")
+    if len(candidate.get("snippet", "")) < 80:
+        score -= 8
+        reasons.append("摘要過短 -8")
+
+    flags = build_candidate_flags(candidate)
+    preliminary_type = infer_preliminary_type(candidate)
+    return {
+        "python_score": max(0, min(100, score)),
+        "score_reason": "；".join(reasons),
+        "candidate_flags": flags,
+        "preliminary_type": preliminary_type,
+        "short_snippet": _shorten(candidate.get("snippet", ""), CANDIDATE_SNIPPET_CHARS),
+        "source_domain": candidate.get("source_domain") or _domain_from_url(_effective_source_url(candidate)),
+    }
+
+
+def annotate_candidate_for_scheme_d(candidate: dict, exclude_reason: str = "") -> dict:
+    enriched = dict(candidate)
+    enriched.update(score_news_candidate(enriched))
+    enriched["exclude_reason"] = exclude_reason
+    return enriched
+
+
+def build_candidate_card(candidate: dict) -> dict:
+    source_url = _effective_source_url(candidate)
+    return {
+        "id": candidate.get("id", ""),
+        "date": candidate.get("date", ""),
+        "title": candidate.get("title", ""),
+        "source_display": candidate.get("source_display", candidate.get("source", "")),
+        "source_domain": candidate.get("source_domain") or _domain_from_url(source_url),
+        "source_tier": candidate.get("source_tier", ""),
+        "source_type": candidate.get("source_type", ""),
+        "source_verb": candidate.get("source_verb", ""),
+        "region": candidate.get("region", "未判定"),
+        "preliminary_type": candidate.get("preliminary_type", infer_preliminary_type(candidate)),
+        "short_snippet": candidate.get("short_snippet", _shorten(candidate.get("snippet", ""), CANDIDATE_SNIPPET_CHARS)),
+        "url": source_url,
+        "python_score": candidate.get("python_score", 0),
+        "score_reason": candidate.get("score_reason", ""),
+        "candidate_flags": candidate.get("candidate_flags", []),
+    }
+
+
 def _is_low_value_policy_candidate(candidate: dict) -> bool:
     text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')}"
     has_low = _contains_any_term(text, LOW_VALUE_POLICY_TERMS)
@@ -2698,21 +2891,26 @@ def rebalance_selected_candidates(selected: list[dict]) -> list[dict]:
 def build_selection_prompt(candidates: list[dict]) -> str:
     candidate_block = "\n\n".join(format_selection_candidate(candidate) for candidate in candidates)
     if not candidate_block:
-        candidate_block = "本期 Python 初篩後沒有候選新聞。請回傳空的 selected 清單。"
+        candidate_block = "本期 Python 初篩後沒有候選新聞。請回傳空的 selected_ids 清單。"
     selected_types_str = "、".join(selected_types) if selected_types else "無"
     example_type = selected_types[0] if selected_types else "技術新知"
     allowed_topic_types = " / ".join(selected_types) if selected_types else "無"
     policy_rule = _policy_selection_rule()
+    output_range = get_selection_output_range(lookback_int)
+    card_limit = min(get_selection_candidate_limit(lookback_int), MAX_SELECTION_CANDIDATES)
     return f"""
 # 第一階段：候選新聞選題
 run_config：{json.dumps(current_run_config, ensure_ascii=False)}
 報告期間：{date_range}
 報導範圍：{report_scope_label}
 勾選類型：{selected_types_str}
-選題目標：{SELECTION_MIN_ITEMS}～{SELECTION_MAX_ITEMS} 則。
+選題目標：{output_range} 則；高品質候選不足時可少於目標，但不要用低價值資料湊數。
+候選卡上限：本階段最多只提供 {card_limit} 筆 Python 高分輕量候選卡。
 
 硬性限制：
-- 只能使用候選清單編號，不得補新聞或自行上網。
+- 只能使用候選卡 id，不得補新聞或自行上網。
+- 本階段只做選題，不得撰寫正式週報，不得輸出正式新聞段落。
+- 候選卡是 Python 從 RSS/ddgs/Google News proxy 篩選後產生；不得要求或使用 Tavily、web search、網頁擷取或任何外部搜尋工具。
 - 不得納入臺灣新聞、非都市軌道、旅遊/SEO 或無完整 URL 資料。
 - D_proxy_low_value 來源（入口頁、archive/topic/route/trip result、PDF 路線圖、職缺或查詢頁）若沒有明確事件、技術導入、系統變更或政策內容，不得納入。
 - 技術新知需優先明確機電/系統/維修/資安/測試/能源效率內容；單純上線、啟用或服務公告降權。
@@ -2721,18 +2919,25 @@ run_config：{json.dumps(current_run_config, ensure_ascii=False)}
 
 請只回傳 JSON，不要加 Markdown 說明：
 {{
-  "selected": [
+  "selected_ids": [
     {{
       "id": 1,
-      "classification": "{example_type}",
-      "selected_reason": "入選理由",
-      "topic_type": "{allowed_topic_types}",
+      "category": "{example_type}",
+      "reason": "入選理由",
+      "priority": 1,
+      "merge_group": "",
       "include_in_report": true
+    }}
+  ],
+  "exclude_ids": [
+    {{
+      "id": 2,
+      "exclude_reason": "排除理由"
     }}
   ]
 }}
 
-## 候選新聞清單
+## 輕量候選卡（不是 raw data）
 {candidate_block}
 """.strip()
 
@@ -2774,9 +2979,15 @@ def parse_selection_response(response_text: str, candidates: list[dict]) -> list
     parsed = _json_loads_loose(response_text)
     items = []
     if isinstance(parsed, dict):
+        if isinstance(parsed.get("selected_ids"), list):
+            for raw_item in parsed["selected_ids"]:
+                if isinstance(raw_item, dict):
+                    items.append(raw_item)
+                else:
+                    items.append({"id": raw_item})
         for key in ("selected", "items", "入選", "selections"):
             if isinstance(parsed.get(key), list):
-                items = parsed[key]
+                items.extend(parsed[key])
                 break
     elif isinstance(parsed, list):
         items = parsed
@@ -2795,9 +3006,11 @@ def parse_selection_response(response_text: str, candidates: list[dict]) -> list
             continue
         classification = (
             item.get("classification")
+            or item.get("category")
             or item.get("分類")
             or item.get("topic_type")
             or item.get("類型")
+            or item.get("preliminary_type")
             or "技術新知"
         )
         if classification not in ADVANCED_TYPES:
@@ -2807,6 +3020,8 @@ def parse_selection_response(response_text: str, candidates: list[dict]) -> list
         candidate = dict(candidate_map[candidate_id])
         candidate["classification"] = classification
         candidate["selected_reason"] = item.get("selected_reason") or item.get("入選理由") or item.get("reason") or "MaiAgent 第一階段選題入選。"
+        candidate["selection_priority"] = item.get("priority", "")
+        candidate["merge_group"] = item.get("merge_group", "")
         candidate["include_in_report"] = True
         selected.append(candidate)
         seen_ids.add(candidate_id)
@@ -4623,6 +4838,7 @@ if generate_btn:
             selection_response = call_maiagent_cloud(selection_prompt)
             maiagent_call_count += 1
             selected_candidates = rebalance_selected_candidates(parse_selection_response(selection_response, model_candidates))
+            selected_ids = [int(item.get("id", 0) or 0) for item in selected_candidates]
             ai_unselected_stats = build_ai_unselected_stats(model_candidates, selected_candidates)
             progress_bar.progress(0.70)
 
@@ -4672,6 +4888,7 @@ if generate_btn:
                 "category_counts": category_counts,
                 "journal_count": len(journal_candidates),
                 "model_candidate_count": len(model_candidates),
+                "candidate_card_count": len(candidate_pool["candidate_cards"]),
                 "long_term_coverage": long_term_coverage,
                 "run_config": run_config,
             }
@@ -4690,8 +4907,12 @@ if generate_btn:
                 "raw_candidates": candidate_pool["raw_candidates"],
                 "deduped_candidates": candidate_pool["deduped_candidates"],
                 "filtered_candidates": candidate_pool["filtered_candidates"],
+                "excluded_candidates": candidate_pool["excluded_candidates"],
                 "model_candidates": model_candidates,
+                "candidate_cards": candidate_pool["candidate_cards"],
                 "selected_candidates": selected_candidates,
+                "selected_ids": selected_ids,
+                "enriched_selected_candidates": selected_candidates,
                 "journal_candidates": journal_candidates,
                 "journal_statuses": journal_statuses,
                 "selection_prompt": selection_prompt,
@@ -4862,6 +5083,11 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
             "source_tier": item.get("source_tier", ""),
             "region": item.get("region", ""),
             "type": item.get("source_type", ""),
+            "preliminary_type": item.get("preliminary_type", ""),
+            "python_score": item.get("python_score", ""),
+            "score_reason": item.get("score_reason", ""),
+            "candidate_flags": ", ".join(item.get("candidate_flags", []) or []),
+            "exclude_reason": item.get("exclude_reason", ""),
             "url": item.get("url", ""),
             "classification": item.get("classification", ""),
             "reason": item.get("selected_reason", ""),
@@ -4920,12 +5146,16 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "maiagent_calls": latest_stats.get("maiagent_call_count", 0),
             "category_counts": latest_stats.get("category_counts", {}),
             "journal_count": latest_stats.get("journal_count", 0),
+            "candidate_card_count": latest_stats.get("candidate_card_count", 0),
         },
         "source_health": debug_info.get("source_statuses", source_statuses) if debug_info else (source_statuses or []),
         "raw_candidates": debug_info.get("raw_candidates", []) if debug_info else [],
         "deduped_candidates": debug_info.get("deduped_candidates", []) if debug_info else [],
         "filtered_candidates": debug_info.get("filtered_candidates", []) if debug_info else [],
+        "candidate_cards": debug_info.get("candidate_cards", []) if debug_info else [],
         "selected_candidates": debug_info.get("selected_candidates", []) if debug_info else [],
+        "selected_ids": debug_info.get("selected_ids", []) if debug_info else [],
+        "enriched_selected_candidates": debug_info.get("enriched_selected_candidates", debug_info.get("selected_candidates", [])) if debug_info else [],
         "excluded_candidates": debug_info.get("excluded_candidates", []) if debug_info else [],
         "exclusion_stats": debug_info.get("exclusion_stats", {}) if debug_info else {},
         "dedupe_stats": debug_info.get("dedupe_stats", {}) if debug_info else {},
@@ -4938,6 +5168,9 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "report_prompt": debug_info.get("report_prompt", "") if debug_info else "",
             "report_response": debug_info.get("report_response", "") if debug_info else "",
         },
+        "selection_response": debug_info.get("selection_response", "") if debug_info else "",
+        "report_prompt": debug_info.get("report_prompt", "") if debug_info else "",
+        "report_response": debug_info.get("report_response", "") if debug_info else "",
         "final_report_md": debug_info.get("latest_report_md", st.session_state.get("latest_report_md", "")) if debug_info else st.session_state.get("latest_report_md", ""),
     })
 
@@ -4955,8 +5188,14 @@ def build_developer_debug_markdown(payload: dict) -> str:
         json_block(payload.get("stats", {})),
         "## 來源健康狀態",
         json_block(payload.get("source_health", [])),
+        "## 輕量候選卡",
+        json_block(payload.get("candidate_cards", [])),
+        "## MaiAgent 選出 ID",
+        json_block(payload.get("selected_ids", [])),
         "## AI 入選候選",
         json_block(payload.get("selected_candidates", [])),
+        "## Python 補齊後入選新聞詳情",
+        json_block(payload.get("enriched_selected_candidates", [])),
         "## 排除候選與原因",
         json_block({
             "excluded_candidates": payload.get("excluded_candidates", []),
@@ -5029,6 +5268,8 @@ if show_developer_info and (debug_info or (show_raw_debug and (raw_rss or raw_dd
             st.dataframe(_debug_candidate_rows(debug_info.get("deduped_candidates", [])), use_container_width=True)
         with st.expander("初篩後新聞", expanded=False):
             st.dataframe(_debug_candidate_rows(debug_info.get("filtered_candidates", [])), use_container_width=True)
+        with st.expander("輕量候選卡", expanded=False):
+            st.dataframe(debug_info.get("candidate_cards", []), use_container_width=True)
         with st.expander("AI 入選新聞", expanded=False):
             st.dataframe(_debug_candidate_rows(debug_info.get("selected_candidates", [])), use_container_width=True)
 
