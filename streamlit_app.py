@@ -862,6 +862,19 @@ model_choice = "MaiAgent 雲端 API"
 gmail_user = get_secret("GMAIL_USER")
 gmail_pass = get_secret("GMAIL_APP_PASS")
 
+
+def select_all_report_types() -> None:
+    st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
+    for report_type in ADVANCED_TYPES:
+        st.session_state[f"type_{report_type}"] = True
+
+
+def clear_selected_report_types() -> None:
+    st.session_state["selected_types_state"] = []
+    for report_type in ADVANCED_TYPES:
+        st.session_state[f"type_{report_type}"] = False
+
+
 # ── 側邊欄 ──────────────────────────────────────────
 with st.sidebar:
     st.markdown(
@@ -926,17 +939,17 @@ with st.sidebar:
     st.caption(f"已選 {selected_type_count} 種類型｜{target_summary}")
     with st.expander("展開選擇新聞類型", expanded=False):
         col_t_all, col_t_clear = st.columns(2)
-        if col_t_all.button("全選類型", use_container_width=True):
-            st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
-            for t in ADVANCED_TYPES:
-                st.session_state[f"type_{t}"] = True
-            st.rerun()
+        col_t_all.button(
+            "全選類型",
+            use_container_width=True,
+            on_click=select_all_report_types,
+        )
 
-        if col_t_clear.button("清除類型", use_container_width=True):
-            st.session_state["selected_types_state"] = []
-            for t in ADVANCED_TYPES:
-                st.session_state[f"type_{t}"] = False
-            st.rerun()
+        col_t_clear.button(
+            "清除類型",
+            use_container_width=True,
+            on_click=clear_selected_report_types,
+        )
 
         for t in ADVANCED_TYPES:
             checked = t in st.session_state["selected_types_state"]
