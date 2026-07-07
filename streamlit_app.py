@@ -3474,7 +3474,7 @@ run_config：{json.dumps(current_run_config, ensure_ascii=False)}
 • 相關機電系統：限捷運機電範疇
 
 • 事件摘要：
-請寫成 2 至 4 句完整段落，不要條列，不要使用 - 或多層 bullet；每則新聞最多只在第一句提一次來源名稱。
+請寫成 3 至 5 句完整段落；一般新聞約 120～180 個中文字，重要技術或重大事件約 180～250 個中文字，上限 250 個中文字。不要條列，不要使用 - 或多層 bullet，不要寫成空泛評論。
 
 • 臺北捷運局啟示：
 請寫成 100 個中文字以內之一段文字，不要條列，不得過度延伸資料未提供的內容。
@@ -3491,12 +3491,14 @@ ________________________________________
 - 不得填無障礙服務、旅客服務、活動疏運、營運政策、土建工程、站體改善或道路交通。
 - 不得在事件摘要下方使用 `-`，不得出現空的 `•`，不得出現 `• 事件摘要：-`。
 - 不得使用 `【臺北捷運局啟示】`，統一使用 `• 臺北捷運局啟示：`。
-- 同一則新聞若只有單一來源，事件摘要第一句寫一次「依 XXX 公告/報導」即可，後續句子不要重複相同來源主詞。
+- 事件摘要請直接切入事件重點，不要以「依 XXX 報導」、「依 XXX 官方公告」、「依 XXX 官方資料」、「根據 XXX 報導」或「根據 XXX 公告」作為固定開頭。
+- 事件摘要應包含：發生什麼事、涉及哪個捷運系統/路線/場站/設備或營運場景、技術/營運/系統轉換上的重點、與捷運機電系統之關聯。
+- 若原始資料未揭露細節，事件摘要最後一句可簡短說明「資料來源未載明更細部技術規格、測試項目或導入數量」；不得自行補充原始資料未提供的數字、規格、成效或時程。
 - 資料來源必須放在每則最後。
 - 正式週報語氣需像機電系統設計處整理給長官或評審閱讀的國際捷運技術週報，避免除錯、選題或模型處理語氣。
 - 不得在正式報告正文使用：「模型：MaiAgent 雲端 API」「候選資料指出」「候選摘要指出」「入選資料指出」「原始候選資料」「raw data」「本次送入模型」「AI 入選」「模型判斷」「資料欄位顯示」「初篩資料指出」「本次候選資料」「來源健康」「Python 初篩」「MaiAgent 判斷」「developer debug」「python_score」「初步分類」「入選原因」。
-- 事件摘要請以 source_display 與 source_verb 敘述，例如「依 MTA 官方公告……」「依 Railway-News 報導……」，不得以「候選資料」作為主詞。
-- 資料不足時可用自然正式語氣說明，例如「公告未載明相關設備調整細節」「報導未揭露更細部技術規格」，不得每則都重複「原始資料未提供，故不補述」。
+- source_display 與 source_verb 只供來源判斷與「資料來源」欄位使用，不要強迫放進事件摘要開頭；事件摘要不得以「候選資料」作為主詞。
+- 資料不足時可用自然正式語氣說明，例如「資料來源未載明相關設備調整細節」「資料來源未載明更細部技術規格」，不得每則都重複「原始資料未提供，故不補述」。
 - source_tier / source_quality 只供判斷與除錯，不得寫入正式週報；D_proxy_low_value 不得包裝成技術新知。
 - 資料來源優先使用原始來源 url 與 source_display；若 url 為 Google News proxy，且 source_display 可辨識原始來源，正式報告不得顯示 Google News 代理連結，請改用可辨識原始來源 domain URL。
 - 資料來源格式固定為「資料來源：來源名稱，YYYY-MM-DD，URL」；若只有 domain，使用「https://domain」；若完全沒有 URL，寫「資料來源：來源名稱，YYYY-MM-DD，未提供完整 URL」。
@@ -4158,6 +4160,20 @@ def _dedupe_source_mentions_in_paragraph(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def strip_event_summary_source_lead_in(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    if not cleaned:
+        return cleaned
+    lead_in_pattern = (
+        r"^(?:依|根據)\s*"
+        r"[^，。,；;：:\n]{2,80}?"
+        r"(?:官方公告|官方資料|報導|公告)"
+        r"(?:指出|表示|說明)?"
+        r"\s*[，,：:]\s*"
+    )
+    return re.sub(lead_in_pattern, "", cleaned, count=1).strip()
+
+
 def _looks_like_english_title(title: str) -> bool:
     compact = re.sub(r"[\s\W_]+", "", title or "")
     if not compact:
@@ -4262,6 +4278,7 @@ def normalize_final_report_md(md: str) -> str:
 
         field_text = _join_field_parts(collected)
         if label == "事件摘要":
+            field_text = strip_event_summary_source_lead_in(field_text)
             field_text = _dedupe_source_mentions_in_paragraph(field_text)
             if field_text:
                 output.extend(["• 事件摘要：", field_text, ""])
