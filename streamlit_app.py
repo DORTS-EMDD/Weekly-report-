@@ -2687,6 +2687,17 @@ ACCIDENT_SIGNAL_TERMS = [
     "通訊異常", "月臺門", "車門異常",
 ]
 
+WORK_ZONE_MONITORING_TERMS = [
+    "work zone", "speed enforcement", "construction zone", "maintenance safety",
+    "工區", "施工區", "速限執法", "維修作業安全", "施工安全", "安全監測",
+]
+
+WORK_ZONE_TECH_DETAIL_TERMS = [
+    "sensor", "camera", "video", "monitoring equipment", "automated monitoring",
+    "backend platform", "communication", "network", "感測", "攝影", "影像",
+    "監測設備", "自動化監測", "後端平台", "通訊", "網路",
+]
+
 
 def get_selection_candidate_limit(days: int) -> int:
     try:
@@ -2722,6 +2733,8 @@ def infer_preliminary_type(candidate: dict) -> str:
     text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')} {candidate.get('source', '')}"
     if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
         return "規範更新"
+    if _contains_any_term(text, WORK_ZONE_MONITORING_TERMS) and not _contains_any_term(text, WORK_ZONE_TECH_DETAIL_TERMS):
+        return "營運政策"
     if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS):
         return "重大事故"
     if _contains_any_term(text, ["strike", "contract dispute", "lawsuit", "fare dispute", "budget overrun", "罷工", "合約糾紛", "票價爭議", "預算超支", "民怨"]):
@@ -2927,6 +2940,7 @@ run_config：{json.dumps(current_run_config, ensure_ascii=False)}
 - 不得納入臺灣新聞、非都市軌道、旅遊/SEO 或無完整 URL 資料。
 - D_proxy_low_value 來源（入口頁、archive/topic/route/trip result、PDF 路線圖、職缺或查詢頁）若沒有明確事件、技術導入、系統變更或政策內容，不得納入。
 - 技術新知需優先明確機電/系統/維修/資安/測試/能源效率內容；單純上線、啟用或服務公告降權。
+- Automated Work Zone Speed Enforcement program 若只有政策公告、執法制度或安全管理機制，且沒有明確設備、監測、感測、影像、通訊或自動化技術導入細節，請列為營運政策或排除，不得硬列為技術新知。
 - 營運爭議需有明確爭議性或重大營運影響；一般旅客資訊、週末調整、延誤證明、治安或乘客糾紛降權或排除。
 {policy_rule}
 
@@ -3357,16 +3371,30 @@ run_config：{json.dumps(current_run_config, ensure_ascii=False)}
 - 空章節文字只限已勾選類型：
 {selected_empty_rules}
 - 正式報告每則新聞請使用以下固定格式，不得自行增減欄位，不得新增「技術關鍵字」、可能影響系統、可參考作法、後續追蹤建議等欄位：
-🔹 [新聞類型] 新聞標題
+🔹 [新聞類型] 繁體中文新聞標題
 
 • 發布/事件日期：YYYY-MM-DD
+
 • 國家/地區：國家或地區
+
 • 相關機電系統：限捷運機電範疇
-• 事件摘要：請寫成 2 至 4 句完整段落，不要條列，不要使用 - 或多層 bullet；每則新聞最多只在第一句提一次來源名稱。
-• 臺北捷運局啟示：請寫成 100 個中文字以內之一段文字，不要條列，不得過度延伸資料未提供的內容。
+
+• 事件摘要：
+請寫成 2 至 4 句完整段落，不要條列，不要使用 - 或多層 bullet；每則新聞最多只在第一句提一次來源名稱。
+
+• 臺北捷運局啟示：
+請寫成 100 個中文字以內之一段文字，不要條列，不得過度延伸資料未提供的內容。
+
 • 資料來源：來源名稱，YYYY-MM-DD，URL
+
 ________________________________________
-- 相關機電系統只能填機電範疇，例如車輛、號誌、通訊、供電、AFC、月臺門、車站電梯、電扶梯、旅客資訊系統、SCADA、資通訊與資安、車站機電設備；不得填無障礙服務、旅客服務、活動疏運、營運政策、土建工程、站體改善或道路交通。
+- 每則新聞標題必須翻成繁體中文正式標題，不得直接沿用英文原題；MTA、TTC、MTR、Tokyo Metro、R211A、CBTC、AFC 等機構、車型或系統縮寫可保留。
+- 若候選 title 為英文，請理解事件後改寫為簡潔繁體中文標題，例如「MTA R211A 新型列車導入紐約地鐵 D 線」，不要把英文原題放入正式報告標題。
+- 每個欄位之間至少保留一個空行；「事件摘要：」與「臺北捷運局啟示：」後方必須換行，不要把正文接在同一行。
+- 相關機電系統只能填機電範疇，例如車輛、號誌、通訊、供電、AFC、月臺門、車站電梯、電扶梯、旅客資訊系統、SCADA、車站機電設備。
+- 「資通訊與資安」只可用於明確涉及通訊網路、OT/IT 資安、CBTC/SCADA/OCC/AFC 資安、系統入侵、駭客攻擊、弱點修補、資料安全、營運科技網路安全、通訊系統升級或資安防護的新聞；沒有這些內容時不得標示為「資通訊與資安」。
+- 工區自動速限執法、維修作業安全、施工區監測等新聞，若未揭露感測器、攝影機、通訊或後端平台細節，相關機電系統請保守寫「維修安全監測設備」。
+- 不得填無障礙服務、旅客服務、活動疏運、營運政策、土建工程、站體改善或道路交通。
 - 不得在事件摘要下方使用 `-`，不得出現空的 `•`，不得出現 `• 事件摘要：-`。
 - 不得使用 `【臺北捷運局啟示】`，統一使用 `• 臺北捷運局啟示：`。
 - 同一則新聞若只有單一來源，事件摘要第一句寫一次「依 XXX 公告/報導」即可，後續句子不要重複相同來源主詞。
@@ -3381,6 +3409,7 @@ ________________________________________
 - 不得使用「資料來源：來源名稱（URL」或「來源連結（domain）」格式。
 - 不得納入臺灣新聞。
 - 技術新知需優先明確機電/系統/維修/資安/測試/能源效率內容；單純上線、啟用或服務公告降權。
+- Automated Work Zone Speed Enforcement program 若只有政策公告、執法制度或安全管理機制，且沒有明確設備、系統、監測、感測、影像、通訊或自動化技術導入細節，請列為「營運政策」或捨棄，不得硬包裝為「技術新知」。
 - 營運爭議需有明確爭議性或重大營運影響；一般旅客資訊、週末調整、延誤證明、治安或乘客糾紛降權或排除。
 {policy_rule}
 {journal_section_rule}
@@ -4003,12 +4032,34 @@ SERVICE_OR_CIVIL_SYSTEM_TERMS = [
     "營運政策", "土建工程", "站體改善", "道路交通", "一般客服",
 ]
 
+ICT_SECURITY_CONTEXT_TERMS = [
+    "通訊網路", "通訊系統", "無線通訊", "網路安全", "資安", "資訊安全",
+    "營運科技", "系統入侵", "駭客", "弱點", "漏洞", "資料安全",
+    "OT", "IT", "CBTC", "SCADA", "OCC", "AFC", "cyber", "cybersecurity",
+    "network", "communication", "communications", "telecom", "radio", "5G", "LTE",
+    "intrusion", "hacker", "vulnerability", "data security",
+]
+
 
 def normalize_electromechanical_system_line(line: str) -> str:
     if "相關機電系統" not in line:
         return line
     prefix = line.split("相關機電系統", 1)[0] + "相關機電系統："
     value = line.split("相關機電系統", 1)[1].lstrip("：:").strip()
+    value = normalize_electromechanical_system_value(value, line)
+    return f"{prefix}{value}"
+
+
+def normalize_electromechanical_system_value(value: str, context: str = "") -> str:
+    value = (value or "").strip()
+    context_without_value = (context or "").replace(value, "")
+    if "資通訊與資安" in value and not _contains_any_term(context_without_value, ICT_SECURITY_CONTEXT_TERMS):
+        if _contains_any_term(context_without_value, WORK_ZONE_MONITORING_TERMS):
+            value = value.replace("資通訊與資安", "維修安全監測設備")
+        elif value.strip("、 ，,") == "資通訊與資安":
+            value = "維修安全監測設備"
+        else:
+            value = value.replace("資通訊與資安", "")
     if "電梯" in value or "升降機" in value:
         value = value.replace("無障礙設施", "車站電梯").replace("無障礙服務", "車站電梯")
     if "票閘" in value or "閘門" in value:
@@ -4018,7 +4069,7 @@ def normalize_electromechanical_system_line(line: str) -> str:
     value = re.sub(r"[、,\s]+", "、", value).strip("、 ，,")
     if not value:
         value = "未明確載明機電系統"
-    return f"{prefix}{value}"
+    return value
 
 
 def _short_formal_sentence(text: str, limit: int = 100) -> str:
@@ -4176,6 +4227,67 @@ def _dedupe_source_mentions_in_paragraph(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _looks_like_english_title(title: str) -> bool:
+    compact = re.sub(r"[\s\W_]+", "", title or "")
+    if not compact:
+        return False
+    ascii_chars = sum(1 for char in compact if ord(char) < 128)
+    cjk_chars = len(re.findall(r"[\u3400-\u9fff]", compact))
+    return ascii_chars >= 8 and ascii_chars > cjk_chars * 2
+
+
+def chinese_fallback_title(category: str, title: str) -> str:
+    lower = (title or "").casefold()
+    if "automated work zone speed enforcement" in lower:
+        return "MTA 推動工區自動速限執法計畫"
+    if "r211" in lower and "d line" in lower:
+        return "MTA R211A 新型列車導入紐約地鐵 D 線"
+    if "driverless train" in lower and "western sydney airport" in lower:
+        return "雪梨西部機場捷運線首列無人駕駛列車抵達"
+    if "cbtc" in lower:
+        return "CBTC 列車控制系統更新案"
+    if "signalling" in lower or "signaling" in lower:
+        return "捷運號誌系統更新案"
+    if "platform screen door" in lower:
+        return "月臺門系統更新案"
+    if "afc" in lower or "ticketing" in lower or "fare" in lower:
+        return "AFC 票務系統更新案"
+    if "power" in lower or "substation" in lower or "traction" in lower:
+        return "捷運供電系統更新案"
+    if "cyber" in lower or "security" in lower:
+        return "捷運資安防護更新案"
+    if "driverless" in lower or "automated train" in lower:
+        return "無人駕駛捷運列車導入案"
+    if "train" in lower or "fleet" in lower:
+        return "捷運列車更新案"
+    if "metro" in lower or "subway" in lower or "light rail" in lower or "tram" in lower:
+        if category == "重大事故":
+            return "都市軌道重大事故事件"
+        if category == "營運政策":
+            return "都市軌道營運政策更新"
+        if category == "營運爭議":
+            return "都市軌道營運爭議事件"
+        return "都市軌道系統更新案"
+    return {
+        "技術新知": "國際捷運技術更新案",
+        "重大事故": "國際捷運重大事故事件",
+        "營運政策": "國際捷運營運政策更新",
+        "營運爭議": "國際捷運營運爭議事件",
+        "規範更新": "國際捷運規範更新案",
+    }.get(category, "國際捷運案例")
+
+
+def normalize_report_title_line(line: str) -> str:
+    match = re.match(r"^\s*🔹\s*\[([^\]]+)\]\s*(.+?)\s*$", line or "")
+    if not match:
+        return line
+    category = match.group(1).strip()
+    title = match.group(2).strip()
+    if _looks_like_english_title(title):
+        title = chinese_fallback_title(category, title)
+    return f"🔹 [{category}] {title}"
+
+
 def normalize_final_report_md(md: str) -> str:
     text = md or ""
     text = re.sub(r"(?m)^\s*[-*]\s*\*\*(發布/事件日期|國家/地區|相關機電系統|事件摘要|臺北捷運局啟示|資料來源)\*\*\s*[：:]", r"• \1：", text)
@@ -4199,11 +4311,12 @@ def normalize_final_report_md(md: str) -> str:
 
         field = _match_report_field_line(raw_line)
         if not field:
-            output.append(raw_line)
+            output.append(normalize_report_title_line(raw_line) if stripped.startswith("🔹") else raw_line)
             idx += 1
             continue
 
         label, value = field
+        context_window = "\n".join(lines[max(0, idx - 8): min(len(lines), idx + 10)])
         idx += 1
         collected = [value]
         while idx < len(lines):
@@ -4220,16 +4333,20 @@ def normalize_final_report_md(md: str) -> str:
         if label == "事件摘要":
             field_text = _dedupe_source_mentions_in_paragraph(field_text)
             if field_text:
-                output.append(f"• 事件摘要：{field_text}")
+                output.extend(["• 事件摘要：", field_text, ""])
         elif label == "臺北捷運局啟示":
             insight = _short_formal_sentence(field_text, 100)
             if insight:
-                output.append(f"• 臺北捷運局啟示：{insight}")
+                output.extend(["• 臺北捷運局啟示：", insight, ""])
         elif label == "資料來源":
-            output.append(normalize_source_line(f"• 資料來源：{field_text}"))
+            output.extend([normalize_source_line(f"• 資料來源：{field_text}"), ""])
+        elif label == "相關機電系統":
+            system_value = normalize_electromechanical_system_value(field_text, context_window)
+            if system_value:
+                output.extend([f"• 相關機電系統：{system_value}", ""])
         else:
             if field_text:
-                output.append(f"• {label}：{field_text}")
+                output.extend([f"• {label}：{field_text}", ""])
 
     text = "\n".join(output)
     text = normalize_report_source_lines(text)
