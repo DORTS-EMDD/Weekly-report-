@@ -2,7 +2,7 @@ name: 每週捷運技術週報自動寄送
 
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '37 0 * * *'
   workflow_dispatch:
     inputs:
       news_lookback_days:
