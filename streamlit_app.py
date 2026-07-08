@@ -74,7 +74,7 @@ st.markdown("""
     --gold: #c9972b;
   }
 
-  .block-container { padding-top: 0.5rem; }
+  .block-container { padding-top: 1.3rem; }
   [data-testid="stSidebar"] { background-color: #0f2d4a; }
   [data-testid="stSidebar"], [data-testid="stSidebar"] label,
   [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
@@ -228,7 +228,7 @@ st.markdown("""
     font-family: Inter, "Noto Sans TC", "Microsoft JhengHei", Arial, sans-serif;
     color: #111827;
   }
-  .block-container { max-width: 1180px; padding-top: 1.2rem; }
+  .block-container { max-width: 1180px; padding-top: 1.8rem; }
   [data-testid="stSidebar"] {
     background: #f8fafc !important;
     border-right: 1px solid #e5e7eb !important;
@@ -236,11 +236,11 @@ st.markdown("""
 
 /* 左側 sidebar 整體內容往上拉 */
 [data-testid="stSidebar"] > div:first-child {
-    padding-top: 0rem !important;
+    padding-top: 0.3rem !important;
 }
 
 [data-testid="stSidebar"] > div:first-child > div:first-child {
-    padding-top: 0rem !important;
+    padding-top: 0.3rem !important;
 }
   [data-testid="stSidebar"], [data-testid="stSidebar"] label,
   [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
