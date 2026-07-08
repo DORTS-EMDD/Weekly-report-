@@ -1276,6 +1276,22 @@ def _is_known_bad_official_rss(source_name: str, url: str) -> bool:
     return any(label.casefold() in source_lower for label in KNOWN_BAD_OFFICIAL_RSS_LABELS)
 
 
+def clean_source_name_for_ui(source_name: str) -> str:
+    """只清理前台顯示名稱；debug 仍保留原始 source_name/method。"""
+    cleaned = str(source_name or "")
+    cleaned = re.sub(r"[（(]\s*fallback\s*Google\s*News\s*[）)]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"（\s*Google\s*News\s*代理\s*）", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\(\s*Google\s*News\s*proxy\s*\)", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"由\s*Google\s*News\s*代理", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"Google\s*News\s*地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"Google\s*News\s*代理", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bfallback\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"（\s*）|\(\s*\)", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" －-_/|：:")
+    return cleaned or str(source_name or "").strip()
+
+
 def _conditional_news_sources(fast_mode: bool) -> tuple[list[tuple[str, str]], list[dict]]:
     sources: list[tuple[str, str]] = []
     skipped: list[dict] = []
@@ -2027,7 +2043,7 @@ def fetch_rss_feeds(
 
     for idx, (source_name, url) in enumerate(sources, 1):
         if status_text:
-            status_text.text(f"📡 RSS {idx}/{len(sources)}：{source_name}...")
+            status_text.text(f"📡 RSS {idx}/{len(sources)}：{clean_source_name_for_ui(source_name)}...")
 
         method = _method_for_url(url)
         if _is_known_bad_official_rss(source_name, url):
@@ -2450,10 +2466,7 @@ def source_label_for_report(source: str, url: str, source_href: str = "", tier: 
         if host and _host_matches(host, domain):
             return label
 
-    source_clean = re.sub(r"（.*?Google News.*?）", "", source or "", flags=re.IGNORECASE)
-    source_clean = re.sub(r"\(.*?Google News.*?\)", "", source_clean, flags=re.IGNORECASE)
-    source_clean = re.sub(r"Google News.*?代理|地區代理|fallback", "", source_clean, flags=re.IGNORECASE)
-    source_clean = re.sub(r"\s+", " ", source_clean).strip(" －-_/|")
+    source_clean = clean_source_name_for_ui(source)
 
     if source_clean and source_clean not in {"RSS", "ddgs", "Google News"}:
         if tier == "A_official" and "官方" not in source_clean:
@@ -2462,7 +2475,7 @@ def source_label_for_report(source: str, url: str, source_href: str = "", tier: 
     if host and host != "news.google.com":
         return host
     if "news.google.com" in _domain_from_url(url):
-        return "Google News 代理來源，原始來源未明確辨識"
+        return "資料來源未明確辨識"
     return "資料來源未明確辨識"
 
 
@@ -3896,7 +3909,7 @@ def markdown_fragment_to_html(md: str) -> str:
 def short_url_label(url: str) -> str:
     host = _domain_from_url(url) or "來源"
     if "news.google.com" in host:
-        return "來源連結（Google News）"
+        return "來源連結"
     return f"來源連結（{host}）"
 
 
@@ -4177,6 +4190,13 @@ def clean_internal_report_language(text: str) -> str:
     cleaned = re.sub(r"(?im)^.*(?:模型：MaiAgent\s*雲端\s*API|來源健康|prompt\s*字數|MaiAgent\s*呼叫|本次送入模型|developer\s*debug|python_score|入選原因|初步分類).*$", "", cleaned)
     cleaned = re.sub(r"(?i)\braw data\b", "原始資料", cleaned)
     cleaned = re.sub(r"(?i)\bcandidates?\b", "資料", cleaned)
+    cleaned = re.sub(r"來源連結[（(]\s*Google\s*News\s*[）)]", "來源連結", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[（(]\s*Google\s*News\s*proxy\s*[）)]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"由\s*Google\s*News\s*代理", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"Google\s*News\s*地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"Google\s*News\s*代理", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bfallback\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"資料來源未提供完整 URL（[^）]*）", "資料來源未提供完整 URL", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
@@ -5211,7 +5231,7 @@ if generate_btn:
                 return_skipped=True,
             )
             status_text.text(
-                f"🔎 蒐集國際新聞來源……（RSS / Google News 代理共 {len(combined_sources)} 個來源）"
+                f"🔎 蒐集國際新聞來源……（共 {len(combined_sources)} 個來源）"
             )
             stage_start = time.perf_counter()
             rss_results, fetched_source_statuses = fetch_rss_feeds(
