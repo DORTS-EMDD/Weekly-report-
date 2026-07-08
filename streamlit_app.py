@@ -908,13 +908,6 @@ with st.sidebar:
     if not selected_types:
         st.warning("⚠️ 請至少選擇一種新聞類型。")
 
-    include_research_supplement = st.checkbox(
-        "納入近 90 天國際學術期刊補充",
-        value=False,
-        key="include_research_supplement",
-        help="手動啟用後固定查近 90 天；只在正式報告最後新增「技術研究補充」，不計入新聞統計。",
-    )
-
     standards_enabled = "規範更新" in selected_types
     standard_count = sum(len(v) for v in STANDARDS_WATCHLIST.values())
 
@@ -985,6 +978,12 @@ with st.sidebar:
             "啟用長期趨勢 / 規範追蹤模式",
             key="long_term_mode",
             help="啟用後，報告期間可選 90、180、365 天。",
+        )
+        include_research_supplement = st.checkbox(
+            "納入近 90 天國際學術期刊補充",
+            value=False,
+            key="include_research_supplement",
+            help="手動啟用後固定查近 90 天；只在正式報告最後新增「技術研究補充」，不計入新聞統計。",
         )
 
         st.markdown("**排程說明**")
