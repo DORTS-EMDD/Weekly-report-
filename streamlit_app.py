@@ -233,6 +233,15 @@ st.markdown("""
     background: #f8fafc !important;
     border-right: 1px solid #e5e7eb !important;
   }
+
+/* 左側 sidebar 整體內容往上拉 */
+[data-testid="stSidebar"] > div:first-child {
+    padding-top: 0.3rem !important;
+}
+
+[data-testid="stSidebar"] > div:first-child > div:first-child {
+    padding-top: 0.3rem !important;
+}
   [data-testid="stSidebar"], [data-testid="stSidebar"] label,
   [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
   [data-testid="stSidebar"] div, [data-testid="stSidebar"] .stMarkdown {
