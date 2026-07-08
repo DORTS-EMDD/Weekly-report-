@@ -406,6 +406,8 @@ st.session_state["_app_source_hash"] = current_app_hash
 
 # ── 日期與常數 ──────────────────────────────────────────────
 today = datetime.date.today()
+APP_DIR = Path(__file__).resolve().parent
+REPORTS_DIR = APP_DIR / "reports"
 
 ADVANCED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議", "規範更新"]
 DEFAULT_SELECTED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議"]
@@ -426,6 +428,7 @@ EMPTY_TEXT_BY_TYPE = {
 MIN_REPORT_ITEMS = 15
 MAX_ITEMS_PER_SOURCE = 25
 DDGS_MAX_RESULTS = 25
+RESEARCH_SUPPLEMENT_LOOKBACK_DAYS = 90
 NORMAL_LOOKBACK_OPTIONS = [7, 14, 30]
 ADVANCED_LOOKBACK_OPTIONS = [90, 180, 365]
 REPORT_TARGET_BY_DAYS = {
@@ -496,6 +499,14 @@ STANDARD_UPDATE_TERMS = [
 
 BLOCKED_DOMAINS = {
     ".cn", ".ru", ".kp", ".by", ".ir",
+}
+
+LOW_VALUE_EXCLUDED_HOSTS = {
+    "buseta.wmata.com",
+    "estore.mtr.com.hk",
+    "portal.mtr.com.hk",
+    "link.mtrmb.mtr.com.hk",
+    "art.tfl.gov.uk",
 }
 
 ALLOWED_NEWS_DOMAINS: set[str] = set()
@@ -619,7 +630,7 @@ SELECTION_MAX_ITEMS = 20
 CANDIDATE_SNIPPET_CHARS = 140
 REPORT_SNIPPET_CHARS = 420
 JOURNAL_MAX_RESULTS_PER_QUERY = 3
-JOURNAL_MAX_ITEMS = 10
+JOURNAL_MAX_ITEMS = 5
 
 SOURCE_QUALITY_A_DOMAINS = {
     "tfl.gov.uk", "mta.info", "wmata.com", "ttc.ca", "translink.ca",
@@ -705,6 +716,8 @@ LOW_QUALITY_CONTENT_TERMS = [
     "things to do", "itinerary", "visitor guide", "seo", "sponsored",
     "minor delay", "detour", "service alert", "service advisory",
     "customer notice", "take transit", "temporary stop closure",
+    "hiring", "jobs", "careers", "conference registration", "event page",
+    "product page", "mtr e-store", "列車模型", "吊牌掛飾",
     "一般旅遊", "旅遊攻略", "景點", "飯店", "酒店",
 ]
 
@@ -713,7 +726,11 @@ LOW_INFORMATION_PAGE_TERMS = [
     "portal", "入口", "首頁", "分類頁", "服務頁", "旅客資訊", "活動資訊",
     "archive page", "route page", "trip result", "journey planner", "route map",
     "route number", "RouteNumber", "trip planner", "travel information",
-    "pdf map", "jobs", "vacancy", "career",
+    "trip results", "rider tools", "service alerts", "service advisory",
+    "mtr e-store", "untitled", "pdf map", "plan-metro", "plan-de-ligne",
+    "archives", "event page", "conference registration", "product page",
+    "jobs", "hiring", "vacancy", "career", "careers",
+    "主頁", "列車模型", "吊牌掛飾",
 ]
 
 LOW_INFORMATION_PATH_MARKERS = [
@@ -721,8 +738,10 @@ LOW_INFORMATION_PATH_MARKERS = [
     "/tag/", "/tags/", "/services", "/service", "/customer", "/passenger",
     "/mobile", "/app", "/apps", "/route", "/routes", "/trip", "/trips",
     "/journey", "/journey-planner", "/trip-planner", "/travel-information",
-    "/map", "/maps", "/search", "/jobs",
-    "/careers", ".pdf",
+    "/rider-tools", "/service-alert", "/service-advisory", "/map", "/maps",
+    "/search", "/store", "/estore", "/e-store", "/shop", "/product",
+    "/event", "/events", "/registration", "/register", "/jobs", "/hiring",
+    "/careers", "plan-metro", "plan-de-ligne", ".pdf",
 ]
 
 JOURNAL_PRECISION_QUERIES = [
@@ -757,6 +776,21 @@ JOURNAL_EXCLUDE_TERMS = [
     "bus", "autonomous vehicle", "air traffic", "pure algorithm",
     "高速鐵路", "貨運鐵路", "城際鐵路", "公車", "自駕車", "航空",
 ]
+
+JOURNAL_RAIL_CONTEXT_TERMS = [
+    "railway", "rail transit", "urban rail", "urban rail transit", "metro",
+    "metro system", "subway", "mass rapid transit", "mrt", "light rail",
+    "tram", "tramway", "cbtc", "rolling stock", "railway signalling",
+    "railway signaling", "platform screen door", "traction power",
+    "都市軌道", "捷運", "地鐵", "地下鉄", "都市鉄道", "軌道",
+]
+
+JOURNAL_ALLOWED_SOURCE_DOMAINS = {
+    "mdpi.com", "nature.com", "springer.com", "link.springer.com",
+    "sciencedirect.com", "doi.org", "tandfonline.com", "ieee.org",
+    "ieeexplore.ieee.org", "elsevier.com", "frontiersin.org",
+    "ascelibrary.org", "sagepub.com", "emerald.com",
+}
 
 JOURNAL_PREFERRED_SOURCE_TERMS = [
     "mdpi", "sciencedirect", "ieee", "springer", "taylor & francis",
@@ -874,20 +908,12 @@ with st.sidebar:
     if not selected_types:
         st.warning("⚠️ 請至少選擇一種新聞類型。")
 
-    research_option_available = (
-        bool(st.session_state.get("long_term_mode"))
-        and int(lookback_days) in ADVANCED_LOOKBACK_OPTIONS
+    include_research_supplement = st.checkbox(
+        "納入近 90 天國際學術期刊補充",
+        value=False,
+        key="include_research_supplement",
+        help="手動啟用後固定查近 90 天；只在正式報告最後新增「技術研究補充」，不計入新聞統計。",
     )
-    if research_option_available:
-        include_research_supplement = st.checkbox(
-            "納入國際學術與技術研究補充",
-            value=False,
-            key="include_research_supplement",
-            help="僅適用 90、180、365 天長期回顧；只在正式報告最後新增「六、技術研究補充」，不計入新聞統計。",
-        )
-    else:
-        st.session_state["include_research_supplement"] = False
-        include_research_supplement = False
 
     standards_enabled = "規範更新" in selected_types
     standard_count = sum(len(v) for v in STANDARDS_WATCHLIST.values())
@@ -982,6 +1008,16 @@ with st.sidebar:
             help="減少搜尋來源與候選卡數量，加快展示產出；正式測試可關閉。",
         )
 
+        st.markdown("**展覽快速版**")
+        demo_cache_mode = st.checkbox(
+            "展覽快速版（10 秒內顯示預產報告）",
+            value=True,
+            key="demo_cache_mode",
+            help="啟用後按下產生報告會直接載入 repo 內預產展示報告，不即時搜尋、不呼叫 MaiAgent。",
+        )
+        if demo_cache_mode:
+            st.caption("目前會顯示預先產製展示報告，不是即時搜尋結果。")
+
     st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統")
 
 week_start = today - datetime.timedelta(days=int(lookback_days))
@@ -989,13 +1025,9 @@ date_range = f"{week_start.strftime('%Y年%m月%d日')} 至 {today.strftime('%Y�
 lookback_int = int(lookback_days)
 include_research_supplement = bool(
     include_research_supplement
-    and st.session_state.get("long_term_mode")
-    and lookback_int in ADVANCED_LOOKBACK_OPTIONS
 )
-if not include_research_supplement:
-    if not research_option_available:
-        st.session_state["include_research_supplement"] = False
 fast_mode_enabled = bool(st.session_state.get("fast_mode", True))
+demo_cache_mode_enabled = bool(st.session_state.get("demo_cache_mode", True))
 report_period_label = REPORT_PERIOD_LABELS.get(lookback_int, "週報")
 target_is_enforced = lookback_int in REPORT_TARGET_BY_DAYS
 min_report_items = REPORT_TARGET_BY_DAYS.get(lookback_int, 0)
@@ -1048,7 +1080,13 @@ def build_current_run_config() -> dict:
         "report_scope_label": report_scope_label,
         "include_standards": standards_enabled,
         "include_research_supplement": include_research_supplement,
+        "research_supplement_period": {
+            "lookback_days": RESEARCH_SUPPLEMENT_LOOKBACK_DAYS,
+            "start_date": (today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)).isoformat(),
+            "end_date": today.isoformat(),
+        },
         "fast_mode": fast_mode_enabled,
+        "demo_cache_mode": demo_cache_mode_enabled,
     }
 
 
@@ -1186,6 +1224,98 @@ RSS_SOURCES = [
      google_news_site_proxy_url("tokyometro.jp", int(lookback_days), '(東京メトロ OR 地下鉄 OR 安全 OR 車両)', "ja", "JP", "ja")),
 ]
 
+KNOWN_BAD_OFFICIAL_RSS_HOSTS = {
+    "railwaygazette.com",
+    "railjournal.com",
+    "globalrailwayreview.com",
+    "intelligenttransport.com",
+    "masstransitmag.com",
+    "trafficnews.jp",
+}
+
+KNOWN_BAD_OFFICIAL_RSS_LABELS = [
+    "Railway Gazette International",
+    "International Railway Journal",
+    "Global Railway Review",
+    "Intelligent Transport",
+    "Mass Transit Magazine",
+    "乗りものニュース",
+]
+
+
+def _source_skip_record(
+    source_name: str,
+    url: str,
+    status: str,
+    reason: str,
+    item_count: int = 0,
+) -> dict:
+    host = urlparse(url or "").netloc.lower().removeprefix("www.")
+    return {
+        "source_name": source_name,
+        "method": "Google News 代理" if "news.google.com" in host else "官方 RSS",
+        "status": status,
+        "item_count": item_count,
+        "error_message": reason,
+        "fallback_used": False,
+    }
+
+
+def _source_identity(source: tuple[str, str]) -> tuple[str, str]:
+    source_name, url = source
+    return source_name.casefold(), url.casefold()
+
+
+def _is_known_bad_official_rss(source_name: str, url: str) -> bool:
+    parsed = urlparse(url or "")
+    host = parsed.netloc.lower().removeprefix("www.")
+    if "news.google.com" in host:
+        return False
+    if host in KNOWN_BAD_OFFICIAL_RSS_HOSTS:
+        return True
+    source_lower = (source_name or "").casefold()
+    return any(label.casefold() in source_lower for label in KNOWN_BAD_OFFICIAL_RSS_LABELS)
+
+
+def _conditional_news_sources(fast_mode: bool) -> tuple[list[tuple[str, str]], list[dict]]:
+    sources: list[tuple[str, str]] = []
+    skipped: list[dict] = []
+    days = int(lookback_days)
+    apta_source = (
+        "APTA rail transit（Google News代理）",
+        google_news_site_proxy_url("apta.com", days, TRANSIT_NEWS_TERMS),
+    )
+    smartcitiesworld_source = (
+        "SmartCitiesWorld rail transit（Google News代理）",
+        google_news_site_proxy_url(
+            "smartcitiesworld.net",
+            days,
+            '("urban rail" OR metro OR subway OR "light rail" OR tram OR MRT OR "rail transit") -bus -parking -road -MaaS',
+        ),
+    )
+
+    if lookback_int in ADVANCED_LOOKBACK_OPTIONS or standards_enabled:
+        sources.append(apta_source)
+    else:
+        skipped.append(_source_skip_record(
+            apta_source[0],
+            apta_source[1],
+            "long_term_only_source",
+            "APTA 僅於長期報告或規範更新啟用",
+        ))
+
+    if fast_mode:
+        skipped.append(_source_skip_record(
+            smartcitiesworld_source[0],
+            smartcitiesworld_source[1],
+            "low_priority_source",
+            "SmartCitiesWorld 低頻來源，快速模式跳過",
+        ))
+    else:
+        sources.append(smartcitiesworld_source)
+
+    return sources, skipped
+
 # ═══════════════════════════════════════════════════════
 #  依勾選國家動態產生的 Google News 地區代理來源
 # ═══════════════════════════════════════════════════════
@@ -1300,9 +1430,44 @@ def build_run_news_sources(
     region_sources: list[tuple[str, str]],
     standards_sources: list[tuple[str, str]],
     fast_mode: bool,
-) -> list[tuple[str, str]]:
-    base_sources = select_fast_rss_sources(RSS_SOURCES) if fast_mode else RSS_SOURCES
-    return base_sources + region_sources + standards_sources
+    return_skipped: bool = False,
+) -> list[tuple[str, str]] | tuple[list[tuple[str, str]], list[dict]]:
+    skipped_statuses: list[dict] = []
+    usable_sources: list[tuple[str, str]] = []
+    for source_name, url in RSS_SOURCES:
+        if _is_known_bad_official_rss(source_name, url):
+            skipped_statuses.append(_source_skip_record(
+                source_name,
+                url,
+                "skipped_known_bad",
+                "已知官方 RSS 長期失效，保留代理或未來自訂 RSS 可能性",
+            ))
+            continue
+        usable_sources.append((source_name, url))
+
+    conditional_sources, conditional_skips = _conditional_news_sources(fast_mode)
+    usable_sources.extend(conditional_sources)
+    skipped_statuses.extend(conditional_skips)
+
+    if fast_mode:
+        selected_base = select_fast_rss_sources(usable_sources)
+        selected_keys = {_source_identity(source) for source in selected_base}
+        for source_name, url in usable_sources:
+            if _source_identity((source_name, url)) not in selected_keys:
+                skipped_statuses.append(_source_skip_record(
+                    source_name,
+                    url,
+                    "skipped_fast_mode",
+                    "快速模式跳過低優先來源",
+                ))
+        base_sources = selected_base
+    else:
+        base_sources = usable_sources
+
+    combined = base_sources + region_sources + standards_sources
+    if return_skipped:
+        return combined, skipped_statuses
+    return combined
 
 
 def render_main_dashboard(source_count: int, standards_count: int):
@@ -1325,6 +1490,8 @@ def render_main_dashboard(source_count: int, standards_count: int):
 
     st.markdown('<div class="section-title">報告產出</div>', unsafe_allow_html=True)
     generate_clicked = st.button(f"🚀 產生國際捷運 AI {report_period_label}", type="primary", use_container_width=True)
+    if demo_cache_mode_enabled:
+        st.info("展覽快速版已啟用：按下產生報告會顯示預先產製展示報告，不是即時搜尋結果。")
     send_after_generate = st.checkbox(
         "產生後寄送 Email",
         value=False,
@@ -1656,6 +1823,13 @@ def _is_valid_news_url(url: str, source_href: str = "") -> tuple[bool, str]:
 
     safety_url = source_href or url
     host = _domain_from_url(safety_url)
+    url_host = _domain_from_url(url)
+    if any(
+        candidate_host and _host_matches(candidate_host, domain)
+        for candidate_host in (host, url_host)
+        for domain in LOW_VALUE_EXCLUDED_HOSTS
+    ):
+        return False, "低價值來源或子網域"
     if _is_blocked_host(host):
         return False, "被安全規則排除"
     if _is_domestic_taiwan_host(host):
@@ -1857,6 +2031,16 @@ def fetch_rss_feeds(
             status_text.text(f"📡 RSS {idx}/{len(sources)}：{source_name}...")
 
         method = _method_for_url(url)
+        if _is_known_bad_official_rss(source_name, url):
+            source_statuses.append(_status_record(
+                source_name,
+                method,
+                "skipped_known_bad",
+                0,
+                "已知官方 RSS 長期失效，保留代理或未來自訂 RSS 可能性",
+            ))
+            all_blocks.append(f"【RSS來源：{source_name}】（skipped_known_bad）")
+            continue
         valid_source, source_reason = _is_valid_news_url(url)
         if not valid_source and source_reason in ("被安全規則排除", "範圍排除"):
             source_statuses.append(_status_record(source_name, method, source_reason, 0, source_reason))
@@ -2242,6 +2426,8 @@ def classify_source_tier(source: str, url: str, source_href: str = "") -> tuple[
     text = f"{source} {url} {source_href}".casefold()
     path_lower = urlparse(url or "").path.casefold()
 
+    if host and any(_host_matches(host, domain) for domain in LOW_VALUE_EXCLUDED_HOSTS):
+        return "D_proxy_low_value", "低價值來源或子網域"
     if any(marker in path_lower for marker in LOW_INFORMATION_PATH_MARKERS):
         return "D_proxy_low_value", "入口頁、查詢頁、路線頁、PDF 或低資訊頁"
     if any(term.casefold() in text for term in LOW_INFORMATION_PAGE_TERMS):
@@ -3263,13 +3449,13 @@ def _has_explicit_full_date(date_text: str) -> bool:
 
 
 def _journal_priority(date_text: str) -> tuple[int, str]:
-    cutoff_date = today - datetime.timedelta(days=max(1, min(lookback_int, 365)))
+    cutoff_date = today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)
     date_obj = _candidate_date_obj(date_text)
     has_full_date = _has_explicit_full_date(date_text)
     if has_full_date and date_obj and cutoff_date <= date_obj <= today + datetime.timedelta(days=1):
-        return 0, "明確日期且符合報告期間"
+        return 0, "明確日期且符合近 90 天研究補充期間"
     if has_full_date and date_obj:
-        return 99, "明確日期不在報告期間"
+        return 99, "明確日期不在近 90 天研究補充期間"
     if date_obj and date_obj.year >= cutoff_date.year:
         return 1, "僅年份或日期不完整，降低優先度"
     return 2, "無明確發表日期，降低優先度"
@@ -3292,7 +3478,7 @@ def _research_date_info(result: dict, title: str, snippet: str) -> dict:
         value = result.get(key) or result.get(key.replace("_", ""))
         date_obj = _parse_full_research_date(str(value or ""))
         if date_obj:
-            cutoff_date = today - datetime.timedelta(days=max(1, min(lookback_int, 365)))
+            cutoff_date = today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)
             return {
                 "published_date": date_obj.isoformat(),
                 "date_confidence": "high",
@@ -3311,7 +3497,7 @@ def _research_date_info(result: dict, title: str, snippet: str) -> dict:
             continue
         date_obj = _parse_full_research_date(match.group(1))
         if date_obj:
-            cutoff_date = today - datetime.timedelta(days=max(1, min(lookback_int, 365)))
+            cutoff_date = today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)
             return {
                 "published_date": date_obj.isoformat(),
                 "date_confidence": "high",
@@ -3328,17 +3514,41 @@ def _research_date_info(result: dict, title: str, snippet: str) -> dict:
     }
 
 
-def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]]:
-    if not include_research_supplement or lookback_int not in ADVANCED_LOOKBACK_OPTIONS:
-        return [], []
+def _has_doi_text(text: str) -> bool:
+    return re.search(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", text or "", flags=re.IGNORECASE) is not None
+
+
+def _is_formal_journal_url_or_doi(url: str, text: str) -> bool:
+    host = _domain_from_url(url)
+    if _has_doi_text(f"{url} {text}"):
+        return True
+    if host and any(_host_matches(host, domain) for domain in JOURNAL_ALLOWED_SOURCE_DOMAINS):
+        return True
+    return False
+
+
+def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict], list[dict]]:
+    if not include_research_supplement:
+        return [], [], []
     if DDGS is None:
-        return [], [{"query": "國際學術與技術研究", "status": "ddgs 套件未安裝", "count": 0}]
+        return [], [{"query": "國際學術期刊補充", "status": "ddgs 套件未安裝", "count": 0}], []
 
     queries = JOURNAL_PRECISION_QUERIES + JOURNAL_EXPLORATORY_QUERIES
     candidates: list[dict] = []
     statuses: list[dict] = []
+    excluded: list[dict] = []
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
+
+    def _exclude(query: str, title: str, url: str, reason: str, snippet: str = "") -> None:
+        if len(excluded) < 80:
+            excluded.append({
+                "query": query,
+                "title": title,
+                "url": url,
+                "snippet": _shorten(snippet, 180),
+                "exclude_reason": reason,
+            })
 
     for idx, query in enumerate(queries, 1):
         if len(candidates) >= JOURNAL_MAX_ITEMS:
@@ -3362,19 +3572,29 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
                 continue
             text = f"{title} {snippet} {url}"
             if any(term.casefold() in text.casefold() for term in JOURNAL_EXCLUDE_TERMS):
+                _exclude(query, title, url, "非都市軌道研究場景或排除運具", snippet)
+                continue
+            if not _contains_any_term(text, JOURNAL_RAIL_CONTEXT_TERMS):
+                _exclude(query, title, url, "缺少 railway/metro/urban rail 等明確場景", snippet)
+                continue
+            if not _is_formal_journal_url_or_doi(url, text):
+                _exclude(query, title, url, "缺少 DOI 或正式期刊 URL", snippet)
                 continue
             if not _is_urban_rail_candidate(text) and not _contains_any_term(text, ["metro system", "urban rail transit", "rail transit"]):
+                _exclude(query, title, url, "都市軌道關聯不足", snippet)
                 continue
             title_key = _normalize_title(title)
             url_key = _dedupe_url(url)
             if title_key in seen_titles or url_key in seen_urls:
+                _exclude(query, title, url, "重複研究候選", snippet)
                 continue
-            seen_titles.add(title_key)
-            seen_urls.add(url_key)
             source = _domain_from_url(url) or "研究資料庫"
             date_info = _research_date_info(result, title, snippet)
             if date_info["date_confidence"] != "high" or not date_info["is_within_research_period"]:
+                _exclude(query, title, url, date_info["date_reason"], snippet)
                 continue
+            seen_titles.add(title_key)
+            seen_urls.add(url_key)
             preferred_source = any(term.casefold() in text.casefold() for term in JOURNAL_PREFERRED_SOURCE_TERMS)
             candidate = _make_news_candidate(
                 title=title,
@@ -3403,7 +3623,7 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
         statuses.append({"query": query, "status": "成功" if accepted else "無符合研究", "count": accepted})
 
     candidates = sorted(candidates, key=lambda item: (item.get("journal_priority", 2), item.get("title", "")))
-    return candidates[:JOURNAL_MAX_ITEMS], statuses
+    return candidates[:JOURNAL_MAX_ITEMS], statuses, excluded
 
 
 def build_report_prompt(selected_candidates: list[dict], journal_candidates: list[dict], search_count: int) -> str:
@@ -3423,7 +3643,9 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
     if include_research_supplement:
         journal_section_rule = """
 - 啟用研究補充：是。
-- 研究補充期間：只允許本次資料涵蓋期間內且 date_confidence=high、is_within_research_period=True 的研究。
+- 研究補充期間：固定近 90 天，且只允許 date_confidence=high、is_within_research_period=True 的研究。
+- 技術研究補充最多列 3 至 5 篇，不納入新聞統計，也不得混入技術新知、重大事故、營運政策、營運爭議或規範更新章節。
+- 研究候選必須與捷運、都市軌道、軌道機電、智慧維運、數位分身、預測性維護、號誌、車輛、供電、AFC 或客流分析明確相關。
 - 若下方沒有研究候選，第六章請固定寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
 """
         if journal_candidates:
@@ -3955,6 +4177,7 @@ def clean_internal_report_language(text: str) -> str:
     cleaned = re.sub(r"初篩資料(?:指出|顯示|記載|提及)?", "資料", cleaned)
     cleaned = re.sub(r"(?im)^.*(?:模型：MaiAgent\s*雲端\s*API|來源健康|prompt\s*字數|MaiAgent\s*呼叫|本次送入模型|developer\s*debug|python_score|入選原因|初步分類).*$", "", cleaned)
     cleaned = re.sub(r"(?i)\braw data\b", "原始資料", cleaned)
+    cleaned = re.sub(r"(?i)\bcandidates?\b", "資料", cleaned)
     cleaned = re.sub(r"資料來源未提供完整 URL（[^）]*）", "資料來源未提供完整 URL", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
@@ -4314,7 +4537,7 @@ def sanitize_report_text(text: str) -> str:
     text = clean_internal_report_language(text)
     text = simplify_formal_report_format(text)
     if not include_research_supplement:
-        text = re.sub(r"(?ms)^#{0,3}\s*六、技術研究補充.*?(?=^📊|^⏰|\Z)", "", text)
+        text = re.sub(r"(?ms)^#{0,3}\s*(?:六、)?技術研究補充.*?(?=^📊|^⏰|\Z)", "", text)
         text = re.sub(r"(?m)^.*技術研究補充.*$", "", text)
     text = strip_unselected_types_from_title(text)
     text = strip_unselected_report_sections(text)
@@ -4653,8 +4876,100 @@ def _soft_wrap_long_tokens(text: str, chunk: int = 45) -> str:
 def try_markdown_to_pdf_bytes(md: str) -> bytes | None:
     try:
         return markdown_to_pdf_bytes(md)
-    except ModuleNotFoundError:
+    except Exception:
         return None
+
+
+def _read_demo_debug_payload(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _builtin_demo_report_text() -> str:
+    sections: list[str] = [
+        f"# {report_title}",
+        f"> 資料涵蓋期間：{date_range}",
+        f"> 報導範圍：{report_scope_label}",
+        "",
+        "一、技術新知",
+        "",
+        "🔹 [技術新知] 展示用捷運機電監測案例",
+        "",
+        "• 發布/事件日期：日期未知",
+        "",
+        "• 國家/地區：展示資料",
+        "",
+        "• 相關機電系統：號誌、通訊、車輛、供電與維修監測",
+        "",
+        "• 事件摘要：",
+        "本段為展覽快速版內建展示文字，用於現場快速呈現週報格式、PDF 下載與 Email 寄送流程。內容不代表即時搜尋結果，也未連線查詢新聞來源或呼叫 AI 服務。",
+        "",
+        "• 臺北捷運局啟示：",
+        "展示模式可先確認輸出流程與畫面穩定性，正式測試時請取消展覽快速版。",
+        "",
+        "• 資料來源：展覽快速版預產展示資料，日期未知，未提供完整 URL",
+        "",
+        "________________________________________",
+    ]
+    if "規範更新" in selected_types:
+        sections.extend([
+            "",
+            "五、規範更新",
+            "本期未發現符合條件資料。",
+        ])
+    if include_research_supplement:
+        sections.extend([
+            "",
+            "六、技術研究補充",
+            "本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。",
+        ])
+    sections.extend([
+        "",
+        "📊 本期統計：共 1 則（技術新知 1 則）",
+        f"⏰ 報告產出時間：{today.strftime('%Y年%m月%d日')}",
+    ])
+    return "\n".join(sections)
+
+
+def load_demo_report_cache() -> tuple[str, bytes | None, dict]:
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    demo_md_path = REPORTS_DIR / "demo_report.md"
+    demo_pdf_path = REPORTS_DIR / "demo_report.pdf"
+    demo_debug_path = REPORTS_DIR / "demo_debug.json"
+    debug_payload = _read_demo_debug_payload(demo_debug_path)
+    source = "內建展示文字"
+
+    if demo_md_path.exists():
+        report_text = demo_md_path.read_text(encoding="utf-8")
+        source = str(demo_md_path)
+    else:
+        report_text = str(debug_payload.get("final_report_md") or "").strip()
+        if report_text:
+            source = str(demo_debug_path)
+        else:
+            report_text = _builtin_demo_report_text()
+
+    report_text = sanitize_report_text(report_text)
+    report_text = enforce_research_section(report_text, [])
+    report_text = normalize_final_report_md(report_text)
+    report_text = normalize_report_statistics_line(report_text)
+
+    if demo_pdf_path.exists():
+        pdf_bytes = demo_pdf_path.read_bytes()
+    else:
+        pdf_bytes = try_markdown_to_pdf_bytes(report_text)
+
+    return report_text, pdf_bytes, {
+        "demo_source": source,
+        "demo_markdown_path": str(demo_md_path),
+        "demo_pdf_path": str(demo_pdf_path) if demo_pdf_path.exists() else "",
+        "demo_debug_path": str(demo_debug_path) if demo_debug_path.exists() else "",
+        "demo_debug_payload_found": bool(debug_payload),
+    }
 
 
 def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: str) -> bool:
@@ -4713,7 +5028,141 @@ def send_current_report_email(report_md: str, status_target=None, progress_targe
 
 
 if generate_btn:
-    if not maiagent_api_key:
+    if demo_cache_mode_enabled:
+        run_config = current_run_config.copy()
+        clear_old_report_state()
+        st.session_state["latest_run_config"] = run_config
+        st.session_state["report_generated"] = False
+        st.session_state["email_sent"] = False
+        progress_bar = progress_placeholder.progress(0.15)
+        status_text = status_placeholder
+
+        try:
+            run_start = time.perf_counter()
+            status_text.text("⚡ 展覽快速版載入預先產製展示報告……")
+            report_text, pdf_bytes, demo_meta = load_demo_report_cache()
+            progress_bar.progress(0.70)
+
+            formal_count = count_report_items(report_text)
+            category_counts = count_report_items_by_category(report_text)
+            has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
+                re.search(r"(?m)^🔹\s*\[規範更新\]", report_text)
+            )
+            elapsed_total = round(time.perf_counter() - run_start, 2)
+            source_statuses = [{
+                "source_name": "展覽快速版預產報告",
+                "method": "預產報告",
+                "status": "skipped_demo_cache_mode",
+                "item_count": 0,
+                "error_message": "展覽快速版啟用，未執行 RSS、Google News、DDGS、MaiAgent、規範查詢或學術查詢",
+                "fallback_used": False,
+            }]
+            report_stats = {
+                "raw_count": 0,
+                "deduped_count": 0,
+                "filtered_count": 0,
+                "ai_selected_count": 0,
+                "formal_count": formal_count,
+                "prompt_chars": 0,
+                "raw_chars": len(report_text),
+                "maiagent_call_count": 0,
+                "category_counts": category_counts,
+                "journal_count": 0,
+                "model_candidate_count": 0,
+                "source_count": 0,
+                "ddgs_query_count": 0,
+                "candidate_card_limit": 0,
+                "candidate_card_count": 0,
+                "elapsed_seconds_total": elapsed_total,
+                "elapsed_seconds_rss": 0.0,
+                "elapsed_seconds_ddgs": 0.0,
+                "elapsed_seconds_candidate_pool": 0.0,
+                "elapsed_seconds_selection": 0.0,
+                "elapsed_seconds_report": 0.0,
+                "elapsed_seconds_pdf": 0.0,
+                "demo_cache_mode": True,
+                "include_research_supplement": include_research_supplement,
+                "research_supplement_period": run_config.get("research_supplement_period", {}),
+                "run_config": run_config,
+            }
+            debug_info = {
+                "run_config": run_config,
+                "raw_candidates": [],
+                "deduped_candidates": [],
+                "filtered_candidates": [],
+                "excluded_candidates": [],
+                "model_candidates": [],
+                "candidate_cards": [],
+                "selected_candidates": [],
+                "selected_ids": [],
+                "enriched_selected_candidates": [],
+                "journal_candidates": [],
+                "journal_statuses": [],
+                "journal_excluded_candidates": [],
+                "selection_prompt": "",
+                "selection_response": "",
+                "report_prompt": "",
+                "report_response": "",
+                "latest_report_md": report_text,
+                "ai_unselected_stats": {},
+                "dedupe_stats": {},
+                "exclusion_stats": {},
+                "source_statuses": source_statuses,
+                "report_stats": report_stats,
+                "long_term_coverage": {"long_term_coverage_warning": False, "reason": ""},
+                "demo_meta": demo_meta,
+            }
+            st.session_state["latest_report_md"] = report_text
+            st.session_state["latest_report"] = report_text
+            st.session_state["latest_pdf"] = pdf_bytes
+            st.session_state["latest_report_summary"] = {
+                "formal_count": formal_count,
+                "has_standards": has_standard_updates,
+                "category_counts": category_counts,
+            }
+            st.session_state["latest_report_stats"] = report_stats
+            st.session_state["latest_run_config"] = run_config
+            st.session_state["report_generated"] = True
+            st.session_state["latest_debug_info"] = debug_info
+            st.session_state["latest_source_statuses"] = source_statuses
+            st.session_state["latest_debug_payload"] = {
+                "run_info": {
+                    "demo_cache_mode": True,
+                    "include_research_supplement": include_research_supplement,
+                    "research_supplement_period": run_config.get("research_supplement_period", {}),
+                },
+                "stats": report_stats,
+                "source_health": source_statuses,
+                "final_report_md": report_text,
+            }
+
+            email_note = "未自動寄送 Email"
+            if send_after_generate:
+                email_ok = send_current_report_email(
+                    st.session_state["latest_report_md"],
+                    status_target=status_text,
+                    progress_target=progress_bar,
+                )
+                email_note = "Email 已寄送" if email_ok else "Email 未寄出，請檢查收件設定或 Secrets"
+                st.session_state["email_sent"] = bool(email_ok)
+            else:
+                progress_bar.progress(0.95)
+
+            progress_bar.progress(1.0)
+            status_text.markdown(
+                f"""
+                <div class="notice-success">
+                  <strong>✅ 展覽快速版報告已載入</strong><br>
+                  此為預先產製展示報告，不是即時搜尋結果；本次未呼叫 MaiAgent。<br>
+                  正式新聞：{formal_count} 則｜{email_note}。
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        except Exception as e:
+            progress_placeholder.empty()
+            status_text.error(f"❌ 展覽快速版載入失敗：{e}")
+    elif not maiagent_api_key:
         status_placeholder.error("❌ MaiAgent API Key 未設定，請至 Streamlit Cloud App Settings → Secrets 填入 MAIAGENT_API_KEY")
     elif not maiagent_chatbot_id:
         status_placeholder.error("❌ MaiAgent Chatbot ID 未設定，請至 Streamlit Cloud App Settings → Secrets 填入 MAIAGENT_CHATBOT_ID")
@@ -4756,14 +5205,20 @@ if generate_btn:
             # Step 1：RSS 訂閱源 + 指定模式地區代理 + 規範更新代理
             region_sources = build_region_news_sources(active_regions, int(lookback_days), fast_mode=fast_mode_enabled)
             standards_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
-            combined_sources = build_run_news_sources(region_sources, standards_sources, fast_mode_enabled)
+            combined_sources, skipped_source_statuses = build_run_news_sources(
+                region_sources,
+                standards_sources,
+                fast_mode_enabled,
+                return_skipped=True,
+            )
             status_text.text(
                 f"🔎 蒐集國際新聞來源……（RSS / Google News 代理共 {len(combined_sources)} 個來源）"
             )
             stage_start = time.perf_counter()
-            rss_results, source_statuses = fetch_rss_feeds(
+            rss_results, fetched_source_statuses = fetch_rss_feeds(
                 combined_sources, status_text=status_text, return_status=True
             )
+            source_statuses = skipped_source_statuses + fetched_source_statuses
             timings["elapsed_seconds_rss"] = round(time.perf_counter() - stage_start, 2)
             progress_bar.progress(0.25)
             st.session_state["latest_source_statuses"] = source_statuses
@@ -4802,8 +5257,9 @@ if generate_btn:
 
             journal_candidates: list[dict] = []
             journal_statuses: list[dict] = []
+            journal_excluded_candidates: list[dict] = []
             if include_research_supplement:
-                journal_candidates, journal_statuses = collect_journal_candidates(status_text)
+                journal_candidates, journal_statuses, journal_excluded_candidates = collect_journal_candidates(status_text)
             progress_bar.progress(0.76)
 
             # Step 3：MaiAgent 第二階段正式報告
@@ -4860,6 +5316,9 @@ if generate_btn:
                 "elapsed_seconds_report": timings["elapsed_seconds_report"],
                 "elapsed_seconds_pdf": timings["elapsed_seconds_pdf"],
                 "long_term_coverage": long_term_coverage,
+                "demo_cache_mode": False,
+                "include_research_supplement": include_research_supplement,
+                "research_supplement_period": run_config.get("research_supplement_period", {}),
                 "run_config": run_config,
             }
             st.session_state["latest_report_md"] = report_text
@@ -4885,6 +5344,7 @@ if generate_btn:
                 "enriched_selected_candidates": selected_candidates,
                 "journal_candidates": journal_candidates,
                 "journal_statuses": journal_statuses,
+                "journal_excluded_candidates": journal_excluded_candidates,
                 "selection_prompt": selection_prompt,
                 "selection_response": selection_response,
                 "report_prompt": report_prompt,
@@ -4968,7 +5428,7 @@ if report_to_show:
 
     st.markdown('<div class="section-title">輸出與寄送</div>', unsafe_allow_html=True)
     pdf_source_md = st.session_state.get("latest_report_md", "")
-    pdf_bytes = try_markdown_to_pdf_bytes(pdf_source_md) if pdf_source_md else None
+    pdf_bytes = st.session_state.get("latest_pdf") or (try_markdown_to_pdf_bytes(pdf_source_md) if pdf_source_md else None)
     output_cols = st.columns(2)
     out1 = output_cols[0]
     out2 = output_cols[1]
@@ -5065,7 +5525,9 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "scope_mode": run_config.get("scope_mode"),
             "include_standards": run_config.get("include_standards"),
             "include_research_supplement": run_config.get("include_research_supplement"),
+            "research_supplement_period": run_config.get("research_supplement_period", {}),
             "fast_mode": run_config.get("fast_mode", True),
+            "demo_cache_mode": run_config.get("demo_cache_mode", False),
             "app_source_hash": st.session_state.get("_app_source_hash", ""),
             "long_term_coverage_warning": long_term_coverage.get("long_term_coverage_warning", False),
             "long_term_coverage_reason": long_term_coverage.get("reason", ""),
@@ -5092,6 +5554,9 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "elapsed_seconds_selection": latest_stats.get("elapsed_seconds_selection", 0),
             "elapsed_seconds_report": latest_stats.get("elapsed_seconds_report", 0),
             "elapsed_seconds_pdf": latest_stats.get("elapsed_seconds_pdf", 0),
+            "demo_cache_mode": latest_stats.get("demo_cache_mode", run_config.get("demo_cache_mode", False)),
+            "include_research_supplement": latest_stats.get("include_research_supplement", run_config.get("include_research_supplement", False)),
+            "research_supplement_period": latest_stats.get("research_supplement_period", run_config.get("research_supplement_period", {})),
         },
         "source_health": debug_info.get("source_statuses", source_statuses) if debug_info else (source_statuses or []),
         "raw_candidates": debug_info.get("raw_candidates", []) if debug_info else [],
@@ -5107,6 +5572,7 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
         "ai_unselected_stats": debug_info.get("ai_unselected_stats", {}) if debug_info else {},
         "journal_candidates": debug_info.get("journal_candidates", []) if debug_info else [],
         "journal_statuses": debug_info.get("journal_statuses", []) if debug_info else [],
+        "journal_excluded_candidates": debug_info.get("journal_excluded_candidates", []) if debug_info else [],
         "maiagent": {
             "selection_prompt": debug_info.get("selection_prompt", "") if debug_info else "",
             "selection_response": debug_info.get("selection_response", "") if debug_info else "",
