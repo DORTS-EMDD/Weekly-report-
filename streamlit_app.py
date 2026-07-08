@@ -744,6 +744,14 @@ LOW_INFORMATION_PATH_MARKERS = [
     "/careers", "plan-metro", "plan-de-ligne", ".pdf",
 ]
 
+HARD_LOW_VALUE_CANDIDATE_TERMS = [
+    "trip results", "trip result", "service alerts", "service alert",
+    "service advisory", "rider tools", "careers", "career", "hiring",
+    "jobs", "plan-metro", "plan-de-ligne", "route page", "route map",
+    "pdf map", "mtr e-store", "product page", "conference registration",
+    "event page", "untitled",
+]
+
 JOURNAL_PRECISION_QUERIES = [
     '"urban rail transit" "predictive maintenance" "condition monitoring"',
     '"metro system" "fault diagnosis" "machine learning"',
@@ -809,6 +817,14 @@ model_choice = "MaiAgent 雲端 API"
 
 gmail_user = get_secret("GMAIL_USER")
 gmail_pass = get_secret("GMAIL_APP_PASS")
+
+if not st.session_state.get("_demo_cache_default_off_applied"):
+    st.session_state["demo_cache_mode"] = False
+    st.session_state["_demo_cache_default_off_applied"] = True
+
+if not st.session_state.get("_fast_mode_removed_applied"):
+    st.session_state["fast_mode"] = False
+    st.session_state["_fast_mode_removed_applied"] = True
 
 
 def select_all_report_types() -> None:
@@ -999,18 +1015,10 @@ with st.sidebar:
             help="啟用後只顯示 AI 校正資料 JSON 下載按鈕，供排錯使用。",
         )
 
-        st.markdown("**快速展示模式**")
-        fast_mode = st.checkbox(
-            "快速展示模式",
-            value=True,
-            key="fast_mode",
-            help="減少搜尋來源與候選卡數量，加快展示產出；正式測試可關閉。",
-        )
-
         st.markdown("**展覽快速版**")
         demo_cache_mode = st.checkbox(
             "展覽快速版（10 秒內顯示預產報告）",
-            value=True,
+            value=False,
             key="demo_cache_mode",
             help="啟用後按下產生報告會直接載入 repo 內預產展示報告，不即時搜尋、不呼叫 MaiAgent。",
         )
@@ -1025,8 +1033,8 @@ lookback_int = int(lookback_days)
 include_research_supplement = bool(
     include_research_supplement
 )
-fast_mode_enabled = bool(st.session_state.get("fast_mode", True))
-demo_cache_mode_enabled = bool(st.session_state.get("demo_cache_mode", True))
+fast_mode_enabled = False
+demo_cache_mode_enabled = bool(st.session_state.get("demo_cache_mode", False))
 report_period_label = REPORT_PERIOD_LABELS.get(lookback_int, "週報")
 target_is_enforced = lookback_int in REPORT_TARGET_BY_DAYS
 min_report_items = REPORT_TARGET_BY_DAYS.get(lookback_int, 0)
@@ -1685,6 +1693,40 @@ def _has_high_value_operational_detail(text: str) -> bool:
 
 def _is_low_value_service_notice_text(text: str) -> bool:
     return _contains_any_term(text, LOW_VALUE_POLICY_TERMS + LOW_INFORMATION_PAGE_TERMS)
+
+
+def hard_low_value_candidate_reason(candidate: dict) -> str:
+    title = candidate.get("title", "")
+    snippet = candidate.get("snippet", "")
+    source = candidate.get("source", "")
+    url = candidate.get("url", "")
+    source_href = candidate.get("source_href", "")
+    text = f"{title} {snippet} {source} {candidate.get('query', '')} {url} {source_href}"
+    text_lower = text.casefold()
+    host_candidates = [
+        _domain_from_url(source_href),
+        _domain_from_url(url),
+        candidate.get("source_domain", ""),
+    ]
+    if any(
+        host and _host_matches(host, domain)
+        for host in host_candidates
+        for domain in LOW_VALUE_EXCLUDED_HOSTS
+    ):
+        return "硬性低價值來源或子網域"
+
+    has_high_value = _has_high_value_operational_detail(text)
+    if has_high_value:
+        return ""
+
+    if any(term.casefold() in text_lower for term in HARD_LOW_VALUE_CANDIDATE_TERMS):
+        return "硬性低價值頁面"
+
+    path_text = " ".join(urlparse(value or "").path.casefold() for value in (url, source_href))
+    if any(marker in path_text for marker in LOW_INFORMATION_PATH_MARKERS):
+        return "硬性低價值路徑"
+
+    return ""
 
 
 def _wordish_count(text: str) -> int:
@@ -2797,14 +2839,22 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
 
 
 def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
-    raw_candidates = [
-        annotate_candidate_for_scheme_d(candidate)
-        for candidate in (parse_rss_candidates(raw_rss) + parse_ddg_candidates(raw_ddg))
-    ]
+    parsed_candidates = parse_rss_candidates(raw_rss) + parse_ddg_candidates(raw_ddg)
+    raw_candidates: list[dict] = []
+    hard_excluded_candidates: list[dict] = []
+    hard_exclusion_stats: dict[str, int] = {}
+    for candidate in parsed_candidates:
+        hard_reason = hard_low_value_candidate_reason(candidate)
+        if hard_reason:
+            hard_excluded_candidates.append(annotate_candidate_for_scheme_d(candidate, hard_reason))
+            hard_exclusion_stats[hard_reason] = hard_exclusion_stats.get(hard_reason, 0) + 1
+        else:
+            raw_candidates.append(annotate_candidate_for_scheme_d(candidate))
+
     deduped_candidates, dedupe_stats = dedupe_candidates(raw_candidates)
     filtered_candidates: list[dict] = []
-    excluded_candidates: list[dict] = []
-    exclusion_stats: dict[str, int] = {}
+    excluded_candidates: list[dict] = hard_excluded_candidates.copy()
+    exclusion_stats: dict[str, int] = hard_exclusion_stats.copy()
 
     for candidate in deduped_candidates:
         keep, reason = preliminary_filter_candidate(candidate)
@@ -5430,13 +5480,6 @@ st.markdown(f'<div class="section-title">正式{display_report_label}</div>', un
 report_stats = st.session_state.get("latest_report_stats", {})
 latest_report_md = st.session_state.get("latest_report_md", "")
 report_to_show = latest_report_md or st.session_state.get("latest_report", "")
-if not report_to_show:
-    try:
-        with open("reports/latest.md", "r", encoding="utf-8") as f:
-            report_to_show = f.read()
-            report_to_show = sanitize_report_text(report_to_show)
-    except FileNotFoundError:
-        pass
 if report_to_show and not latest_report_md:
     report_to_show = normalize_final_report_md(report_to_show)
     st.session_state["latest_report_md"] = report_to_show
