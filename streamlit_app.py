@@ -236,11 +236,11 @@ st.markdown("""
 
 /* 左側 sidebar 整體內容往上拉 */
 [data-testid="stSidebar"] > div:first-child {
-    padding-top: 0.3rem !important;
+    padding-top: 0 !important;
 }
 
 [data-testid="stSidebar"] > div:first-child > div:first-child {
-    padding-top: 0.3rem !important;
+    padding-top: 0 !important;
 }
   [data-testid="stSidebar"], [data-testid="stSidebar"] label,
   [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
@@ -354,22 +354,28 @@ st.markdown("""
     font-weight: 800;
     line-height: 1.35;
     color: #111827;
-    margin: .12rem 0 .08rem;
+    margin: 0 0 .04rem;
   }
   .sidebar-subtitle {
     font-size: .78rem;
     line-height: 1.45;
     color: #6b7280;
-    margin: 0 0 .55rem;
+    margin: 0 0 .38rem;
   }
   [data-testid="stSidebar"] hr {
-    margin: .28rem 0 !important;
+    margin: .18rem 0 !important;
   }
   [data-testid="stSidebar"] h3 {
-    margin: .42rem 0 .12rem !important;
+    margin: .28rem 0 .08rem !important;
   }
   [data-testid="stSidebar"] [data-testid="stExpander"] {
-    margin-bottom: .35rem !important;
+    margin-bottom: .22rem !important;
+  }
+  [data-testid="stSidebar"] .stCheckbox,
+  [data-testid="stSidebar"] .stRadio,
+  [data-testid="stSidebar"] .stSelectbox,
+  [data-testid="stSidebar"] .stTextArea {
+    margin-bottom: .18rem !important;
   }
   [data-testid="stSidebar"] .stButton button {
     min-height: 2.2rem !important;
