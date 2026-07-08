@@ -17,7 +17,7 @@ import datetime
 import smtplib
 import concurrent.futures
 from io import BytesIO
-from html import escape, unescape
+from html import escape
 from pathlib import Path
 import urllib.parse
 from urllib.parse import urlparse, urlunparse, parse_qs
@@ -440,7 +440,7 @@ EMPTY_TEXT_BY_TYPE = {
 }
 MIN_REPORT_ITEMS = 15
 MAX_ITEMS_PER_SOURCE = 25
-DDGS_MAX_RESULTS = 12
+DDGS_MAX_RESULTS = 25
 RESEARCH_SUPPLEMENT_LOOKBACK_DAYS = 90
 NORMAL_LOOKBACK_OPTIONS = [7, 14, 30]
 ADVANCED_LOOKBACK_OPTIONS = [90, 180, 365]
@@ -762,7 +762,7 @@ HARD_LOW_VALUE_CANDIDATE_TERMS = [
     "service advisory", "rider tools", "careers", "career", "hiring",
     "jobs", "plan-metro", "plan-de-ligne", "route page", "route map",
     "pdf map", "mtr e-store", "product page", "conference registration",
-    "event page", "untitled", "rider tools", "bus rapid transit", "brt",
+    "event page", "untitled",
 ]
 
 JOURNAL_PRECISION_QUERIES = [
@@ -835,6 +835,11 @@ if not st.session_state.get("_demo_cache_default_off_applied"):
     st.session_state["demo_cache_mode"] = False
     st.session_state["_demo_cache_default_off_applied"] = True
 
+if not st.session_state.get("_fast_mode_removed_applied"):
+    st.session_state["fast_mode"] = False
+    st.session_state["_fast_mode_removed_applied"] = True
+
+
 def select_all_report_types() -> None:
     st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
     for report_type in ADVANCED_TYPES:
@@ -852,7 +857,8 @@ with st.sidebar:
     st.markdown(
         """
         <div class="sidebar-title">🚇 國際捷運 AI 週報</div>
-               """,
+        <div class="sidebar-subtitle">臺北市政府捷運工程局｜機電系統設計處</div>
+        """,
         unsafe_allow_html=True,
     )
 
@@ -1006,7 +1012,7 @@ with st.sidebar:
             "納入近 90 天國際學術期刊補充",
             value=False,
             key="include_research_supplement",
-            help="學術補充固定回溯近 90 天；短週期報告可能與前次結果重複。只在正式報告最後新增「國際學術期刊」，不計入新聞統計。",
+            help="手動啟用後固定查近 90 天；只在正式報告最後新增「國際學術期刊」，不計入新聞統計。",
         )
 
         st.markdown("**排程說明**")
@@ -1040,6 +1046,7 @@ lookback_int = int(lookback_days)
 include_research_supplement = bool(
     include_research_supplement
 )
+fast_mode_enabled = False
 demo_cache_mode_enabled = bool(st.session_state.get("demo_cache_mode", False))
 report_period_label = REPORT_PERIOD_LABELS.get(lookback_int, "週報")
 target_is_enforced = lookback_int in REPORT_TARGET_BY_DAYS
@@ -1098,6 +1105,7 @@ def build_current_run_config() -> dict:
             "start_date": (today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)).isoformat(),
             "end_date": today.isoformat(),
         },
+        "fast_mode": fast_mode_enabled,
         "demo_cache_mode": demo_cache_mode_enabled,
         "app_source_hash": current_app_hash,
     }
@@ -1306,7 +1314,7 @@ def clean_source_name_for_ui(source_name: str) -> str:
     return cleaned or str(source_name or "").strip()
 
 
-def _conditional_news_sources() -> tuple[list[tuple[str, str]], list[dict]]:
+def _conditional_news_sources(fast_mode: bool) -> tuple[list[tuple[str, str]], list[dict]]:
     sources: list[tuple[str, str]] = []
     skipped: list[dict] = []
     days = int(lookback_days)
@@ -1333,7 +1341,15 @@ def _conditional_news_sources() -> tuple[list[tuple[str, str]], list[dict]]:
             "APTA 僅於長期報告或規範更新啟用",
         ))
 
-    sources.append(smartcitiesworld_source)
+    if fast_mode:
+        skipped.append(_source_skip_record(
+            smartcitiesworld_source[0],
+            smartcitiesworld_source[1],
+            "low_priority_source",
+            "SmartCitiesWorld 低頻來源，快速模式跳過",
+        ))
+    else:
+        sources.append(smartcitiesworld_source)
 
     return sources, skipped
 
@@ -1384,12 +1400,14 @@ REGION_NEWS_QUERIES: dict[str, list[tuple[str, str, str, str, str]]] = {
 }
 
 
-def build_region_news_sources(regions: list[str], days: int) -> list[tuple[str, str]]:
+def build_region_news_sources(regions: list[str], days: int, fast_mode: bool = False) -> list[tuple[str, str]]:
     """依勾選國家動態組出 Google News 地區代理 RSS 來源清單。"""
     sources: list[tuple[str, str]] = []
     days = max(1, min(int(days), 365))
     for region in regions:
         region_queries = REGION_NEWS_QUERIES.get(region, [])
+        if fast_mode:
+            region_queries = region_queries[:1]
         for label, keyword, hl, gl, lang in region_queries:
             query = f"{keyword} when:{days}d"
             url = (
@@ -1412,9 +1430,43 @@ def build_standards_news_sources(days: int) -> list[tuple[str, str]]:
     return sources
 
 
+FAST_SOURCE_KEYWORDS = (
+    "railway-news",
+    "railway gazette",
+    "urban transport magazine",
+    "mass transit magazine",
+    "metro magazine",
+    "mta",
+    "tfl",
+    "lta",
+    "mtr",
+    "tokyo metro",
+    "ttc",
+    "wmata",
+    "translink",
+)
+
+
+def select_fast_rss_sources(sources: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    selected: list[tuple[str, str]] = []
+    seen_keys: set[str] = set()
+    for source_name, url in sources:
+        haystack = f"{source_name} {url}".casefold()
+        if not any(keyword in haystack for keyword in FAST_SOURCE_KEYWORDS):
+            continue
+        netloc = urlparse(url).netloc.lower().removeprefix("www.")
+        dedupe_key = source_name.casefold() if netloc == "news.google.com" else (netloc or source_name.casefold())
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        selected.append((source_name, url))
+    return selected or sources[: min(12, len(sources))]
+
+
 def build_run_news_sources(
     region_sources: list[tuple[str, str]],
     standards_sources: list[tuple[str, str]],
+    fast_mode: bool,
     return_skipped: bool = False,
 ) -> list[tuple[str, str]] | tuple[list[tuple[str, str]], list[dict]]:
     skipped_statuses: list[dict] = []
@@ -1430,11 +1482,24 @@ def build_run_news_sources(
             continue
         usable_sources.append((source_name, url))
 
-    conditional_sources, conditional_skips = _conditional_news_sources()
+    conditional_sources, conditional_skips = _conditional_news_sources(fast_mode)
     usable_sources.extend(conditional_sources)
     skipped_statuses.extend(conditional_skips)
 
-    base_sources = usable_sources
+    if fast_mode:
+        selected_base = select_fast_rss_sources(usable_sources)
+        selected_keys = {_source_identity(source) for source in selected_base}
+        for source_name, url in usable_sources:
+            if _source_identity((source_name, url)) not in selected_keys:
+                skipped_statuses.append(_source_skip_record(
+                    source_name,
+                    url,
+                    "skipped_fast_mode",
+                    "快速模式跳過低優先來源",
+                ))
+        base_sources = selected_base
+    else:
+        base_sources = usable_sources
 
     combined = base_sources + region_sources + standards_sources
     if return_skipped:
@@ -1476,9 +1541,9 @@ def render_main_dashboard(source_count: int, standards_count: int):
     return generate_clicked, send_after_generate, progress_placeholder, status_placeholder
 
 
-initial_region_sources = build_region_news_sources(active_regions, int(lookback_days))
+initial_region_sources = build_region_news_sources(active_regions, int(lookback_days), fast_mode=fast_mode_enabled)
 initial_standard_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
-initial_combined_sources = build_run_news_sources(initial_region_sources, initial_standard_sources)
+initial_combined_sources = build_run_news_sources(initial_region_sources, initial_standard_sources, fast_mode_enabled)
 generate_btn, send_after_generate, progress_placeholder, status_placeholder = render_main_dashboard(
     source_count=len(initial_combined_sources),
     standards_count=sum(len(v) for v in STANDARDS_WATCHLIST.values()),
@@ -1629,114 +1694,6 @@ def _original_source_domain(source: str = "", url: str = "", source_href: str = 
         if domain and domain != "news.google.com":
             return domain
     return _domain_hint_from_source_label(f"{source} {query}")
-
-
-GOOGLE_NEWS_RESOLUTION_CACHE: dict[str, str] = {}
-GOOGLE_NEWS_RESOLUTION_ATTEMPTS = 0
-GOOGLE_NEWS_RESOLUTION_LIMIT = 12
-
-
-def _strip_url_control_chars(url: str) -> str:
-    return re.sub(r"[\u200b\u200c\u200d\u2060\ufeff\u00ad\x00-\x1f\x7f]", "", url or "").strip()
-
-
-def _looks_like_low_value_article_url(url: str, title: str = "") -> bool:
-    text = f"{url} {title}".casefold()
-    path = urlparse(url or "").path.casefold()
-    low_terms = LOW_INFORMATION_PAGE_TERMS + HARD_LOW_VALUE_CANDIDATE_TERMS + [
-        "service alert", "service advisory", "rider tools", "route map",
-        "pdf map", "plan-metro", "plan-de-ligne", "careers", "jobs",
-        "hiring", "product page", "event page", "conference registration",
-        "bus rapid transit", "brt",
-    ]
-    if any(term.casefold() in text for term in low_terms):
-        return True
-    if any(marker in path for marker in LOW_INFORMATION_PATH_MARKERS):
-        return True
-    if path.endswith(".pdf") and any(term in path for term in ("map", "plan", "ligne", "route", "metro")):
-        return True
-    return False
-
-
-def is_article_url(url: str, title: str = "", source_domain: str = "") -> bool:
-    url = _strip_url_control_chars(_clean_candidate_url(url))
-    if not url:
-        return False
-    parsed = urlparse(url)
-    host = parsed.netloc.lower().removeprefix("www.")
-    path = (parsed.path or "").strip()
-    if parsed.scheme not in ("http", "https") or not host:
-        return False
-    if host == "news.google.com":
-        return False
-    if any(_host_matches(host, domain) for domain in LOW_VALUE_EXCLUDED_HOSTS):
-        return False
-    if path in ("", "/"):
-        return False
-    if _looks_like_low_value_article_url(url, title):
-        return False
-
-    path_tokens = [
-        token for token in re.split(r"[^a-z0-9]+", path.casefold())
-        if len(token) >= 3 and token not in {"www", "com", "news", "press", "media", "article"}
-    ]
-    if re.search(r"/(?:20\d{2}|\d{4,})[/-]", path) or len(path_tokens) >= 2:
-        return True
-    if any(marker in path.casefold() for marker in ("/news/", "/press/", "/articles/", "/article/", "/releases/", "/release/")):
-        return True
-    return False
-
-
-def resolve_google_news_article_url(url: str) -> str:
-    global GOOGLE_NEWS_RESOLUTION_ATTEMPTS
-    url = _strip_url_control_chars(url)
-    if not url or "news.google.com" not in _domain_from_url(url):
-        return ""
-    if url in GOOGLE_NEWS_RESOLUTION_CACHE:
-        return GOOGLE_NEWS_RESOLUTION_CACHE[url]
-    if GOOGLE_NEWS_RESOLUTION_ATTEMPTS >= GOOGLE_NEWS_RESOLUTION_LIMIT:
-        GOOGLE_NEWS_RESOLUTION_CACHE[url] = ""
-        return ""
-
-    resolved = ""
-    try:
-        GOOGLE_NEWS_RESOLUTION_ATTEMPTS += 1
-        session = create_requests_session()
-        response = session.get(url, timeout=1.8, allow_redirects=True)
-        final_url = _strip_url_control_chars(getattr(response, "url", "") or "")
-        if final_url and "news.google.com" not in _domain_from_url(final_url):
-            resolved = final_url
-        elif response.text:
-            for match in re.finditer(r'href=["\'](https?://[^"\']+)["\']', response.text, flags=re.IGNORECASE):
-                candidate_url = _strip_url_control_chars(unescape(urllib.parse.unquote(match.group(1))))
-                if "news.google.com" not in _domain_from_url(candidate_url):
-                    resolved = candidate_url
-                    break
-    except Exception:
-        resolved = ""
-
-    GOOGLE_NEWS_RESOLUTION_CACHE[url] = resolved
-    return resolved
-
-
-def resolve_article_url(url: str, title: str = "", source_href: str = "", source_domain: str = "") -> tuple[str, str]:
-    raw_url = _strip_url_control_chars(_clean_candidate_url(url))
-    source_href_clean = _strip_url_control_chars(_clean_candidate_url(source_href))
-    if raw_url and "news.google.com" in _domain_from_url(raw_url):
-        resolved = resolve_google_news_article_url(raw_url)
-        if resolved and is_article_url(resolved, title, source_domain):
-            return resolved, "resolved"
-        return "", "google_news_proxy"
-
-    if raw_url and is_article_url(raw_url, title, source_domain):
-        return raw_url, "resolved"
-    if raw_url and urlparse(raw_url).path in ("", "/"):
-        return "", "homepage_only"
-    if raw_url and _looks_like_low_value_article_url(raw_url, title):
-        return "", "rejected_low_value_page"
-    if source_href_clean and is_article_url(source_href_clean, title, source_domain):
-        return source_href_clean, "resolved"
-    return "", "unresolved"
 
 
 def _has_high_value_operational_detail(text: str) -> bool:
@@ -2225,16 +2182,8 @@ def _fast_query_bucket(query: str) -> str:
     return "general"
 
 
-def limit_standard_search_queries(queries: list[str], news_query_indices: set[int]) -> tuple[list[str], set[int]]:
-    days = int(lookback_days)
-    if days <= 7:
-        max_queries = 12 if not is_global_scope else 10
-    elif days <= 30:
-        max_queries = 15 if not is_global_scope else 12
-    elif days <= 90:
-        max_queries = 18
-    else:
-        max_queries = 20
+def limit_fast_search_queries(queries: list[str], news_query_indices: set[int]) -> tuple[list[str], set[int]]:
+    max_queries = 10 if not is_global_scope else 8
     selected_pairs: list[tuple[int, str]] = []
     seen_buckets: set[str] = set()
 
@@ -2338,7 +2287,9 @@ def build_search_queries() -> tuple[list[str], set[int]]:
             queries.append(f"{term} metro subway light rail incident strike policy controversy {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}")
             news_indices.add(idx)
 
-    return limit_standard_search_queries(queries, news_indices)
+    if fast_mode_enabled:
+        return limit_fast_search_queries(queries, news_indices)
+    return queries, news_indices
 
 
 def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -> tuple[int, str, str, list[dict], str]:
@@ -2486,17 +2437,20 @@ def _shorten(text: str, max_chars: int = CANDIDATE_SNIPPET_CHARS) -> str:
 
 
 def _effective_source_url(candidate: dict) -> str:
-    for key in ("article_url", "final_url"):
-        value = _clean_candidate_url(candidate.get(key, ""))
-        if value and is_article_url(value, candidate.get("title", ""), candidate.get("source_domain", "")):
-            return value
-    resolved, _status = resolve_article_url(
-        candidate.get("url", ""),
-        candidate.get("title", ""),
-        candidate.get("source_href", ""),
-        candidate.get("source_domain", ""),
-    )
-    return resolved
+    source_href = candidate.get("source_href") or ""
+    url = candidate.get("url") or ""
+    source_domain = (candidate.get("source_domain") or "").strip().lower()
+    raw_url = source_href or url
+    if "news.google.com" in _domain_from_url(raw_url):
+        domain = source_domain or _original_source_domain(
+            candidate.get("source", ""),
+            url,
+            source_href,
+            candidate.get("query", ""),
+        )
+        if domain and domain != "news.google.com":
+            return f"https://{domain}"
+    return _clean_candidate_url(raw_url)
 
 
 def _clean_candidate_url(value: str) -> str:
@@ -2662,11 +2616,9 @@ def _make_news_candidate(
     source_href: str = "",
 ) -> dict:
     original_domain = _original_source_domain(source, url, source_href, query)
-    article_url, url_resolution_status = resolve_article_url(url, title, source_href, original_domain)
-    source_url_for_scoring = article_url or url
-    quality, quality_reason = classify_source_quality(source, source_url_for_scoring, source_href)
-    source_tier, source_tier_reason = classify_source_tier(source, source_url_for_scoring, source_href)
-    source_display = source_label_for_report(source, source_url_for_scoring, source_href, source_tier)
+    quality, quality_reason = classify_source_quality(source, url, source_href)
+    source_tier, source_tier_reason = classify_source_tier(source, url, source_href)
+    source_display = source_label_for_report(source, url, source_href, source_tier)
     source_verb = source_verb_for_report(source_tier, source_display)
     region_value = region if region and region != "未判定" else guess_region_from_text(
         f"{title} {snippet} {source} {query} {url} {source_href}"
@@ -2681,16 +2633,13 @@ def _make_news_candidate(
         "region": region_value,
         "source_type": source_type,
         "source_href": (source_href or "").strip(),
-        "final_url": article_url,
-        "article_url": article_url,
-        "url_resolution_status": url_resolution_status,
         "source_quality": quality,
         "source_quality_reason": quality_reason,
         "source_tier": source_tier,
         "source_tier_reason": source_tier_reason,
         "source_display": source_display,
         "source_verb": source_verb,
-        "source_domain": _domain_from_url(article_url) or original_domain or _domain_from_url(source_href or url),
+        "source_domain": original_domain or _domain_from_url(source_href or url),
     }
 
 
@@ -2804,7 +2753,7 @@ def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], dict[str, int
     )
 
     for candidate in sorted_candidates:
-        url_key = _dedupe_url(_effective_source_url(candidate) or candidate.get("url", ""))
+        url_key = _dedupe_url(candidate.get("url", ""))
         title_key = _normalize_title(candidate.get("title", ""))
         if url_key and url_key in seen_urls:
             stats["URL 重複"] += 1
@@ -2839,19 +2788,6 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
     is_valid, reason = _is_valid_news_url(url, source_href=source_href)
     if not is_valid:
         return False, reason
-
-    article_url = _effective_source_url(candidate)
-    if not article_url:
-        status = candidate.get("url_resolution_status", "unresolved")
-        if status == "google_news_proxy":
-            return False, "Google News 代理未解析出真正新聞頁"
-        if status == "homepage_only":
-            return False, "來源連結只到首頁"
-        if status == "rejected_low_value_page":
-            return False, "低價值頁面連結"
-        return False, "無法確認真正新聞頁 URL"
-    if not is_article_url(article_url, title, candidate.get("source_domain", "")):
-        return False, "非新聞頁或公告頁 URL"
 
     date_obj = _candidate_date_obj(candidate.get("date", ""))
     if not date_obj:
@@ -2952,7 +2888,7 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
             -_date_sort_key(item),
         ),
     )
-    candidate_limit = min(get_selection_candidate_limit(lookback_int), MAX_SELECTION_CANDIDATES)
+    candidate_limit = min(get_selection_candidate_limit(lookback_int, fast_mode=fast_mode_enabled), MAX_SELECTION_CANDIDATES)
     model_candidates = [dict(item, id=idx) for idx, item in enumerate(filtered_candidates[:candidate_limit], 1)]
     candidate_cards = [build_candidate_card(candidate) for candidate in model_candidates]
     return {
@@ -3094,18 +3030,24 @@ WORK_ZONE_TECH_DETAIL_TERMS = [
 ]
 
 
-def get_selection_candidate_limit(days: int) -> int:
+def get_selection_candidate_limit(days: int, fast_mode: bool = False) -> int:
     try:
         days = int(days)
     except (TypeError, ValueError):
         days = 7
-    if days >= 365:
-        return 100
+    if fast_mode:
+        if days >= 90:
+            return 100
+        if days >= 30:
+            return 80
+        if days >= 14:
+            return 70
+        return 60
     if days >= 90:
-        return 90
-    if days >= 14:
-        return 65
-    return 50
+        return 150
+    if days >= 30:
+        return 120
+    return 100
 
 
 def get_selection_output_range(days: int) -> str:
@@ -3294,15 +3236,20 @@ def build_candidate_card(candidate: dict) -> dict:
     source_url = _effective_source_url(candidate)
     return {
         "id": candidate.get("id", ""),
-        "title": candidate.get("title", ""),
         "date": candidate.get("date", ""),
+        "title": candidate.get("title", ""),
         "source_display": candidate.get("source_display", candidate.get("source", "")),
         "source_domain": candidate.get("source_domain") or _domain_from_url(source_url),
+        "source_tier": candidate.get("source_tier", ""),
+        "source_type": candidate.get("source_type", ""),
+        "source_verb": candidate.get("source_verb", ""),
         "region": candidate.get("region", "未判定"),
         "preliminary_type": candidate.get("preliminary_type", infer_preliminary_type(candidate)),
-        "python_score": candidate.get("python_score", 0),
         "short_snippet": candidate.get("short_snippet", _shorten(candidate.get("snippet", ""), CANDIDATE_SNIPPET_CHARS)),
         "url": source_url,
+        "python_score": candidate.get("python_score", 0),
+        "score_reason": candidate.get("score_reason", ""),
+        "candidate_flags": candidate.get("candidate_flags", []),
     }
 
 
@@ -3345,7 +3292,7 @@ def build_selection_prompt(candidates: list[dict]) -> str:
     allowed_topic_types = " / ".join(selected_types) if selected_types else "無"
     policy_rule = _policy_selection_rule()
     output_range = get_selection_output_range(lookback_int)
-    card_limit = min(get_selection_candidate_limit(lookback_int), MAX_SELECTION_CANDIDATES)
+    card_limit = min(get_selection_candidate_limit(lookback_int, fast_mode=fast_mode_enabled), MAX_SELECTION_CANDIDATES)
     return f"""
 # 第一階段：候選新聞選題
 run_config：{json.dumps(current_run_config, ensure_ascii=False)}
@@ -3548,19 +3495,26 @@ def build_ai_unselected_stats(model_candidates: list[dict], selected_candidates:
 
 def format_report_candidate(candidate: dict) -> str:
     source_url = _effective_source_url(candidate)
+    proxy_url = candidate.get("url", "")
+    proxy_hint = f"\n  google_news_proxy_url: {proxy_url}" if candidate.get("source_href") and proxy_url and proxy_url != source_url else ""
     source_display = candidate.get("source_display") or source_label_for_report(
         candidate.get("source", ""), candidate.get("url", ""), candidate.get("source_href", ""), candidate.get("source_tier", "")
     )
     return (
-        f"- title: {candidate.get('title', '')}\n"
+        f"- 編號：{candidate.get('id', '')}\n"
+        f"  title: {candidate.get('title', '')}\n"
         f"  date: {candidate.get('date', '')}\n"
+        f"  source: {candidate.get('source', '')}\n"
         f"  source_display: {source_display}\n"
         f"  source_verb: {candidate.get('source_verb', source_verb_for_report(candidate.get('source_tier', ''), source_display))}\n"
-        f"  region: {candidate.get('region', '未判定')}\n"
-        f"  preliminary_type: {candidate.get('classification') or candidate.get('preliminary_type', '')}\n"
+        f"  source_tier: {candidate.get('source_tier', '')}\n"
         f"  url: {source_url}\n"
         f"  snippet: {_shorten(candidate.get('snippet', ''), REPORT_SNIPPET_CHARS)}\n"
-        f"  source_domain: {candidate.get('source_domain') or _domain_from_url(source_url)}"
+        f"  classification: {candidate.get('classification', '')}\n"
+        f"  selected_reason: {candidate.get('selected_reason', '')}\n"
+        f"  region: {candidate.get('region', '未判定')}\n"
+        f"  source_quality: {candidate.get('source_quality', 'B')}"
+        f"{proxy_hint}"
     )
 
 
@@ -3583,43 +3537,6 @@ def _has_explicit_full_date(date_text: str) -> bool:
         return False
 
 
-def _parse_research_date_value(date_text: str) -> tuple[datetime.date | None, str]:
-    text = (date_text or "").strip()
-    if not text:
-        return None, "none"
-    match = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", text)
-    if match:
-        try:
-            return datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3))), "day"
-        except Exception:
-            return None, "none"
-    match = re.search(r"(20\d{2})年\s*(\d{1,2})月\s*(\d{1,2})日", text)
-    if match:
-        try:
-            return datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3))), "day"
-        except Exception:
-            return None, "none"
-    match = re.search(r"\b(20\d{2})[-/](\d{1,2})\b", text)
-    if match:
-        try:
-            return datetime.date(int(match.group(1)), int(match.group(2)), 1), "month"
-        except Exception:
-            return None, "none"
-    try:
-        parsed = parsedate_to_datetime(text)
-        if parsed and re.search(r"\b\d{1,2}\b.*\b(20\d{2}|19\d{2})\b", text):
-            return parsed.date(), "day"
-    except Exception:
-        pass
-    match = re.search(r"\b(20\d{2}|19\d{2})\b", text)
-    if match:
-        try:
-            return datetime.date(int(match.group(1)), 1, 1), "year"
-        except Exception:
-            return None, "none"
-    return None, "none"
-
-
 def _journal_priority(date_text: str) -> tuple[int, str]:
     cutoff_date = today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)
     date_obj = _candidate_date_obj(date_text)
@@ -3634,46 +3551,32 @@ def _journal_priority(date_text: str) -> tuple[int, str]:
 
 
 def _parse_full_research_date(date_text: str) -> datetime.date | None:
-    date_obj, precision = _parse_research_date_value(date_text)
-    return date_obj if precision in {"day", "month"} else None
+    text = (date_text or "").strip()
+    if not text or not _has_explicit_full_date(text):
+        return None
+    date_obj = _candidate_date_obj(text)
+    return date_obj
 
 
 def _research_date_info(result: dict, title: str, snippet: str) -> dict:
-    cutoff_date = today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)
-
-    def _info_from_date(date_obj: datetime.date | None, precision: str, reason: str) -> dict | None:
-        if not date_obj:
-            return None
-        if precision == "year":
-            return {
-                "published_date": "",
-                "date_confidence": "low",
-                "date_precision": "year",
-                "date_reason": "僅提供年份，未提供明確發表日期",
-                "is_within_research_period": False,
-            }
-        return {
-            "published_date": date_obj.isoformat(),
-            "date_confidence": "high",
-            "date_precision": precision,
-            "date_reason": reason,
-            "is_within_research_period": cutoff_date <= date_obj <= today,
-        }
-
     date_fields = [
         "published_date", "publication_date", "online_publication_date",
         "article_date", "release_date", "published", "date",
     ]
     for key in date_fields:
         value = result.get(key) or result.get(key.replace("_", ""))
-        date_obj, precision = _parse_research_date_value(str(value or ""))
-        info = _info_from_date(date_obj, precision, f"{key} 提供發表日期")
-        if info:
-            return info
+        date_obj = _parse_full_research_date(str(value or ""))
+        if date_obj:
+            cutoff_date = today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)
+            return {
+                "published_date": date_obj.isoformat(),
+                "date_confidence": "high",
+                "date_reason": f"{key} 提供完整日期",
+                "is_within_research_period": cutoff_date <= date_obj <= today,
+            }
 
     labelled_patterns = [
         r"(?:published date|publication date|online publication date|article date|release date)\s*[:：]\s*([A-Za-z0-9,\-/\s]+)",
-        r"(?:published online|online first|published)\s*[:：]?\s*([A-Za-z]+\s+\d{1,2},\s*(?:20|19)\d{2})",
         r"(?:發表日期|出版日期|發布日期)\s*[:：]\s*([0-9年月日\-/\s]+)",
     ]
     text = f"{title} {snippet}"
@@ -3681,17 +3584,21 @@ def _research_date_info(result: dict, title: str, snippet: str) -> dict:
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if not match:
             continue
-        date_obj, precision = _parse_research_date_value(match.group(1))
-        info = _info_from_date(date_obj, precision, "摘要提供發表/出版/發布日期")
-        if info:
-            return info
+        date_obj = _parse_full_research_date(match.group(1))
+        if date_obj:
+            cutoff_date = today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)
+            return {
+                "published_date": date_obj.isoformat(),
+                "date_confidence": "high",
+                "date_reason": "摘要提供明確發表/出版/發布日期",
+                "is_within_research_period": cutoff_date <= date_obj <= today,
+            }
 
     year_only = re.search(r"\b(20\d{2}|19\d{2})\b", text)
     return {
         "published_date": "",
         "date_confidence": "low",
-        "date_precision": "year" if year_only else "none",
-        "date_reason": "僅提供年份，未提供明確發表日期" if year_only else "未提供明確發表日期",
+        "date_reason": "只有年份或未提供明確發表日期" if year_only else "未提供明確發表日期",
         "is_within_research_period": False,
     }
 
@@ -3709,24 +3616,11 @@ def _is_formal_journal_url_or_doi(url: str, text: str) -> bool:
     return False
 
 
-def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict], list[dict], dict]:
-    empty_summary = {
-        "query_count": 0,
-        "raw_result_count": 0,
-        "accepted_count": 0,
-        "rejected_no_full_date": 0,
-        "rejected_partial_date": 0,
-        "rejected_out_of_period": 0,
-        "rejected_not_rail_related": 0,
-        "rejected_no_doi_or_url": 0,
-        "rejected_duplicate": 0,
-    }
+def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict], list[dict]]:
     if not include_research_supplement:
-        return [], [], [], empty_summary
+        return [], [], []
     if DDGS is None:
-        summary = dict(empty_summary)
-        summary["query_count"] = 1
-        return [], [{"query": "國際學術期刊補充", "status": "ddgs 套件未安裝", "count": 0}], [], summary
+        return [], [{"query": "國際學術期刊補充", "status": "ddgs 套件未安裝", "count": 0}], []
 
     queries = JOURNAL_PRECISION_QUERIES + JOURNAL_EXPLORATORY_QUERIES
     candidates: list[dict] = []
@@ -3734,12 +3628,8 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
     excluded: list[dict] = []
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
-    summary = dict(empty_summary)
-    summary["query_count"] = len(queries)
 
-    def _exclude(query: str, title: str, url: str, reason: str, snippet: str = "", code: str = "") -> None:
-        if code and code in summary:
-            summary[code] += 1
+    def _exclude(query: str, title: str, url: str, reason: str, snippet: str = "") -> None:
         if len(excluded) < 80:
             excluded.append({
                 "query": query,
@@ -3763,8 +3653,6 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
             continue
 
         accepted = 0
-        raw_count = len(results or [])
-        summary["raw_result_count"] += raw_count
         for result in results or []:
             title = _clean_text(result.get("title") or "")
             snippet = _clean_text(result.get("body") or result.get("excerpt") or result.get("description") or "")
@@ -3772,41 +3660,27 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
             if not title or not url:
                 continue
             text = f"{title} {snippet} {url}"
-            has_metro_context = _contains_any_term(text, [
-                "urban rail", "urban rail transit", "metro", "metro system",
-                "subway", "mrt", "rail transit", "cbtc", "platform screen door",
-                "traction power", "digital twin", "predictive maintenance",
-            ])
-            has_non_urban_exclude = any(term.casefold() in text.casefold() for term in JOURNAL_EXCLUDE_TERMS)
-            if has_non_urban_exclude and not has_metro_context:
-                _exclude(query, title, url, "主題明確偏非都市軌道研究場景", snippet, "rejected_not_rail_related")
+            if any(term.casefold() in text.casefold() for term in JOURNAL_EXCLUDE_TERMS):
+                _exclude(query, title, url, "非都市軌道研究場景或排除運具", snippet)
                 continue
             if not _contains_any_term(text, JOURNAL_RAIL_CONTEXT_TERMS):
-                _exclude(query, title, url, "缺少 railway/metro/urban rail 等明確場景", snippet, "rejected_not_rail_related")
+                _exclude(query, title, url, "缺少 railway/metro/urban rail 等明確場景", snippet)
                 continue
             if not _is_formal_journal_url_or_doi(url, text):
-                _exclude(query, title, url, "缺少 DOI 或正式期刊 URL", snippet, "rejected_no_doi_or_url")
+                _exclude(query, title, url, "缺少 DOI 或正式期刊 URL", snippet)
                 continue
             if not _is_urban_rail_candidate(text) and not _contains_any_term(text, ["metro system", "urban rail transit", "rail transit"]):
-                _exclude(query, title, url, "都市軌道關聯不足", snippet, "rejected_not_rail_related")
+                _exclude(query, title, url, "都市軌道關聯不足", snippet)
                 continue
             title_key = _normalize_title(title)
             url_key = _dedupe_url(url)
             if title_key in seen_titles or url_key in seen_urls:
-                _exclude(query, title, url, "重複研究候選", snippet, "rejected_duplicate")
+                _exclude(query, title, url, "重複研究候選", snippet)
                 continue
             source = _domain_from_url(url) or "研究資料庫"
             date_info = _research_date_info(result, title, snippet)
             if date_info["date_confidence"] != "high" or not date_info["is_within_research_period"]:
-                if date_info.get("date_precision") == "year":
-                    code = "rejected_partial_date"
-                elif date_info.get("date_confidence") != "high":
-                    code = "rejected_no_full_date"
-                elif not date_info.get("is_within_research_period"):
-                    code = "rejected_out_of_period"
-                else:
-                    code = "rejected_no_full_date"
-                _exclude(query, title, url, date_info["date_reason"], snippet, code)
+                _exclude(query, title, url, date_info["date_reason"], snippet)
                 continue
             seen_titles.add(title_key)
             seen_urls.add(url_key)
@@ -3824,7 +3698,6 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
             candidate["year"] = _journal_year(candidate)
             candidate["published_date"] = date_info["published_date"]
             candidate["date_confidence"] = date_info["date_confidence"]
-            candidate["date_precision"] = date_info.get("date_precision", "")
             candidate["date_reason"] = date_info["date_reason"]
             candidate["is_within_research_period"] = date_info["is_within_research_period"]
             candidate["journal_priority"] = 0 if preferred_source else 1
@@ -3834,13 +3707,12 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
             candidate["preferred_research_source"] = preferred_source
             candidates.append(candidate)
             accepted += 1
-            summary["accepted_count"] += 1
             if len(candidates) >= JOURNAL_MAX_ITEMS:
                 break
-        statuses.append({"query": query, "status": "成功" if accepted else "無符合研究", "count": accepted, "raw_count": raw_count})
+        statuses.append({"query": query, "status": "成功" if accepted else "無符合研究", "count": accepted})
 
     candidates = sorted(candidates, key=lambda item: (item.get("journal_priority", 2), item.get("title", "")))
-    return candidates[:JOURNAL_MAX_ITEMS], statuses, excluded, summary
+    return candidates[:JOURNAL_MAX_ITEMS], statuses, excluded
 
 
 def build_report_prompt(selected_candidates: list[dict], journal_candidates: list[dict], search_count: int) -> str:
@@ -3919,7 +3791,7 @@ run_config：{json.dumps(current_run_config, ensure_ascii=False)}
 • 臺北捷運局啟示：
 請寫成 100 個中文字以內之一段文字，不要條列，不得過度延伸資料未提供的內容。
 
-• 資料來源：來源名稱，YYYY-MM-DD，[來源連結](URL)
+• 資料來源：來源名稱，YYYY-MM-DD，URL
 
 ________________________________________
 - 每則新聞標題必須翻成繁體中文正式標題，不得直接沿用英文原題；MTA、TTC、MTR、Tokyo Metro、R211A、CBTC、AFC 等機構、車型或系統縮寫可保留。
@@ -3933,16 +3805,15 @@ ________________________________________
 - 不得使用 `【臺北捷運局啟示】`，統一使用 `• 臺北捷運局啟示：`。
 - 事件摘要請直接切入事件重點，不要以「依 XXX 報導」、「依 XXX 官方公告」、「依 XXX 官方資料」、「根據 XXX 報導」或「根據 XXX 公告」作為固定開頭。
 - 事件摘要應包含：發生什麼事、涉及哪個捷運系統/路線/場站/設備或營運場景、技術/營運/系統轉換上的重點、與捷運機電系統之關聯。
-- 不要每則新聞都補「資料來源未載明」。只有車輛採購、號誌、自動化、無人駕駛、重大事故、系統測試或機電整合，且缺少關鍵工程資訊時，才可在事件摘要最後用一句短句，例如「後續仍宜追蹤設備規格、測試驗證及導入時程。」或「細部機電規格仍待後續公告確認。」每則最多一次。
-- 若只是營運政策、票價、活動增班、旅客資訊調整，不需要補未載明機電規格。不得自行補充原始資料未提供的數字、供應商、GoA 等級、金額、規格、成效或時程。
+- 若原始資料未揭露細節，事件摘要最後一句可簡短說明「資料來源未載明更細部技術規格、測試項目或導入數量」；不得自行補充原始資料未提供的數字、規格、成效或時程。
 - 資料來源必須放在每則最後。
 - 正式週報語氣需像機電系統設計處整理給長官或評審閱讀的國際捷運技術週報，避免除錯、選題或模型處理語氣。
 - 不得在正式報告正文使用：「模型：MaiAgent 雲端 API」「候選資料指出」「候選摘要指出」「入選資料指出」「原始候選資料」「raw data」「本次送入模型」「AI 入選」「模型判斷」「資料欄位顯示」「初篩資料指出」「本次候選資料」「來源健康」「Python 初篩」「MaiAgent 判斷」「developer debug」「python_score」「初步分類」「入選原因」。
 - source_display 與 source_verb 只供來源判斷與「資料來源」欄位使用，不要強迫放進事件摘要開頭；事件摘要不得以「候選資料」作為主詞。
-- 資料不足時以自然正式語氣保守收束，不要反覆使用「資料來源未載明」；每則最多出現一次，且不得列出一長串未揭露項目。
+- 資料不足時可用自然正式語氣說明，例如「資料來源未載明相關設備調整細節」「資料來源未載明更細部技術規格」，不得每則都重複「原始資料未提供，故不補述」。
 - source_tier / source_quality 只供判斷與除錯，不得寫入正式週報；D_proxy_low_value 不得包裝成技術新知。
-- 資料來源必須使用下方入選新聞的 url 欄位，該 url 已先整理為真正新聞頁或公告頁；不得改用 source_href、媒體主頁、機構首頁、分類頁、topic page、route map、service alert、Rider Tools、商品頁或徵才頁。
-- 資料來源格式固定為「資料來源：來源名稱，YYYY-MM-DD，[來源連結](URL)」；若完全沒有 URL，該則不要輸出。
+- 資料來源優先使用原始來源 url 與 source_display；若 url 為 Google News proxy，且 source_display 可辨識原始來源，正式報告不得顯示 Google News 代理連結，請改用可辨識原始來源 domain URL。
+- 資料來源格式固定為「資料來源：來源名稱，YYYY-MM-DD，URL」；若只有 domain，使用「https://domain」；若完全沒有 URL，寫「資料來源：來源名稱，YYYY-MM-DD，未提供完整 URL」。
 - 不得使用「資料來源：來源名稱（URL」或「來源連結（domain）」格式。
 - 不得納入臺灣新聞。
 - 技術新知需優先明確機電/系統/維修/資安/測試/能源效率內容；單純上線、啟用或服務公告降權。
@@ -4186,7 +4057,7 @@ def normalize_source_line(line: str) -> str:
         return line
     content = match.group(1).strip()
     date_text = _normalize_report_date_text(content)
-    url = _strip_url_control_chars(_extract_complete_url(content))
+    url = _extract_complete_url(content)
     host = _domain_from_url(url)
 
     if url and "news.google.com" in host:
@@ -4196,11 +4067,10 @@ def normalize_source_line(line: str) -> str:
     domain = _extract_domain_hint(content.replace(url, "")) if not url else host
     if domain == "news.google.com":
         domain = ""
-    source_url = url if url and is_article_url(url, content, domain or host) else ""
+    source_url = url or _domain_to_url(domain)
     source_label = _clean_source_label(content, source_url, domain or host)
-    if source_url:
-        return f"• 資料來源：{source_label}，{date_text}，[來源連結]({source_url})"
-    return f"• 資料來源：{source_label}，{date_text}，未提供完整 URL"
+    url_text = source_url or "未提供完整 URL"
+    return f"• 資料來源：{source_label}，{date_text}，{url_text}"
 
 
 def normalize_report_source_lines(text: str) -> str:
@@ -4388,12 +4258,12 @@ INTERNAL_REPORT_REPLACEMENTS = {
     "入選原因": "",
     "初步分類": "",
     "來源健康": "來源狀態",
-    "原始資料僅提供": "資料僅載明",
-    "原始資料未提供": "細部資料仍待後續公告確認",
+    "原始資料僅提供": "資料來源僅載明",
+    "原始資料未提供": "資料來源未載明",
     "故不補述。": "",
     "故不補述": "",
-    "原始資料未提供，故不補述。": "細部機電規格仍待後續公告確認。",
-    "原始資料未提供，故不補述": "細部機電規格仍待後續公告確認",
+    "原始資料未提供，故不補述。": "資料來源未載明更細部技術資料。",
+    "原始資料未提供，故不補述": "資料來源未載明更細部技術資料",
 }
 
 
@@ -4420,22 +4290,6 @@ def clean_internal_report_language(text: str) -> str:
     cleaned = re.sub(r"資料來源未提供完整 URL（[^）]*）", "資料來源未提供完整 URL", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
-
-
-def reduce_unspecified_source_tail(text: str) -> str:
-    if not text:
-        return text
-    text = re.sub(
-        r"資料來源未載明(?:[^。；;\n]{0,45})(?:規格|測試|項目|數量|時程|供應商|金額|GoA 等級|技術資料)[^。；;\n]*[。；;]?",
-        "細部機電規格仍待後續公告確認。",
-        text,
-    )
-    text = re.sub(
-        r"(資料來源未載明[^。；;\n]*[。；;])(?:\s*資料來源未載明[^。；;\n]*[。；;])+",
-        r"\1",
-        text,
-    )
-    return text
 
 
 SERVICE_OR_CIVIL_SYSTEM_TERMS = [
@@ -4800,7 +4654,6 @@ def sanitize_report_text(text: str) -> str:
     text = strip_internal_report_fields(text)
     text = normalize_final_report_md(text)
     text = normalize_research_section_heading(text)
-    text = reduce_unspecified_source_tail(text)
     text = strip_internal_report_fields(text)
     return normalize_report_statistics_line(text)
 
@@ -4829,15 +4682,11 @@ def compact_report_line_for_pdf(line: str) -> str:
     line = normalize_source_line(line)
     line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
     line = re.sub(
-        r"\[([^\]]+)\]\((https?://[^\)]+)\)",
-        lambda m: f"[{m.group(1)}]({_strip_url_control_chars(m.group(2))})",
+        r"\[(.+?)\]\((https?://[^\)]+)\)",
+        lambda m: f"{m.group(1)}（{m.group(2)}）",
         line,
     )
-    line = re.sub(
-        r"(?<!\]\()https?://[^\s\)\]]+",
-        lambda m: f"[{short_url_label(m.group(0))}]({_strip_url_control_chars(_extract_complete_url(m.group(0)) or m.group(0))})",
-        line,
-    )
+    line = re.sub(r"https?://[^\s\)\]]+", lambda m: _extract_complete_url(m.group(0)) or m.group(0), line)
     return line
 
 
@@ -4851,6 +4700,13 @@ def register_pdf_fonts() -> tuple[str, str]:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
     from reportlab.pdfbase.ttfonts import TTFont
+
+    try:
+        if not pdfmetrics.getFont("MSung-Light"):
+            pass
+    except Exception:
+        pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
+    return "MSung-Light", "MSung-Light"
 
     def _is_registered(font_name: str) -> bool:
         try:
@@ -4880,7 +4736,6 @@ def register_pdf_fonts() -> tuple[str, str]:
         r"C:\Windows\Fonts\msjh.ttc",
         r"C:\Windows\Fonts\msjh.ttf",
         r"C:\Windows\Fonts\msjhl.ttc",
-        r"C:\Windows\Fonts\arialuni.ttf",
         r"C:\Windows\Fonts\mingliu.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf",
@@ -4897,22 +4752,18 @@ def register_pdf_fonts() -> tuple[str, str]:
             pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
         cjk_font = "MSung-Light"
 
-    return cjk_font, cjk_font
+    latin_font = _register_ttf("TimesNewRoman", [
+        r"C:\Windows\Fonts\times.ttf",
+        r"C:\Windows\Fonts\timesbd.ttf",
+        r"C:\Windows\Fonts\timesi.ttf",
+    ]) or "Times-Roman"
 
-
-def normalize_pdf_text(text: str) -> str:
-    text = text or ""
-    text = text.replace("\u2010", "-").replace("\u2011", "-").replace("\u2012", "-")
-    text = text.replace("\u2013", "-").replace("\u2014", "-").replace("\u2015", "-")
-    text = text.replace("\u2212", "-")
-    text = re.sub(r"[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]", " ", text)
-    text = re.sub(r"[\u200b\u200c\u200d\u2060\ufeff\u00ad\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
-    return text
+    return cjk_font, latin_font
 
 
 def pdf_rich_text(text: str, cjk_font: str, latin_font: str) -> str:
     safe = (
-        normalize_pdf_text(text)
+        (text or "")
         .replace("🔹", "◆")
         .replace("📊", "【統計】")
         .replace("⏰", "【時間】")
@@ -4920,16 +4771,7 @@ def pdf_rich_text(text: str, cjk_font: str, latin_font: str) -> str:
         .replace("🚇", "")
         .replace("📧", "")
     )
-    parts: list[str] = []
-    last = 0
-    for match in re.finditer(r"\[([^\]]+)\]\((https?://[^\)]+)\)", safe):
-        parts.append(f'<font name="{cjk_font}">{escape(safe[last:match.start()], quote=False)}</font>')
-        label = escape(normalize_pdf_text(match.group(1)), quote=False)
-        url = escape(_strip_url_control_chars(match.group(2)), quote=True)
-        parts.append(f'<link href="{url}"><font name="{cjk_font}" color="blue"><u>{label}</u></font></link>')
-        last = match.end()
-    parts.append(f'<font name="{cjk_font}">{escape(safe[last:], quote=False)}</font>')
-    return "".join(parts)
+    return f'<font name="{cjk_font}">{escape(safe, quote=False)}</font>'
 
 
 def category_badge_class(category: str) -> str:
@@ -5129,8 +4971,17 @@ def markdown_to_pdf_bytes(md: str) -> bytes:
 
 
 def _soft_wrap_long_tokens(text: str, chunk: int = 45) -> str:
-    """保留原始 URL 字串，不插入零寬空白或 soft hyphen。"""
-    return text
+    """在超長無空白字串（如 Google News 長網址）中每隔 chunk 字元插入零寬空白，
+    讓 reportlab 能夠換行、不會爆出版面；零寬空白不影響複製貼上後的文字內容。"""
+    words = text.split(" ")
+    out = []
+    for w in words:
+        has_cjk = re.search(r"[\u3400-\u9fff]", w) is not None
+        looks_like_url_or_ascii_token = re.search(r"https?://|[A-Za-z0-9]{24,}", w) is not None
+        if len(w) > chunk and looks_like_url_or_ascii_token and not has_cjk:
+            w = "\u200b".join(w[i:i + chunk] for i in range(0, len(w), chunk))
+        out.append(w)
+    return " ".join(out)
 
 
 def try_markdown_to_pdf_bytes(md: str) -> bytes | None:
@@ -5328,17 +5179,6 @@ if generate_btn:
                 "maiagent_call_count": 0,
                 "category_counts": category_counts,
                 "journal_count": 0,
-                "journal_status_summary": {
-                    "query_count": 0,
-                    "raw_result_count": 0,
-                    "accepted_count": 0,
-                    "rejected_no_full_date": 0,
-                    "rejected_partial_date": 0,
-                    "rejected_out_of_period": 0,
-                    "rejected_not_rail_related": 0,
-                    "rejected_no_doi_or_url": 0,
-                    "rejected_duplicate": 0,
-                },
                 "model_candidate_count": 0,
                 "source_count": 0,
                 "ddgs_query_count": 0,
@@ -5370,7 +5210,6 @@ if generate_btn:
                 "journal_candidates": [],
                 "journal_statuses": [],
                 "journal_excluded_candidates": [],
-                "journal_status_summary": report_stats.get("journal_status_summary", {}),
                 "selection_prompt": "",
                 "selection_response": "",
                 "report_prompt": "",
@@ -5405,7 +5244,6 @@ if generate_btn:
                 },
                 "stats": report_stats,
                 "source_health": source_statuses,
-                "journal_status_summary": report_stats.get("journal_status_summary", {}),
                 "final_report_md": report_text,
             }
 
@@ -5476,11 +5314,12 @@ if generate_btn:
             }
 
             # Step 1：RSS 訂閱源 + 指定模式地區代理 + 規範更新代理
-            region_sources = build_region_news_sources(active_regions, int(lookback_days))
+            region_sources = build_region_news_sources(active_regions, int(lookback_days), fast_mode=fast_mode_enabled)
             standards_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
             combined_sources, skipped_source_statuses = build_run_news_sources(
                 region_sources,
                 standards_sources,
+                fast_mode_enabled,
                 return_skipped=True,
             )
             status_text.text(
@@ -5495,18 +5334,11 @@ if generate_btn:
             progress_bar.progress(0.25)
             st.session_state["latest_source_statuses"] = source_statuses
 
-            rss_title_count = len(re.findall(r"(?m)^\s*標題：", rss_results or ""))
+            status_text.text("🔍 蒐集國際新聞來源……（ddgs 多後端搜尋）")
             ddg_progress = ProgressRange(progress_bar, 0.25, 0.40)
             search_count = len(build_search_queries()[0])
             stage_start = time.perf_counter()
-            if rss_title_count >= get_selection_candidate_limit(lookback_int):
-                status_text.text("🔍 RSS / 新聞來源候選已足夠，略過 DDGS 補充搜尋……")
-                ddg_results = "RSS / Google News 候選已足夠，略過 DDGS 補充搜尋。"
-                search_count = 0
-                ddg_progress.progress(1.0)
-            else:
-                status_text.text("🔍 蒐集國際新聞來源……（ddgs 多後端搜尋）")
-                ddg_results = run_duckduckgo_searches(ddg_progress, status_text)
+            ddg_results = run_duckduckgo_searches(ddg_progress, status_text)
             timings["elapsed_seconds_ddgs"] = round(time.perf_counter() - stage_start, 2)
             progress_bar.progress(0.42)
 
@@ -5537,19 +5369,8 @@ if generate_btn:
             journal_candidates: list[dict] = []
             journal_statuses: list[dict] = []
             journal_excluded_candidates: list[dict] = []
-            journal_status_summary: dict = {
-                "query_count": 0,
-                "raw_result_count": 0,
-                "accepted_count": 0,
-                "rejected_no_full_date": 0,
-                "rejected_partial_date": 0,
-                "rejected_out_of_period": 0,
-                "rejected_not_rail_related": 0,
-                "rejected_no_doi_or_url": 0,
-                "rejected_duplicate": 0,
-            }
             if include_research_supplement:
-                journal_candidates, journal_statuses, journal_excluded_candidates, journal_status_summary = collect_journal_candidates(status_text)
+                journal_candidates, journal_statuses, journal_excluded_candidates = collect_journal_candidates(status_text)
             progress_bar.progress(0.76)
 
             # Step 3：MaiAgent 第二階段正式報告
@@ -5568,7 +5389,6 @@ if generate_btn:
             report_text = enforce_research_section(report_text, journal_candidates)
             report_text = normalize_final_report_md(report_text)
             report_text = normalize_report_statistics_line(report_text)
-            pdf_bytes = try_markdown_to_pdf_bytes(report_text)
             formal_count = count_report_items(report_text)
             category_counts = count_report_items_by_category(report_text)
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
@@ -5594,7 +5414,6 @@ if generate_btn:
                 "maiagent_call_count": maiagent_call_count,
                 "category_counts": category_counts,
                 "journal_count": len(journal_candidates),
-                "journal_status_summary": journal_status_summary,
                 "model_candidate_count": len(model_candidates),
                 "source_count": len(combined_sources),
                 "ddgs_query_count": search_count,
@@ -5615,7 +5434,6 @@ if generate_btn:
             }
             st.session_state["latest_report_md"] = report_text
             st.session_state["latest_report"] = report_text
-            st.session_state["latest_pdf"] = pdf_bytes
             st.session_state["latest_report_summary"] = {
                 "formal_count": formal_count,
                 "has_standards": has_standard_updates,
@@ -5638,7 +5456,6 @@ if generate_btn:
                 "journal_candidates": journal_candidates,
                 "journal_statuses": journal_statuses,
                 "journal_excluded_candidates": journal_excluded_candidates,
-                "journal_status_summary": journal_status_summary,
                 "selection_prompt": selection_prompt,
                 "selection_response": selection_response,
                 "report_prompt": report_prompt,
@@ -5819,6 +5636,7 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "include_standards": run_config.get("include_standards"),
             "include_research_supplement": run_config.get("include_research_supplement"),
             "research_supplement_period": run_config.get("research_supplement_period", {}),
+            "fast_mode": run_config.get("fast_mode", True),
             "demo_cache_mode": run_config.get("demo_cache_mode", False),
             "app_source_hash": st.session_state.get("_app_source_hash", ""),
             "long_term_coverage_warning": long_term_coverage.get("long_term_coverage_warning", False),
@@ -5835,7 +5653,6 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "maiagent_calls": latest_stats.get("maiagent_call_count", 0),
             "category_counts": latest_stats.get("category_counts", {}),
             "journal_count": latest_stats.get("journal_count", 0),
-            "journal_status_summary": latest_stats.get("journal_status_summary", debug_info.get("journal_status_summary", {}) if debug_info else {}),
             "source_count": latest_stats.get("source_count", 0),
             "ddgs_query_count": latest_stats.get("ddgs_query_count", 0),
             "candidate_card_limit": latest_stats.get("candidate_card_limit", 0),
@@ -5866,7 +5683,6 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
         "journal_candidates": debug_info.get("journal_candidates", []) if debug_info else [],
         "journal_statuses": debug_info.get("journal_statuses", []) if debug_info else [],
         "journal_excluded_candidates": debug_info.get("journal_excluded_candidates", []) if debug_info else [],
-        "journal_status_summary": debug_info.get("journal_status_summary", latest_stats.get("journal_status_summary", {})) if debug_info else latest_stats.get("journal_status_summary", {}),
         "maiagent": {
             "selection_prompt": debug_info.get("selection_prompt", "") if debug_info else "",
             "selection_response": debug_info.get("selection_response", "") if debug_info else "",
