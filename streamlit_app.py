@@ -5334,7 +5334,7 @@ if generate_btn:
             progress_bar.progress(0.76)
 
             # Step 3：MaiAgent 第二階段正式報告
-            status_text.text("📝 MaiAgent 產生正式週報……")
+            status_text.text(f"📝 MaiAgent 產生正式{report_period_label}……")
             report_prompt = build_report_prompt(selected_candidates, journal_candidates, search_count)
             stage_start = time.perf_counter()
             report_response = call_maiagent_cloud(report_prompt)
