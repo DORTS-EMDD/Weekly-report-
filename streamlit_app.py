@@ -236,11 +236,11 @@ st.markdown("""
 
 /* 左側 sidebar 整體內容往上拉 */
 [data-testid="stSidebar"] > div:first-child {
-    padding-top: 0.3rem !important;
+    padding-top: 0rem !important;
 }
 
 [data-testid="stSidebar"] > div:first-child > div:first-child {
-    padding-top: 0.3rem !important;
+    padding-top: 0rem !important;
 }
   [data-testid="stSidebar"], [data-testid="stSidebar"] label,
   [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
