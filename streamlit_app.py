@@ -74,7 +74,7 @@ st.markdown("""
     --gold: #c9972b;
   }
 
-  .block-container { padding-top: 1.3rem; }
+  .block-container { padding-top: 0.5rem; }
   [data-testid="stSidebar"] { background-color: #0f2d4a; }
   [data-testid="stSidebar"], [data-testid="stSidebar"] label,
   [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
