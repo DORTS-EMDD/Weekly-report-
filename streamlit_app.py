@@ -228,7 +228,7 @@ st.markdown("""
     font-family: Inter, "Noto Sans TC", "Microsoft JhengHei", Arial, sans-serif;
     color: #111827;
   }
-  .block-container { max-width: 1180px; padding-top: 1.8rem; }
+  .block-container { max-width: 1180px; padding-top: 1.2rem; }
   [data-testid="stSidebar"] {
     background: #f8fafc !important;
     border-right: 1px solid #e5e7eb !important;
