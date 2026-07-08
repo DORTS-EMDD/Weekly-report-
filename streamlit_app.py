@@ -899,7 +899,7 @@ with st.sidebar:
         1 for t in ADVANCED_TYPES
         if st.session_state.get(f"type_{t}", t in st.session_state["selected_types_state"])
     )
-    st.markdown("**新聞類型**")
+    st.markdown("**📰 新聞類型**")
     st.caption(f"已選 {selected_type_count} 種類型｜{target_summary}")
     with st.expander("展開選擇新聞類型", expanded=False):
         col_t_all, col_t_clear = st.columns(2)
