@@ -2938,7 +2938,20 @@ def build_long_term_coverage_warning(candidates: list[dict]) -> dict:
 
 
 def format_selection_candidate(candidate: dict) -> str:
-    return json.dumps(build_candidate_card(candidate), ensure_ascii=False)
+    source_url = _effective_source_url(candidate)
+    prompt_card = {
+        "id": candidate.get("id", ""),
+        "title": candidate.get("title", ""),
+        "date": candidate.get("date", ""),
+        "source_display": candidate.get("source_display", candidate.get("source", "")),
+        "source_domain": candidate.get("source_domain") or _domain_from_url(source_url) or _extract_domain_hint(source_url),
+        "region": candidate.get("region", "未判定"),
+        "preliminary_type": candidate.get("preliminary_type", infer_preliminary_type(candidate)),
+        "python_score": candidate.get("python_score", 0),
+        "short_snippet": candidate.get("short_snippet", _shorten(candidate.get("snippet", ""), CANDIDATE_SNIPPET_CHARS)),
+        "url": source_url,
+    }
+    return json.dumps(prompt_card, ensure_ascii=False)
 
 
 def _selected_report_sections() -> str:
@@ -3289,31 +3302,18 @@ def build_selection_prompt(candidates: list[dict]) -> str:
         candidate_block = "本期 Python 初篩後沒有候選新聞。請回傳空的 selected_ids 清單。"
     selected_types_str = "、".join(selected_types) if selected_types else "無"
     example_type = selected_types[0] if selected_types else "技術新知"
-    allowed_topic_types = " / ".join(selected_types) if selected_types else "無"
-    policy_rule = _policy_selection_rule()
     output_range = get_selection_output_range(lookback_int)
-    card_limit = min(get_selection_candidate_limit(lookback_int, fast_mode=fast_mode_enabled), MAX_SELECTION_CANDIDATES)
     return f"""
-# 第一階段：候選新聞選題
-run_config：{json.dumps(current_run_config, ensure_ascii=False)}
+請依照你在 MaiAgent 後台設定的國際捷運技術週報角色指令，根據以下候選資料執行第一階段選題。不得自行搜尋或補充候選資料以外的新聞、日期、供應商、技術細節或統計數據。
+
+本次是第一階段選題任務；請只判斷候選資料是否適合納入正式報告，不要撰寫正式新聞段落。
 報告期間：{date_range}
-報導範圍：{report_scope_label}
-勾選類型：{selected_types_str}
-選題目標：{output_range} 則；高品質候選不足時可少於目標，但不要用低價值資料湊數。
-候選卡上限：本階段最多只提供 {card_limit} 筆 Python 高分輕量候選卡。
+使用者勾選的新聞類型：{selected_types_str}
+需要選出的數量：{output_range} 則；高品質候選不足時可少於目標，但不要用低價值資料湊數。
 
-硬性限制：
-- 只能使用候選卡 id，不得補新聞或自行上網。
-- 本階段只做選題，不得撰寫正式週報，不得輸出正式新聞段落。
-- 候選卡是 Python 從 RSS/ddgs/Google News proxy 篩選後產生；不得要求或使用 Tavily、web search、網頁擷取或任何外部搜尋工具。
-- 不得納入臺灣新聞、非都市軌道、旅遊/SEO 或無完整 URL 資料。
-- D_proxy_low_value 來源（入口頁、archive/topic/route/trip result、PDF 路線圖、職缺或查詢頁）若沒有明確事件、技術導入、系統變更或政策內容，不得納入。
-- 技術新知需優先明確機電/系統/維修/資安/測試/能源效率內容；單純上線、啟用或服務公告降權。
-- Automated Work Zone Speed Enforcement program 若只有政策公告、執法制度或安全管理機制，且沒有明確設備、監測、感測、影像、通訊或自動化技術導入細節，請列為營運政策或排除，不得硬列為技術新知。
-- 營運爭議需有明確爭議性或重大營運影響；一般旅客資訊、週末調整、延誤證明、治安或乘客糾紛降權或排除。
-{policy_rule}
+請只使用候選資料中的 id 進行選題；category 必須從使用者勾選的新聞類型中選擇。不得輸出 Markdown 說明。
 
-請只回傳 JSON，不要加 Markdown 說明：
+輸出 JSON 格式：
 {{
   "selected_ids": [
     {{
@@ -3333,7 +3333,7 @@ run_config：{json.dumps(current_run_config, ensure_ascii=False)}
   ]
 }}
 
-## 輕量候選卡（不是 raw data）
+## 精簡候選資料
 {candidate_block}
 """.strip()
 
@@ -3495,27 +3495,21 @@ def build_ai_unselected_stats(model_candidates: list[dict], selected_candidates:
 
 def format_report_candidate(candidate: dict) -> str:
     source_url = _effective_source_url(candidate)
-    proxy_url = candidate.get("url", "")
-    proxy_hint = f"\n  google_news_proxy_url: {proxy_url}" if candidate.get("source_href") and proxy_url and proxy_url != source_url else ""
     source_display = candidate.get("source_display") or source_label_for_report(
         candidate.get("source", ""), candidate.get("url", ""), candidate.get("source_href", ""), candidate.get("source_tier", "")
     )
-    return (
-        f"- 編號：{candidate.get('id', '')}\n"
-        f"  title: {candidate.get('title', '')}\n"
-        f"  date: {candidate.get('date', '')}\n"
-        f"  source: {candidate.get('source', '')}\n"
-        f"  source_display: {source_display}\n"
-        f"  source_verb: {candidate.get('source_verb', source_verb_for_report(candidate.get('source_tier', ''), source_display))}\n"
-        f"  source_tier: {candidate.get('source_tier', '')}\n"
-        f"  url: {source_url}\n"
-        f"  snippet: {_shorten(candidate.get('snippet', ''), REPORT_SNIPPET_CHARS)}\n"
-        f"  classification: {candidate.get('classification', '')}\n"
-        f"  selected_reason: {candidate.get('selected_reason', '')}\n"
-        f"  region: {candidate.get('region', '未判定')}\n"
-        f"  source_quality: {candidate.get('source_quality', 'B')}"
-        f"{proxy_hint}"
-    )
+    prompt_item = {
+        "title": candidate.get("title", ""),
+        "date": candidate.get("date", ""),
+        "source_display": source_display,
+        "source_verb": candidate.get("source_verb", source_verb_for_report(candidate.get("source_tier", ""), source_display)),
+        "region": candidate.get("region", "未判定"),
+        "preliminary_type": candidate.get("classification") or candidate.get("preliminary_type", infer_preliminary_type(candidate)),
+        "url": source_url,
+        "snippet": _shorten(candidate.get("snippet", ""), REPORT_SNIPPET_CHARS),
+        "source_domain": candidate.get("source_domain") or _domain_from_url(source_url) or _extract_domain_hint(source_url),
+    }
+    return json.dumps(prompt_item, ensure_ascii=False)
 
 
 def _journal_year(item: dict) -> str:
@@ -3722,119 +3716,84 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
     selected_empty_rules = _selected_empty_section_rules()
     selected_stats = _selected_stats_template()
     research_heading = research_section_heading(markdown=False)
-    policy_rule = _policy_selection_rule()
     candidate_block = "\n\n".join(format_report_candidate(candidate) for candidate in selected_candidates)
     if not candidate_block:
         candidate_block = "第一階段沒有入選新聞。請只依已勾選章節輸出沒有符合資料的文字，不得自行補新聞。"
 
-    journal_section_rule = ""
-    journal_block = ""
     journal_input_section = ""
     if include_research_supplement:
-        journal_section_rule = f"""
-- 啟用研究補充：是。
-- 研究補充期間：固定近 90 天，且只允許 date_confidence=high、is_within_research_period=True 的研究。
-- 「{research_heading}」最多列 3 至 5 篇，不納入新聞統計，也不得混入技術新知、重大事故、營運政策、營運爭議或規範更新章節。
-- 研究候選必須與捷運、都市軌道、軌道機電、智慧維運、數位分身、預測性維護、號誌、車輛、供電、AFC 或客流分析明確相關。
-- 若下方沒有研究候選，請在「{research_heading}」固定寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
-"""
         if journal_candidates:
-            journal_block = "\n\n".join(
-                f"- title: {item.get('title', '')}\n"
-                f"  year: {item.get('year', _journal_year(item))}\n"
-                f"  published_date: {item.get('published_date', '')}\n"
-                f"  date_confidence: {item.get('date_confidence', '')}\n"
-                f"  date_reason: {item.get('date_reason', '')}\n"
-                f"  is_within_research_period: {item.get('is_within_research_period', False)}\n"
-                f"  source: {item.get('source', '')}\n"
-                f"  url: {item.get('url', '')}\n"
-                f"  snippet: {_shorten(item.get('snippet', ''), REPORT_SNIPPET_CHARS)}\n"
-                f"  query: {item.get('query', '')}\n"
-                f"  date_priority: {item.get('journal_priority_reason', '')}"
+            journal_block = "\n".join(
+                json.dumps({
+                    "title": item.get("title", ""),
+                    "date": item.get("published_date", "") or item.get("date", ""),
+                    "source_display": item.get("source", ""),
+                    "url": item.get("url", ""),
+                    "snippet": _shorten(item.get("snippet", ""), REPORT_SNIPPET_CHARS),
+                }, ensure_ascii=False)
                 for item in journal_candidates
             )
         else:
             journal_block = "無符合期間條件且具明確發表日期之研究候選。"
         journal_input_section = f"""
 ## 國際學術與技術研究補充候選
+研究補充已啟用；如有下方候選，請於最後輸出「{research_heading}」，最多 3 至 5 篇。若沒有候選，請寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
 {journal_block}
 """.strip()
+    journal_input_text = f"\n\n{journal_input_section}" if journal_input_section else ""
 
     return f"""
-# 第二階段：正式週報產出
-run_config：{json.dumps(current_run_config, ensure_ascii=False)}
-報告期間：{date_range}
+請依照你在 MaiAgent 後台設定的國際捷運技術週報角色指令，根據以下已入選新聞撰寫正式報告。不得自行搜尋，不得補充候選資料以外的新聞、日期、國家、城市、路線、供應商、技術細節、事故原因、統計數據或金額。
+
+本次是第二階段正式報告撰寫任務。
+報告標題：{report_title}
+資料涵蓋期間：{date_range}
 報導範圍：{report_scope_label}
 勾選類型：{selected_types_str}
-研究補充：{'啟用' if include_research_supplement else '未啟用'}
-
-硬性限制：
-- 只能根據下方入選新聞與研究候選撰寫，不得補述、不得自行新增資料。
-- 正式報告開頭只保留：標題、資料涵蓋期間、報導範圍。
-- 正式報告只輸出下列已勾選章節，不得輸出未勾選類型：
+正式報告章節：
 {selected_sections}
-- 國際學術期刊：{(f'啟用時於最後輸出「{research_heading}」' if include_research_supplement else '未啟用，不得輸出國際學術期刊章節')}。
-- 空章節文字只限已勾選類型：
+空章節文字：
 {selected_empty_rules}
-- 正式報告每則新聞請使用以下固定格式，不得自行增減欄位，不得新增「技術關鍵字」、可能影響系統、可參考作法、後續追蹤建議等欄位：
-🔹 [新聞類型] 繁體中文新聞標題
-
-• 發布/事件日期：YYYY-MM-DD
-
-• 國家/地區：國家或地區
-
-• 相關機電系統：限捷運機電範疇
-
-• 事件摘要：
-請寫成 3 至 5 句完整段落；一般新聞約 120～180 個中文字，重要技術或重大事件約 180～250 個中文字，上限 250 個中文字。不要條列，不要使用 - 或多層 bullet，不要寫成空泛評論。
-
-• 臺北捷運局啟示：
-請寫成 100 個中文字以內之一段文字，不要條列，不得過度延伸資料未提供的內容。
-
-• 資料來源：來源名稱，YYYY-MM-DD，URL
-
-________________________________________
-- 每則新聞標題必須翻成繁體中文正式標題，不得直接沿用英文原題；MTA、TTC、MTR、Tokyo Metro、R211A、CBTC、AFC 等機構、車型或系統縮寫可保留。
-- 若候選 title 為英文，請理解事件後改寫為簡潔繁體中文標題，例如「MTA R211A 新型列車導入紐約地鐵 D 線」，不要把英文原題放入正式報告標題。
-- 每個欄位之間至少保留一個空行；「事件摘要：」與「臺北捷運局啟示：」後方必須換行，不要把正文接在同一行。
-- 相關機電系統只能填機電範疇，例如車輛、號誌、通訊、供電、AFC、月臺門、車站電梯、電扶梯、旅客資訊系統、SCADA、車站機電設備。
-- 「資通訊與資安」只可用於明確涉及通訊網路、OT/IT 資安、CBTC/SCADA/OCC/AFC 資安、系統入侵、駭客攻擊、弱點修補、資料安全、營運科技網路安全、通訊系統升級或資安防護的新聞；沒有這些內容時不得標示為「資通訊與資安」。
-- 工區自動速限執法、維修作業安全、施工區監測等新聞，若未揭露感測器、攝影機、通訊或後端平台細節，相關機電系統請保守寫「維修安全監測設備」。
-- 不得填無障礙服務、旅客服務、活動疏運、營運政策、土建工程、站體改善或道路交通。
-- 不得在事件摘要下方使用 `-`，不得出現空的 `•`，不得出現 `• 事件摘要：-`。
-- 不得使用 `【臺北捷運局啟示】`，統一使用 `• 臺北捷運局啟示：`。
-- 事件摘要請直接切入事件重點，不要以「依 XXX 報導」、「依 XXX 官方公告」、「依 XXX 官方資料」、「根據 XXX 報導」或「根據 XXX 公告」作為固定開頭。
-- 事件摘要應包含：發生什麼事、涉及哪個捷運系統/路線/場站/設備或營運場景、技術/營運/系統轉換上的重點、與捷運機電系統之關聯。
-- 若原始資料未揭露細節，事件摘要最後一句可簡短說明「資料來源未載明更細部技術規格、測試項目或導入數量」；不得自行補充原始資料未提供的數字、規格、成效或時程。
-- 資料來源必須放在每則最後。
-- 正式週報語氣需像機電系統設計處整理給長官或評審閱讀的國際捷運技術週報，避免除錯、選題或模型處理語氣。
-- 不得在正式報告正文使用：「模型：MaiAgent 雲端 API」「候選資料指出」「候選摘要指出」「入選資料指出」「原始候選資料」「raw data」「本次送入模型」「AI 入選」「模型判斷」「資料欄位顯示」「初篩資料指出」「本次候選資料」「來源健康」「Python 初篩」「MaiAgent 判斷」「developer debug」「python_score」「初步分類」「入選原因」。
-- source_display 與 source_verb 只供來源判斷與「資料來源」欄位使用，不要強迫放進事件摘要開頭；事件摘要不得以「候選資料」作為主詞。
-- 資料不足時可用自然正式語氣說明，例如「資料來源未載明相關設備調整細節」「資料來源未載明更細部技術規格」，不得每則都重複「原始資料未提供，故不補述」。
-- source_tier / source_quality 只供判斷與除錯，不得寫入正式週報；D_proxy_low_value 不得包裝成技術新知。
-- 資料來源優先使用原始來源 url 與 source_display；若 url 為 Google News proxy，且 source_display 可辨識原始來源，正式報告不得顯示 Google News 代理連結，請改用可辨識原始來源 domain URL。
-- 資料來源格式固定為「資料來源：來源名稱，YYYY-MM-DD，URL」；若只有 domain，使用「https://domain」；若完全沒有 URL，寫「資料來源：來源名稱，YYYY-MM-DD，未提供完整 URL」。
-- 不得使用「資料來源：來源名稱（URL」或「來源連結（domain）」格式。
-- 不得納入臺灣新聞。
-- 技術新知需優先明確機電/系統/維修/資安/測試/能源效率內容；單純上線、啟用或服務公告降權。
-- Automated Work Zone Speed Enforcement program 若只有政策公告、執法制度或安全管理機制，且沒有明確設備、系統、監測、感測、影像、通訊或自動化技術導入細節，請列為「營運政策」或捨棄，不得硬包裝為「技術新知」。
-- 營運爭議需有明確爭議性或重大營運影響；一般旅客資訊、週末調整、延誤證明、治安或乘客糾紛降權或排除。
-{policy_rule}
-{journal_section_rule}
 
 正式報告開頭固定：
 # {report_title}
 > 資料涵蓋期間：{date_range}
 > 報導範圍：{report_scope_label}
 
+正式報告每則新聞請使用以下固定格式，不得改成表格、簡報式卡片或多層條列，不得自行增減欄位，不得新增「技術關鍵字」欄位，不得把「臺北捷運局啟示」拆成子欄位：
+🔹 [新聞類型] 繁體中文新聞標題
+
+• 發布/事件日期：
+
+• 國家/地區：
+
+• 相關機電系統：
+
+• 事件摘要：
+
+• 臺北捷運局啟示：
+
+• 資料來源：
+
+每則新聞之間使用：
+---
+
+必要寫作提醒：
+- 只根據下方已入選新聞資料撰寫；正式報告只輸出已勾選章節，不得輸出未勾選類型。
+- 每則新聞標題必須翻成繁體中文正式標題；機構、車型或系統縮寫可保留。
+- 「事件摘要：」與「臺北捷運局啟示：」後方必須換行，不要把正文接在同一行；摘要與啟示不要條列。
+- 事件摘要請根據 title、snippet、source_display、date、region、preliminary_type 與 url 自行判斷撰寫。摘要重點為事件本身、都市軌道場景、涉及的機電系統或營運管理意義。若原始資料未提供細節，請採保守摘要，不得自行補述；除非該缺漏會影響工程判讀，否則不必特別寫「未提供」。不要每則都套用「資料來源未載明」或「原始資料未提供」。不得自行補原文沒有的數字、供應商、金額、GoA 等級、測試項目、車輛規格、事故原因或導入時程。
+- 臺北捷運局啟示請從機電系統規劃、系統整合、維修管理、營運安全、資料治理、資安、能源效率或風險控管角度撰寫。不得寫成政策宣傳、空泛口號或與新聞無關的一般性建議。不得暗示臺北捷運局已有相同計畫、設備或問題，除非候選資料明確提供。
+- 資料來源請使用 source_display、date、url 與 source_domain；若候選資料提供完整 URL，資料來源列應保留該 URL 或系統指定之來源連結；若只有 domain，顯示 domain；若沒有完整 URL，寫：「原始候選資料未提供完整 URL。」不得自行編造 URL，不得把來源首頁、分類頁或媒體名稱自行改寫成新聞頁 URL。
+- 不得在正式報告正文使用 MaiAgent、Python 初篩、developer debug、python_score、入選原因、候選資料等模型處理語氣。
+
 報告最後保留：
 📊 本期統計：共 N 則（{selected_stats}）
 ⏰ 報告產出時間：{today.strftime('%Y年%m月%d日')} 週{weekday}
 
-## 第一階段入選新聞
+## 已入選新聞資料
 {candidate_block}
-
-{journal_input_section}
+{journal_input_text}
 """.strip()
 
 
@@ -4034,6 +3993,7 @@ def _clean_source_label(content: str, url: str, domain: str) -> str:
     label = re.sub(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", "", label)
     label = re.sub(r"20\d{2}年\s*\d{1,2}月\s*\d{1,2}日", "", label)
     label = re.sub(r"來源連結\s*[（(][^）)]*[）)]", "", label)
+    label = re.sub(r"原始候選資料未提供完整\s*URL", "", label, flags=re.IGNORECASE)
     label = re.sub(r"未提供完整\s*URL", "", label, flags=re.IGNORECASE)
     label = re.sub(r"Google\s*News.*?(?:代理|proxy|來源)?", "", label, flags=re.IGNORECASE)
     label = re.sub(r"[（(]\s*[）)]", "", label)
@@ -4067,9 +4027,9 @@ def normalize_source_line(line: str) -> str:
     domain = _extract_domain_hint(content.replace(url, "")) if not url else host
     if domain == "news.google.com":
         domain = ""
-    source_url = url or _domain_to_url(domain)
-    source_label = _clean_source_label(content, source_url, domain or host)
-    url_text = source_url or "未提供完整 URL"
+    source_ref = url or domain
+    source_label = _clean_source_label(content, source_ref, domain or host)
+    url_text = source_ref or "原始候選資料未提供完整 URL。"
     return f"• 資料來源：{source_label}，{date_text}，{url_text}"
 
 
