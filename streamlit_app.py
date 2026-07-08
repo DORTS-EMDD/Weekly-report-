@@ -400,8 +400,6 @@ def clear_old_report_state() -> None:
 
 current_app_hash = get_app_source_hash()
 previous_app_hash = st.session_state.get("_app_source_hash")
-if previous_app_hash and previous_app_hash != current_app_hash:
-    clear_old_report_state()
 st.session_state["_app_source_hash"] = current_app_hash
 
 # ── 日期與常數 ──────────────────────────────────────────────
@@ -999,7 +997,7 @@ with st.sidebar:
             "納入近 90 天國際學術期刊補充",
             value=False,
             key="include_research_supplement",
-            help="手動啟用後固定查近 90 天；只在正式報告最後新增「技術研究補充」，不計入新聞統計。",
+            help="手動啟用後固定查近 90 天；只在正式報告最後新增「國際學術期刊」，不計入新聞統計。",
         )
 
         st.markdown("**排程說明**")
@@ -1094,6 +1092,7 @@ def build_current_run_config() -> dict:
         },
         "fast_mode": fast_mode_enabled,
         "demo_cache_mode": demo_cache_mode_enabled,
+        "app_source_hash": current_app_hash,
     }
 
 
@@ -2936,6 +2935,19 @@ def _selected_report_sections() -> str:
     return "\n".join(lines) if lines else "無"
 
 
+def _section_number_for_index(index: int) -> str:
+    numerals = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
+    if 1 <= index <= len(numerals):
+        return numerals[index - 1]
+    return str(index)
+
+
+def research_section_heading(markdown: bool = False) -> str:
+    selected_main_count = sum(1 for category in ADVANCED_TYPES if category in selected_types)
+    heading = f"{_section_number_for_index(selected_main_count + 1)}、國際學術期刊"
+    return f"## {heading}" if markdown else heading
+
+
 def _selected_empty_section_rules() -> str:
     lines = [
         f"- {category}若無符合資料，請寫：「{EMPTY_TEXT_BY_TYPE[category]}」"
@@ -3694,6 +3706,7 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
     selected_sections = _selected_report_sections()
     selected_empty_rules = _selected_empty_section_rules()
     selected_stats = _selected_stats_template()
+    research_heading = research_section_heading(markdown=False)
     policy_rule = _policy_selection_rule()
     candidate_block = "\n\n".join(format_report_candidate(candidate) for candidate in selected_candidates)
     if not candidate_block:
@@ -3703,12 +3716,12 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
     journal_block = ""
     journal_input_section = ""
     if include_research_supplement:
-        journal_section_rule = """
+        journal_section_rule = f"""
 - 啟用研究補充：是。
 - 研究補充期間：固定近 90 天，且只允許 date_confidence=high、is_within_research_period=True 的研究。
-- 技術研究補充最多列 3 至 5 篇，不納入新聞統計，也不得混入技術新知、重大事故、營運政策、營運爭議或規範更新章節。
+- 「{research_heading}」最多列 3 至 5 篇，不納入新聞統計，也不得混入技術新知、重大事故、營運政策、營運爭議或規範更新章節。
 - 研究候選必須與捷運、都市軌道、軌道機電、智慧維運、數位分身、預測性維護、號誌、車輛、供電、AFC 或客流分析明確相關。
-- 若下方沒有研究候選，第六章請固定寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
+- 若下方沒有研究候選，請在「{research_heading}」固定寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
 """
         if journal_candidates:
             journal_block = "\n\n".join(
@@ -3745,7 +3758,7 @@ run_config：{json.dumps(current_run_config, ensure_ascii=False)}
 - 正式報告開頭只保留：標題、資料涵蓋期間、報導範圍。
 - 正式報告只輸出下列已勾選章節，不得輸出未勾選類型：
 {selected_sections}
-- 技術研究補充：{('啟用時於最後輸出「六、技術研究補充」' if include_research_supplement else '未啟用，不得輸出技術研究補充章節')}。
+- 國際學術期刊：{(f'啟用時於最後輸出「{research_heading}」' if include_research_supplement else '未啟用，不得輸出國際學術期刊章節')}。
 - 空章節文字只限已勾選類型：
 {selected_empty_rules}
 - 正式報告每則新聞請使用以下固定格式，不得自行增減欄位，不得新增「技術關鍵字」、可能影響系統、可參考作法、後續追蹤建議等欄位：
@@ -4196,6 +4209,18 @@ def normalize_report_statistics_line(text: str) -> str:
     return text.rstrip() + "\n\n" + stats_line
 
 
+def normalize_research_section_heading(text: str) -> str:
+    if not text or not include_research_supplement:
+        return text
+    heading = research_section_heading(markdown=True)
+    return re.sub(
+        r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:技術研究補充|國際學術期刊)\s*$",
+        heading,
+        text,
+        count=1,
+    )
+
+
 INTERNAL_REPORT_REPLACEMENTS = {
     "模型：MaiAgent 雲端 API": "",
     "候選資料指出": "資料顯示",
@@ -4606,13 +4631,14 @@ def sanitize_report_text(text: str) -> str:
     text = clean_internal_report_language(text)
     text = simplify_formal_report_format(text)
     if not include_research_supplement:
-        text = re.sub(r"(?ms)^#{0,3}\s*(?:六、)?技術研究補充.*?(?=^📊|^⏰|\Z)", "", text)
-        text = re.sub(r"(?m)^.*技術研究補充.*$", "", text)
+        text = re.sub(r"(?ms)^#{0,6}\s*(?:[一二三四五六七八九十]、)?(?:技術研究補充|國際學術期刊).*?(?=^#{0,6}\s*[一二三四五六七八九十]\s*、|^📊|^⏰|\Z)", "", text)
+        text = re.sub(r"(?m)^.*(?:技術研究補充|國際學術期刊).*$", "", text)
     text = strip_unselected_types_from_title(text)
     text = strip_unselected_report_sections(text)
     text = normalize_report_source_lines(text)
     text = strip_internal_report_fields(text)
     text = normalize_final_report_md(text)
+    text = normalize_research_section_heading(text)
     text = strip_internal_report_fields(text)
     return normalize_report_statistics_line(text)
 
@@ -4622,10 +4648,11 @@ def enforce_research_section(report_md: str, journal_candidates: list[dict]) -> 
         return report_md
     if journal_candidates:
         return report_md
-    fallback = "六、技術研究補充\n本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。"
-    if re.search(r"(?m)^#{0,3}\s*六、技術研究補充\s*$", report_md or ""):
+    heading = research_section_heading(markdown=True)
+    fallback = f"{heading}\n本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。"
+    if re.search(r"(?m)^#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:技術研究補充|國際學術期刊)\s*$", report_md or ""):
         return re.sub(
-            r"(?ms)^#{0,3}\s*六、技術研究補充\s*.*?(?=^📊|^⏰|\Z)",
+            r"(?ms)^#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:技術研究補充|國際學術期刊)\s*.*?(?=^📊|^⏰|\Z)",
             fallback + "\n\n",
             report_md,
             count=1,
@@ -4993,7 +5020,7 @@ def _builtin_demo_report_text() -> str:
     if include_research_supplement:
         sections.extend([
             "",
-            "六、技術研究補充",
+            research_section_heading(markdown=True),
             "本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。",
         ])
     sections.extend([
@@ -5474,12 +5501,16 @@ st.markdown("---")
 source_statuses = st.session_state.get("latest_source_statuses", [])
 display_run_config = st.session_state.get("latest_run_config", current_run_config)
 display_report_label = display_run_config.get("report_label", report_period_label)
+report_matches_current_app = (
+    not display_run_config.get("app_source_hash")
+    or display_run_config.get("app_source_hash") == current_app_hash
+)
 
 st.markdown(f'<div class="section-title">正式{display_report_label}</div>', unsafe_allow_html=True)
 
 report_stats = st.session_state.get("latest_report_stats", {})
 latest_report_md = st.session_state.get("latest_report_md", "")
-report_to_show = latest_report_md or st.session_state.get("latest_report", "")
+report_to_show = (latest_report_md or st.session_state.get("latest_report", "")) if report_matches_current_app else ""
 if report_to_show and not latest_report_md:
     report_to_show = normalize_final_report_md(report_to_show)
     st.session_state["latest_report_md"] = report_to_show
@@ -5520,6 +5551,8 @@ if report_to_show:
             st.button("📧 寄送目前報告", disabled=True, use_container_width=True)
             st.caption("請先產生報告。")
 else:
+    if not report_matches_current_app and st.session_state.get("latest_report_md"):
+        st.caption("程式已更新，上一版本報告已隱藏；請重新產生報告。")
     st.markdown(f"""
     <div class="warn-box">
     📭 尚無報告資料。請點擊上方「產生國際捷運 AI {report_period_label}」按鈕產生第一份報告。
