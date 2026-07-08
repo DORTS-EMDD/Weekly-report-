@@ -852,8 +852,7 @@ with st.sidebar:
     st.markdown(
         """
         <div class="sidebar-title">🚇 國際捷運 AI 週報</div>
-        <div class="sidebar-subtitle">臺北市政府捷運工程局｜機電系統設計處</div>
-        """,
+               """,
         unsafe_allow_html=True,
     )
 
