@@ -5606,14 +5606,21 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
 
 
 debug_info = st.session_state.get("latest_debug_info", {})
-if show_developer_info and debug_info:
-    debug_payload = build_developer_debug_payload(debug_info, report_stats, source_statuses)
-    debug_json = json.dumps(debug_payload, ensure_ascii=False, indent=2)
-    st.session_state["latest_debug_payload"] = debug_payload
-    st.download_button(
-        "下載 AI 校正資料 JSON",
-        data=debug_json.encode("utf-8"),
-        file_name=build_report_download_filename("developer_debug", "json", display_run_config),
-        mime="application/json",
-        use_container_width=True,
-    )
+if show_developer_info:
+    if debug_info:
+        debug_payload = build_developer_debug_payload(debug_info, report_stats, source_statuses)
+        st.session_state["latest_debug_payload"] = debug_payload
+    else:
+        debug_payload = st.session_state.get("latest_debug_payload")
+
+    if debug_payload:
+        debug_json = json.dumps(debug_payload, ensure_ascii=False, indent=2)
+        st.download_button(
+            "下載 AI 校正資料 JSON",
+            data=debug_json.encode("utf-8"),
+            file_name=build_report_download_filename("developer_debug", "json", display_run_config),
+            mime="application/json",
+            use_container_width=True,
+        )
+    else:
+        st.caption("請先產生報告，開發者 JSON 會在報告完成後提供下載。")
