@@ -466,6 +466,18 @@ REPORT_PERIOD_LABELS = {
     365: "年度回顧",
 }
 
+
+def get_research_supplement_lookback_days(days: int) -> int:
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 90
+    if days >= 365:
+        return 365
+    if days >= 180:
+        return 180
+    return 90
+
 ADVANCED_REGIONS = [
     "日本", "韓國", "新加坡", "香港", "澳洲", "英國", "法國", "德國",
     "美國", "加拿大", "西班牙", "荷蘭", "瑞士", "義大利", "瑞典",
@@ -1019,10 +1031,10 @@ with st.sidebar:
             help="啟用後，報告期間可選 90、180、365 天。",
         )
         include_research_supplement = st.checkbox(
-            "納入近 90 天國際學術期刊補充",
+            f"納入近 {get_research_supplement_lookback_days(int(lookback_days))} 天國際學術期刊補充",
             value=False,
             key="include_research_supplement",
-            help="手動啟用後固定查近 90 天；只在正式報告最後新增「國際學術期刊」，不計入新聞統計。",
+            help="7、14、30、90 天報告查近 90 天；180 天半年報查近 180 天；365 天年度回顧查近 365 天。只在正式報告最後新增「國際學術期刊」，不計入新聞統計。",
         )
 
         st.markdown("**排程說明**")
@@ -1059,6 +1071,9 @@ include_research_supplement = bool(
 fast_mode_enabled = False
 demo_cache_mode_enabled = bool(st.session_state.get("demo_cache_mode", False))
 report_period_label = REPORT_PERIOD_LABELS.get(lookback_int, "週報")
+research_supplement_lookback_days = get_research_supplement_lookback_days(lookback_int)
+research_supplement_start_date = today - datetime.timedelta(days=research_supplement_lookback_days)
+research_supplement_period_label = f"近 {research_supplement_lookback_days} 天"
 target_is_enforced = lookback_int in REPORT_TARGET_BY_DAYS
 min_report_items = REPORT_TARGET_BY_DAYS.get(lookback_int, 0)
 report_target_display = f"至少 {min_report_items} 則" if target_is_enforced else LONG_TERM_TARGET_LABELS.get(lookback_int, "趨勢回顧")
@@ -1111,8 +1126,8 @@ def build_current_run_config() -> dict:
         "include_standards": standards_enabled,
         "include_research_supplement": include_research_supplement,
         "research_supplement_period": {
-            "lookback_days": RESEARCH_SUPPLEMENT_LOOKBACK_DAYS,
-            "start_date": (today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)).isoformat(),
+            "lookback_days": research_supplement_lookback_days,
+            "start_date": research_supplement_start_date.isoformat(),
             "end_date": today.isoformat(),
         },
         "fast_mode": fast_mode_enabled,
@@ -2109,6 +2124,41 @@ def _status_record(
         "error_message": error_message,
         "fallback_used": fallback_used,
     }
+
+
+def build_source_health_summary(source_statuses: list[dict]) -> dict:
+    summary = {
+        "total": len(source_statuses or []),
+        "success": 0,
+        "no_articles": 0,
+        "non_urban_rail": 0,
+        "skipped_known_bad": 0,
+        "safety_excluded": 0,
+        "fallback_success": 0,
+        "fallback_used": 0,
+        "other": 0,
+    }
+    for item in source_statuses or []:
+        status = str(item.get("status", "") or "")
+        message = str(item.get("error_message", "") or "")
+        if item.get("fallback_used"):
+            summary["fallback_used"] += 1
+        if status in {"成功", "success"}:
+            summary["success"] += 1
+        elif status == "fallback 成功":
+            summary["success"] += 1
+            summary["fallback_success"] += 1
+        elif status in {"無文章", "no_articles"}:
+            summary["no_articles"] += 1
+        elif status in {"非都市軌道", "non_urban_rail"}:
+            summary["non_urban_rail"] += 1
+        elif status == "skipped_known_bad":
+            summary["skipped_known_bad"] += 1
+        elif status in {"被安全規則排除", "範圍排除", "safety_excluded"} or "安全排除" in message:
+            summary["safety_excluded"] += 1
+        else:
+            summary["other"] += 1
+    return summary
 
 
 def _method_for_url(url: str) -> str:
@@ -3211,6 +3261,33 @@ LOW_VALUE_OFFICIAL_NOTICE_TERMS = [
     "無障礙政策", "無障礙服務", "工程通知",
 ]
 
+NON_TECH_NEWS_EXCLUDE_TERMS = [
+    "extra train", "special train", "theme train", "themed train",
+    "character train", "stamp rally", "digital stamp", "passenger event",
+    "road maintenance", "road works", "road accident", "bus",
+    "autonomous bus", "self-driving bus", "tunnel boring machine farewell",
+    "tbm farewell", "mascot", "character",
+    "加開列車", "主題列車", "角色列車", "數位集章", "集章活動",
+    "一般旅客活動", "旅客活動", "道路維護", "道路施工", "道路事故",
+    "巴士", "公車", "自動駕駛巴士", "吉祥物", "角色",
+    "隧道鑽掘機告別", "潛盾機告別",
+]
+
+NON_ACCIDENT_CONTEXT_TERMS = [
+    "tunnel boring machine farewell", "tbm farewell", "road maintenance",
+    "road works", "road accident", "traffic accident", "strike date",
+    "strike dates", "strike notice", "罷工日期", "罷工日期公告",
+    "道路維護", "道路施工", "道路事故", "一般道路事故",
+    "隧道鑽掘機告別", "潛盾機告別",
+]
+
+URBAN_RAIL_INCIDENT_CONTEXT_TERMS = [
+    "metro", "subway", "underground", "tram", "light rail", "lrt", "mrt",
+    "urban rail", "station", "platform", "train", "track", "railcar",
+    "metro train", "subway train", "捷運", "地鐵", "都市軌道", "輕軌",
+    "車站", "月臺", "月台", "列車", "軌道", "軌道車輛",
+]
+
 GENERAL_RAIL_EXCLUDE_TERMS = [
     "lirr", "long island rail road", "commuter rail", "regional rail",
     "intercity rail", "amtrak", "national rail",
@@ -3262,12 +3339,16 @@ def _candidate_selection_text(candidate: dict) -> str:
     )
     return (
         f"{candidate.get('title', '')} {candidate.get('snippet', '')} "
-        f"{candidate.get('source', '')} {candidate.get('query', '')} "
+        f"{candidate.get('source', '')} "
         f"{candidate.get('url', '')} {candidate.get('source_href', '')} {paths}"
     )
 
 
 def _is_accident_signal_text(text: str) -> bool:
+    if _contains_any_term(text, NON_ACCIDENT_CONTEXT_TERMS):
+        return False
+    if not _contains_any_term(text, URBAN_RAIL_INCIDENT_CONTEXT_TERMS):
+        return False
     if _contains_any_term(text, SAFETY_INCIDENT_DETAIL_TERMS):
         return True
     equipment_terms = [
@@ -3281,11 +3362,15 @@ def _is_accident_signal_text(text: str) -> bool:
     return _contains_any_term(text, equipment_terms) and _contains_any_term(text, issue_terms)
 
 
+def _has_strong_technical_detail_text(text: str) -> bool:
+    return _contains_any_term(text, STRONG_TECHNICAL_DETAIL_TERMS)
+
+
 def _has_explicit_technical_system_detail(candidate: dict) -> bool:
     flags = set(candidate.get("candidate_flags", []) or [])
     if "technical_or_system_detail" in flags:
         return True
-    return _contains_any_term(_candidate_selection_text(candidate), TECH_NEWS_REQUIRED_TERMS)
+    return _has_strong_technical_detail_text(_candidate_selection_text(candidate))
 
 
 def _has_good_report_signal(candidate: dict) -> bool:
@@ -3294,7 +3379,7 @@ def _has_good_report_signal(candidate: dict) -> bool:
         return True
     text = _candidate_selection_text(candidate)
     return (
-        _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS)
+        _has_strong_technical_detail_text(text)
         or _is_accident_signal_text(text)
         or _contains_any_term(text, HIGH_VALUE_POLICY_TERMS)
     )
@@ -3324,7 +3409,10 @@ def _has_substantive_detail_for_low_value_notice(candidate: dict) -> bool:
 def _is_technical_news_selection_candidate(candidate: dict) -> bool:
     if candidate.get("classification") != "技術新知":
         return False
-    if _is_accident_signal_text(_candidate_selection_text(candidate)):
+    text = _candidate_selection_text(candidate)
+    if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS):
+        return False
+    if _is_accident_signal_text(text):
         return False
     if not _has_explicit_technical_system_detail(candidate):
         return False
@@ -3372,7 +3460,7 @@ def get_selection_output_range(days: int) -> str:
 
 
 def infer_preliminary_type(candidate: dict) -> str:
-    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')} {candidate.get('source', '')}"
+    text = _candidate_selection_text(candidate)
     if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
         return "規範更新"
     if _is_accident_signal_text(text):
@@ -3389,7 +3477,7 @@ def infer_preliminary_type(candidate: dict) -> str:
 
 
 def build_candidate_flags(candidate: dict) -> list[str]:
-    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('query', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
+    text = _candidate_selection_text(candidate)
     flags: list[str] = []
     information_issue = _information_quality_issue(candidate)
     if candidate.get("source_tier") == "A_official":
@@ -3414,7 +3502,7 @@ def build_candidate_flags(candidate: dict) -> list[str]:
 
     if _is_urban_rail_candidate(text, candidate.get("source", "")):
         flags.append("urban_rail")
-    if _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS):
+    if _has_strong_technical_detail_text(text):
         flags.append("technical_or_system_detail")
     if _is_accident_signal_text(text):
         flags.append("incident_or_safety_signal")
@@ -3438,7 +3526,7 @@ def build_candidate_flags(candidate: dict) -> list[str]:
 
 
 def score_news_candidate(candidate: dict) -> dict:
-    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('query', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
+    text = _candidate_selection_text(candidate)
     score = 50
     reasons: list[str] = []
     tier = candidate.get("source_tier", "C_media")
@@ -3488,7 +3576,7 @@ def score_news_candidate(candidate: dict) -> dict:
         score -= 30
         reasons.append("都市軌道關聯不足 -30")
 
-    if _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS):
+    if _has_strong_technical_detail_text(text):
         score += 15
         reasons.append("機電/系統技術訊號 +15")
     if _is_accident_signal_text(text):
@@ -3677,6 +3765,68 @@ def _candidate_system_theme(candidate: dict) -> str:
     return candidate.get("classification") or candidate.get("preliminary_type") or "未分類"
 
 
+EVENT_LOCATION_TERMS = [
+    "tokyo", "osaka", "seoul", "singapore", "hong kong", "sydney", "melbourne",
+    "london", "paris", "berlin", "munich", "new york", "washington", "chicago",
+    "toronto", "vancouver", "madrid", "barcelona", "amsterdam", "rotterdam",
+    "zurich", "milan", "rome", "stockholm", "vienna", "copenhagen", "oslo",
+    "東京", "大阪", "首爾", "新加坡", "香港", "雪梨", "悉尼", "墨爾本",
+    "倫敦", "巴黎", "柏林", "慕尼黑", "紐約", "華盛頓", "芝加哥",
+    "多倫多", "溫哥華", "馬德里", "巴塞隆納", "阿姆斯特丹", "鹿特丹",
+    "蘇黎世", "米蘭", "羅馬", "斯德哥爾摩", "維也納", "哥本哈根", "奧斯陸",
+]
+
+
+def _candidate_event_location(candidate: dict) -> str:
+    text = _candidate_selection_text(candidate).casefold()
+    for term in EVENT_LOCATION_TERMS:
+        if term.casefold() in text:
+            return term.casefold()
+    return str(candidate.get("region", "") or "").casefold()
+
+
+def _event_date_close(left: dict, right: dict, days: int = 3) -> bool:
+    left_date = _candidate_date_obj(left.get("date", ""))
+    right_date = _candidate_date_obj(right.get("date", ""))
+    if not left_date or not right_date:
+        return True
+    return abs((left_date - right_date).days) <= days
+
+
+def _event_similarity_text(candidate: dict) -> str:
+    text = _candidate_selection_text(candidate)
+    text = _strip_source_name_noise(text)
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"\b(20\d{2})[-/]\d{1,2}[-/]\d{1,2}\b", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.casefold().strip()
+
+
+def _is_same_report_event(candidate: dict, selected_item: dict) -> bool:
+    if candidate.get("classification") != selected_item.get("classification"):
+        return False
+    if candidate.get("region") and selected_item.get("region") and candidate.get("region") != selected_item.get("region"):
+        return False
+    if not _event_date_close(candidate, selected_item):
+        return False
+    if _candidate_system_theme(candidate) != _candidate_system_theme(selected_item):
+        return False
+    candidate_location = _candidate_event_location(candidate)
+    selected_location = _candidate_event_location(selected_item)
+    if candidate_location and selected_location and candidate_location == selected_location:
+        return True
+    similarity = difflib.SequenceMatcher(
+        None,
+        _event_similarity_text(candidate),
+        _event_similarity_text(selected_item),
+    ).ratio()
+    return similarity >= 0.62
+
+
+def _is_duplicate_selected_event(candidate: dict, selected: list[dict]) -> bool:
+    return any(_is_same_report_event(candidate, item) for item in selected)
+
+
 def _python_selection_sort_key(candidate: dict) -> tuple:
     return (
         -int(candidate.get("python_score", 0) or 0),
@@ -3723,7 +3873,10 @@ def _is_low_value_python_selection_candidate(candidate: dict) -> bool:
     score = int(candidate.get("python_score", 0) or 0)
     has_good_signal = _has_good_report_signal(candidate)
     has_technical_detail = _has_explicit_technical_system_detail(candidate)
+    text = _candidate_selection_text(candidate)
     if "general_rail_exclusion" in flags or _has_general_rail_exclusion(candidate):
+        return True
+    if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS) and not _has_substantive_detail_for_low_value_notice(candidate):
         return True
     if _has_procurement_list_notice(candidate):
         return True
@@ -3745,11 +3898,13 @@ def _is_strict_technical_candidate(candidate: dict) -> bool:
 
 
 def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict | None:
-    if not pool:
-        return None
-    candidate = min(pool, key=lambda item: _python_selection_dynamic_key(item, selected))
-    pool.remove(candidate)
-    return candidate
+    while pool:
+        candidate = min(pool, key=lambda item: _python_selection_dynamic_key(item, selected))
+        pool.remove(candidate)
+        if _is_duplicate_selected_event(candidate, selected):
+            continue
+        return candidate
+    return None
 
 
 def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
@@ -4048,6 +4203,7 @@ def format_report_candidate(candidate: dict) -> str:
         candidate.get("source", ""), candidate.get("url", ""), candidate.get("source_href", ""), candidate.get("source_tier", "")
     )
     prompt_item = {
+        "id": candidate.get("id", ""),
         "title": candidate.get("title", ""),
         "date": candidate.get("date", ""),
         "source_display": source_display,
@@ -4081,13 +4237,13 @@ def _has_explicit_full_date(date_text: str) -> bool:
 
 
 def _journal_priority(date_text: str) -> tuple[int, str]:
-    cutoff_date = today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)
+    cutoff_date = today - datetime.timedelta(days=research_supplement_lookback_days)
     date_obj = _candidate_date_obj(date_text)
     has_full_date = _has_explicit_full_date(date_text)
     if has_full_date and date_obj and cutoff_date <= date_obj <= today + datetime.timedelta(days=1):
-        return 0, "明確日期且符合近 90 天研究補充期間"
+        return 0, f"明確日期且符合{research_supplement_period_label}研究補充期間"
     if has_full_date and date_obj:
-        return 99, "明確日期不在近 90 天研究補充期間"
+        return 99, f"明確日期不在{research_supplement_period_label}研究補充期間"
     if date_obj and date_obj.year >= cutoff_date.year:
         return 1, "僅年份或日期不完整，降低優先度"
     return 2, "無明確發表日期，降低優先度"
@@ -4110,7 +4266,7 @@ def _research_date_info(result: dict, title: str, snippet: str) -> dict:
         value = result.get(key) or result.get(key.replace("_", ""))
         date_obj = _parse_full_research_date(str(value or ""))
         if date_obj:
-            cutoff_date = today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)
+            cutoff_date = today - datetime.timedelta(days=research_supplement_lookback_days)
             return {
                 "published_date": date_obj.isoformat(),
                 "date_confidence": "high",
@@ -4129,7 +4285,7 @@ def _research_date_info(result: dict, title: str, snippet: str) -> dict:
             continue
         date_obj = _parse_full_research_date(match.group(1))
         if date_obj:
-            cutoff_date = today - datetime.timedelta(days=RESEARCH_SUPPLEMENT_LOOKBACK_DAYS)
+            cutoff_date = today - datetime.timedelta(days=research_supplement_lookback_days)
             return {
                 "published_date": date_obj.isoformat(),
                 "date_confidence": "high",
@@ -4286,7 +4442,7 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
             journal_block = "無符合期間條件且具明確發表日期之研究候選。"
         journal_input_section = f"""
 ## 國際學術與技術研究補充候選
-研究補充已啟用；如有下方候選，請於最後輸出「{research_heading}」，最多 3 至 5 篇。若沒有候選，請寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
+研究補充已啟用；本次研究補充期間為{research_supplement_period_label}（{research_supplement_start_date.isoformat()} 至 {today.isoformat()}）。如有下方候選，請於最後輸出「{research_heading}」，最多 3 至 5 篇。若沒有候選，請寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
 {journal_block}
 """.strip()
     journal_input_text = f"\n\n{journal_input_section}" if journal_input_section else ""
@@ -4329,7 +4485,7 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 
 必要寫作提醒：
 - 只根據下方已入選新聞資料撰寫；正式報告只輸出已勾選章節，不得輸出未勾選類型。
-- 以下新聞已由 Python 規則完成選題，請勿再自行刪減、改選或新增新聞。
+- 以下新聞已由 Python 規則完成選題，共 {len(selected_candidates)} 則；請勿再自行刪減、改選或新增新聞，正式報告新聞數必須與已入選新聞資料一致。
 - 每則新聞標題必須翻成繁體中文正式標題；機構、車型或系統縮寫可保留。
 - 「事件摘要：」與「臺北捷運局啟示：」後方必須換行，不要把正文接在同一行；摘要與啟示不要條列。
 - 事件摘要請根據 title、snippet、source_display、date、region、preliminary_type 與 url 自行判斷撰寫。摘要重點為事件本身、都市軌道場景、涉及的機電系統或營運管理意義。若原始資料未提供細節，請採保守摘要，不得自行補述；除非該缺漏會影響工程判讀，否則不必特別寫「未提供」。不要每則都套用「資料來源未載明」或「原始資料未提供」。不得自行補原文沒有的數字、供應商、金額、GoA 等級、測試項目、車輛規格、事故原因或導入時程。
@@ -4862,12 +5018,25 @@ def normalize_electromechanical_system_value(value: str, context: str = "") -> s
     return value
 
 
-def _short_formal_sentence(text: str, limit: int = 100) -> str:
+def _short_formal_sentence(text: str, limit: int = 180) -> str:
     text = re.sub(r"^\s*[-•]\s*", "", text or "").strip()
     text = re.sub(r"^(可能影響系統|可參考作法|後續追蹤建議)\s*[：:]\s*", "", text)
     text = re.sub(r"\s+", " ", text).strip(" ；;，,")
     if len(text) > limit:
-        text = text[:limit].rstrip("，,；;。 ") + "。"
+        window = text[:limit]
+        cut_at = max(window.rfind(mark) for mark in ("。", "；", ";", "，", ","))
+        if cut_at >= max(60, limit // 2):
+            text = window[:cut_at + 1].rstrip("，,；; ")
+        else:
+            overflow_window = text[: min(len(text), limit + 80)]
+            next_sentence = min(
+                [idx for idx in (overflow_window.find(mark, limit) for mark in ("。", "；", ";")) if idx >= 0],
+                default=-1,
+            )
+            if next_sentence >= 0:
+                text = overflow_window[:next_sentence + 1].rstrip()
+            else:
+                text = window.rstrip("，,；;。 ") + "。"
     return text
 
 
@@ -5140,7 +5309,7 @@ def normalize_final_report_md(md: str) -> str:
             if field_text:
                 output.extend(["• 事件摘要：", field_text, ""])
         elif label == "臺北捷運局啟示":
-            insight = _short_formal_sentence(field_text, 100)
+            insight = _short_formal_sentence(field_text, 180)
             if insight:
                 output.extend(["• 臺北捷運局啟示：", insight, ""])
         elif label == "資料來源":
@@ -5201,6 +5370,104 @@ def enforce_research_section(report_md: str, journal_candidates: list[dict]) -> 
     if match:
         return (report_md[:match.start()].rstrip() + "\n\n" + fallback + "\n\n" + report_md[match.start():].lstrip()).strip()
     return (report_md.rstrip() + "\n\n" + fallback).strip()
+
+
+def _candidate_report_presence_keys(candidate: dict) -> list[str]:
+    source_url = _effective_source_url(candidate)
+    values = []
+    complete_source_url = _extract_complete_url(source_url)
+    if complete_source_url:
+        values.append(complete_source_url)
+    raw_url = candidate.get("url", "")
+    complete_raw_url = _extract_complete_url(raw_url)
+    if complete_raw_url and complete_raw_url not in values:
+        values.append(complete_raw_url)
+    values.append(candidate.get("title", ""))
+    return [str(value).strip() for value in values if str(value or "").strip()]
+
+
+def identify_dropped_selected_candidates(report_md: str, selected_candidates: list[dict]) -> list[dict]:
+    report_text = report_md or ""
+    dropped: list[dict] = []
+    for candidate in selected_candidates or []:
+        keys = _candidate_report_presence_keys(candidate)
+        title = candidate.get("title", "")
+        title_tokens = [
+            token for token in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]{4,}", title or "")
+            if len(token) >= 4
+        ]
+        present = any(key and key in report_text for key in keys)
+        if not present and title_tokens:
+            present = sum(1 for token in title_tokens[:5] if token in report_text) >= 2
+        if not present:
+            dropped.append(candidate)
+    return dropped
+
+
+def _fallback_system_value_for_candidate(candidate: dict) -> str:
+    theme = _candidate_system_theme(candidate)
+    if theme and theme != "未分類":
+        return theme
+    classification = candidate.get("classification") or candidate.get("preliminary_type", "")
+    if classification == "重大事故":
+        return "營運安全、設備監測與應變管理"
+    if classification == "營運政策":
+        return "營運管理、旅客資訊與車站設備"
+    if classification == "營運爭議":
+        return "營運管理與風險溝通"
+    if classification == "規範更新":
+        return "規範、系統安全與驗證"
+    return "未明確載明機電系統"
+
+
+def _fallback_report_item_for_candidate(candidate: dict) -> str:
+    category = candidate.get("classification") or candidate.get("preliminary_type") or "技術新知"
+    title = candidate.get("title", "") or "國際捷運案例"
+    if _looks_like_english_title(title):
+        title = chinese_fallback_title(category, title)
+    date_text = _normalize_report_date_text(candidate.get("date", "")) if candidate.get("date") else "日期未知"
+    region = candidate.get("region", "未判定")
+    source_url = _effective_source_url(candidate)
+    source_display = candidate.get("source_display") or source_label_for_report(
+        candidate.get("source", ""), candidate.get("url", ""), candidate.get("source_href", ""), candidate.get("source_tier", "")
+    )
+    snippet = _short_formal_sentence(candidate.get("snippet", "") or candidate.get("title", ""), 260)
+    insight = _short_formal_sentence(
+        "本案由 Python 規則選題保守補回；後續可追蹤原始來源，確認其對系統整合、維修管理、營運安全或資料治理之具體影響。",
+        220,
+    )
+    return "\n".join([
+        f"🔹 [{category}] {title}",
+        "",
+        f"• 發布/事件日期：{date_text}",
+        "",
+        f"• 國家/地區：{region}",
+        "",
+        f"• 相關機電系統：{_fallback_system_value_for_candidate(candidate)}",
+        "",
+        "• 事件摘要：",
+        snippet,
+        "",
+        "• 臺北捷運局啟示：",
+        insight,
+        "",
+        normalize_source_line(f"• 資料來源：{source_display}，{date_text}，{source_url or candidate.get('source_domain', '')}"),
+        "",
+        "---",
+    ])
+
+
+def restore_missing_selected_report_items(report_md: str, selected_candidates: list[dict]) -> tuple[str, list[dict]]:
+    dropped = identify_dropped_selected_candidates(report_md, selected_candidates)
+    if not dropped:
+        return report_md, []
+    additions = "\n\n".join(_fallback_report_item_for_candidate(candidate) for candidate in dropped)
+    match = re.search(r"(?m)^📊", report_md or "")
+    if match:
+        restored = report_md[:match.start()].rstrip() + "\n\n" + additions + "\n\n" + report_md[match.start():].lstrip()
+    else:
+        restored = (report_md or "").rstrip() + "\n\n" + additions
+    return normalize_report_statistics_line(normalize_final_report_md(restored)), dropped
 
 
 def compact_report_line_for_pdf(line: str) -> str:
@@ -5693,6 +5960,7 @@ if generate_btn:
                 "error_message": "展覽快速版啟用，未執行 RSS、Google News、DDGS、MaiAgent、規範查詢或學術查詢",
                 "fallback_used": False,
             }]
+            source_health_summary = build_source_health_summary(source_statuses)
             report_stats = {
                 "raw_count": 0,
                 "deduped_count": 0,
@@ -5713,10 +5981,12 @@ if generate_btn:
                 "elapsed_seconds_rss": 0.0,
                 "elapsed_seconds_ddgs": 0.0,
                 "elapsed_seconds_candidate_pool": 0.0,
+                "elapsed_seconds_journal": 0.0,
                 "elapsed_seconds_selection": 0.0,
                 "elapsed_seconds_python_selection": 0.0,
                 "elapsed_seconds_report": 0.0,
                 "elapsed_seconds_pdf": 0.0,
+                "source_health_summary": source_health_summary,
                 "selection_method": "demo_cache",
                 "demo_cache_mode": True,
                 "include_research_supplement": include_research_supplement,
@@ -5749,6 +6019,7 @@ if generate_btn:
                 "dedupe_stats": {},
                 "exclusion_stats": {},
                 "source_statuses": source_statuses,
+                "source_health_summary": source_health_summary,
                 "report_stats": report_stats,
                 "long_term_coverage": {"long_term_coverage_warning": False, "reason": ""},
                 "demo_meta": demo_meta,
@@ -5774,6 +6045,7 @@ if generate_btn:
                 },
                 "stats": report_stats,
                 "source_health": source_statuses,
+                "source_health_summary": source_health_summary,
                 "final_report_md": report_text,
             }
 
@@ -5838,6 +6110,7 @@ if generate_btn:
                 "elapsed_seconds_rss": 0.0,
                 "elapsed_seconds_ddgs": 0.0,
                 "elapsed_seconds_candidate_pool": 0.0,
+                "elapsed_seconds_journal": 0.0,
                 "elapsed_seconds_selection": 0.0,
                 "elapsed_seconds_python_selection": 0.0,
                 "elapsed_seconds_report": 0.0,
@@ -5861,6 +6134,7 @@ if generate_btn:
                 combined_sources, status_text=status_text, return_status=True
             )
             source_statuses = skipped_source_statuses + fetched_source_statuses
+            source_health_summary = build_source_health_summary(source_statuses)
             timings["elapsed_seconds_rss"] = round(time.perf_counter() - stage_start, 2)
             progress_bar.progress(0.25)
             st.session_state["latest_source_statuses"] = source_statuses
@@ -5904,8 +6178,10 @@ if generate_btn:
             journal_candidates: list[dict] = []
             journal_statuses: list[dict] = []
             journal_excluded_candidates: list[dict] = []
+            stage_start = time.perf_counter()
             if include_research_supplement:
                 journal_candidates, journal_statuses, journal_excluded_candidates = collect_journal_candidates(status_text)
+            timings["elapsed_seconds_journal"] = round(time.perf_counter() - stage_start, 2)
             progress_bar.progress(0.76)
 
             # Step 3：MaiAgent 第二階段正式報告
@@ -5925,6 +6201,9 @@ if generate_btn:
             report_text = normalize_final_report_md(report_text)
             report_text = normalize_report_statistics_line(report_text)
             report_text = insert_annual_observation_section(report_text, selected_candidates)
+            report_text, dropped_selected_candidates = restore_missing_selected_report_items(report_text, selected_candidates)
+            dropped_selected_ids = [int(item.get("id", 0) or 0) for item in dropped_selected_candidates]
+            dropped_selected_titles = [item.get("title", "") for item in dropped_selected_candidates]
             formal_count = count_report_items(report_text)
             category_counts = count_report_items_by_category(report_text)
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
@@ -5959,10 +6238,14 @@ if generate_btn:
                 "elapsed_seconds_rss": timings["elapsed_seconds_rss"],
                 "elapsed_seconds_ddgs": timings["elapsed_seconds_ddgs"],
                 "elapsed_seconds_candidate_pool": timings["elapsed_seconds_candidate_pool"],
+                "elapsed_seconds_journal": timings["elapsed_seconds_journal"],
                 "elapsed_seconds_selection": timings["elapsed_seconds_selection"],
                 "elapsed_seconds_python_selection": timings["elapsed_seconds_python_selection"],
                 "elapsed_seconds_report": timings["elapsed_seconds_report"],
                 "elapsed_seconds_pdf": timings["elapsed_seconds_pdf"],
+                "source_health_summary": source_health_summary,
+                "dropped_selected_ids": dropped_selected_ids,
+                "dropped_selected_titles": dropped_selected_titles,
                 "selection_method": "python_score_rules",
                 "long_term_coverage": long_term_coverage,
                 "demo_cache_mode": False,
@@ -6006,6 +6289,9 @@ if generate_btn:
                 "dedupe_stats": candidate_pool["dedupe_stats"],
                 "exclusion_stats": candidate_pool["exclusion_stats"],
                 "source_statuses": source_statuses,
+                "source_health_summary": source_health_summary,
+                "dropped_selected_ids": dropped_selected_ids,
+                "dropped_selected_titles": dropped_selected_titles,
                 "report_stats": report_stats,
                 "long_term_coverage": long_term_coverage,
             }
@@ -6161,6 +6447,12 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
         or current_run_config
     )
     long_term_coverage = debug_info.get("long_term_coverage") or latest_stats.get("long_term_coverage") or {}
+    source_health = debug_info.get("source_statuses", source_statuses) if debug_info else (source_statuses or [])
+    source_health_summary = (
+        debug_info.get("source_health_summary")
+        or latest_stats.get("source_health_summary")
+        or build_source_health_summary(source_health)
+    )
     return _json_safe({
         "run_info": {
             "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -6203,23 +6495,30 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "elapsed_seconds_rss": latest_stats.get("elapsed_seconds_rss", 0),
             "elapsed_seconds_ddgs": latest_stats.get("elapsed_seconds_ddgs", 0),
             "elapsed_seconds_candidate_pool": latest_stats.get("elapsed_seconds_candidate_pool", 0),
+            "elapsed_seconds_journal": latest_stats.get("elapsed_seconds_journal", 0),
             "elapsed_seconds_selection": latest_stats.get("elapsed_seconds_selection", 0),
             "elapsed_seconds_python_selection": latest_stats.get("elapsed_seconds_python_selection", 0),
             "elapsed_seconds_report": latest_stats.get("elapsed_seconds_report", 0),
             "elapsed_seconds_pdf": latest_stats.get("elapsed_seconds_pdf", 0),
+            "source_health_summary": source_health_summary,
+            "dropped_selected_ids": latest_stats.get("dropped_selected_ids", debug_info.get("dropped_selected_ids", [])),
+            "dropped_selected_titles": latest_stats.get("dropped_selected_titles", debug_info.get("dropped_selected_titles", [])),
             "selection_method": latest_stats.get("selection_method", debug_info.get("selection_method", "")),
             "demo_cache_mode": latest_stats.get("demo_cache_mode", run_config.get("demo_cache_mode", False)),
             "include_research_supplement": latest_stats.get("include_research_supplement", run_config.get("include_research_supplement", False)),
             "research_supplement_period": latest_stats.get("research_supplement_period", run_config.get("research_supplement_period", {})),
         },
         "selection_method": latest_stats.get("selection_method", debug_info.get("selection_method", "")),
-        "source_health": debug_info.get("source_statuses", source_statuses) if debug_info else (source_statuses or []),
+        "source_health_summary": source_health_summary,
+        "source_health": source_health,
         "raw_candidates": debug_info.get("raw_candidates", []) if debug_info else [],
         "deduped_candidates": debug_info.get("deduped_candidates", []) if debug_info else [],
         "filtered_candidates": debug_info.get("filtered_candidates", []) if debug_info else [],
         "candidate_cards": debug_info.get("candidate_cards", []) if debug_info else [],
         "selected_candidates": debug_info.get("selected_candidates", []) if debug_info else [],
         "selected_ids": debug_info.get("selected_ids", []) if debug_info else [],
+        "dropped_selected_ids": latest_stats.get("dropped_selected_ids", debug_info.get("dropped_selected_ids", [])),
+        "dropped_selected_titles": latest_stats.get("dropped_selected_titles", debug_info.get("dropped_selected_titles", [])),
         "enriched_selected_candidates": debug_info.get("enriched_selected_candidates", debug_info.get("selected_candidates", [])) if debug_info else [],
         "excluded_candidates": debug_info.get("excluded_candidates", []) if debug_info else [],
         "exclusion_stats": debug_info.get("exclusion_stats", {}) if debug_info else {},
