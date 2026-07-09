@@ -589,10 +589,12 @@ NON_URBAN_TRANSPORT_TERMS = [
     "amtrak", "korail", "network rail", "east midlands railway", "regiojet",
     "battery train", "hybrid train", "diesel-hybrid", "gsm-r outage",
     "bus", "coach", "highway", "intercity bus", "long-distance coach", "brt",
+    "airport", "aviation", "lax", "airport people mover", "terminal people mover",
+    "airport transit", "airport shuttle", "terminal shuttle",
     "高速鐵路", "高速铁路", "高鐵", "高铁", "新幹線", "新干线",
     "台鐵", "臺鐵", "台湾鉄路", "台灣鐵路", "在来線", "特急",
     "貨運", "貨物列車", "客運鐵路", "城際鐵路", "區域鐵路", "通勤鐵路",
-    "公路", "高速公路", "長途巴士", "客運",
+    "公路", "高速公路", "長途巴士", "客運", "機場", "航空", "航廈", "航站",
     "高速鉄道", "高速バス", "バス", "貨物鉄道", "在来線",
 ]
 
@@ -606,6 +608,12 @@ NON_URBAN_QUERY_EXCLUSIONS = (
     '-intercity -"regional rail" -"commuter rail" -freight -locomotive '
     '-Amtrak -Korail -RegioJet -bus -coach -highway'
 )
+
+AIRPORT_PEOPLE_MOVER_EXCLUDE_TERMS = [
+    "airport", "aviation", "lax", "airport people mover", "terminal people mover",
+    "airport transit", "airport shuttle", "terminal shuttle",
+    "機場", "航空", "航廈", "航站",
+]
 
 TECH_NEWS_REQUIRED_TERMS = [
     "cbtc", "goa4", "driverless", "unattended train operation", "automatic train operation",
@@ -1828,6 +1836,47 @@ def _is_standard_update_candidate(text: str, require_url: bool = True) -> bool:
     return has_standard and has_update_action
 
 
+def _candidate_region_text(candidate: dict) -> str:
+    return " ".join(str(candidate.get(key, "") or "") for key in (
+        "region", "title", "snippet", "source", "query", "url", "source_href", "source_domain"
+    ))
+
+
+def _canonical_candidate_region(candidate: dict) -> str:
+    region = str(candidate.get("region", "") or "").strip()
+    guessed = guess_region_from_text(_candidate_region_text(candidate))
+    if guessed == "巴西":
+        region = "巴西"
+    elif not region or region in {"未判定", "國際", "國際研究"}:
+        region = guessed
+    if region in {"Brazil", "Brasil", "São Paulo", "Sao Paulo", "聖保羅", "圣保罗"}:
+        region = "巴西"
+    if not region:
+        region = "未判定"
+    candidate["region"] = region
+    return region
+
+
+def _is_allowed_international_candidate(candidate: dict, text: str, looks_like_standard: bool) -> bool:
+    source = candidate.get("source", "")
+    host = _original_source_domain(
+        source,
+        candidate.get("url", ""),
+        candidate.get("source_href", ""),
+        candidate.get("query", ""),
+    )
+    if looks_like_standard or _is_standards_source(source):
+        return True
+    if host and _host_matches(host, "uitp.org"):
+        return True
+    international_terms = [
+        "international report", "global report", "cross-national", "multinational",
+        "global survey", "benchmark report", "technical report",
+        "國際報告", "全球報告", "跨國", "多國", "技術報告",
+    ]
+    return _contains_any_term(text, international_terms) and _contains_any_term(text, URBAN_RAIL_MODE_TERMS)
+
+
 def _is_urban_rail_candidate(text: str, source_name: str = "") -> bool:
     """正式新聞候選須直接連到都會軌道；標準更新另由規範規則處理。"""
     if _is_standards_source(source_name):
@@ -2557,6 +2606,7 @@ def guess_region_from_text(text: str) -> str:
         "美國": ["united states", "new york", "washington", "chicago", "wmata", "cta", "mta", "美國", "美国"],
         "加拿大": ["canada", "toronto", "vancouver", "ttc", "skytrain", "加拿大"],
         "西班牙": ["spain", "madrid", "barcelona", "西班牙"],
+        "巴西": ["brazil", "brasil", "são paulo", "sao paulo", "sao-paulo", "saopaulo", "巴西", "聖保羅", "圣保罗"],
         "荷蘭": ["netherlands", "amsterdam", "rotterdam", "荷蘭", "荷兰"],
         "瑞士": ["switzerland", "zurich", "lausanne", "瑞士"],
         "義大利": ["italy", "milan", "rome", "turin", "義大利", "意大利"],
@@ -2781,6 +2831,7 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
     snippet = candidate.get("snippet", "")
     text = f"{title} {snippet} {source} {url} {source_href} {candidate.get('query', '')}"
     text_lower = text.casefold()
+    candidate_region = _canonical_candidate_region(candidate)
 
     if not url:
         return False, "沒有 URL"
@@ -2800,6 +2851,9 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
 
     if _contains_taiwan_reference(text):
         return False, "國內新聞排除"
+
+    if _contains_any_term(text, AIRPORT_PEOPLE_MOVER_EXCLUDE_TERMS):
+        return False, "機場/航空 people mover 排除"
 
     if any(term.casefold() in text_lower for term in LOW_QUALITY_CONTENT_TERMS):
         return False, "旅遊/SEO/內容農場"
@@ -2839,6 +2893,15 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
         if not _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
             return False, "規範更新條件不足"
         return True, ""
+
+    if not is_global_scope:
+        if candidate_region not in active_regions:
+            if candidate_region in {"國際", "國際研究", "未判定"} and _is_allowed_international_candidate(candidate, text, looks_like_standard):
+                candidate["region"] = "國際"
+            else:
+                return False, "國家/地區不在指定範圍"
+    elif candidate_region in {"國際", "國際研究"} and not _is_allowed_international_candidate(candidate, text, looks_like_standard):
+        candidate["region"] = "未判定"
 
     if not _is_urban_rail_candidate(text, source):
         return False, "非捷運/都市軌道"
@@ -2935,6 +2998,89 @@ def build_long_term_coverage_warning(candidates: list[dict]) -> dict:
         "earliest_candidate_date": earliest.isoformat(),
         "expected_start": expected_start.isoformat(),
     }
+
+
+def _unique_limited(values: list[str], limit: int = 5) -> list[str]:
+    output: list[str] = []
+    for value in values:
+        cleaned = str(value or "").strip()
+        if cleaned and cleaned not in output:
+            output.append(cleaned)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _annual_observation_dates_are_recent(candidates: list[dict]) -> bool:
+    date_objs = [
+        date_obj for date_obj in (_candidate_date_obj(candidate.get("date", "")) for candidate in candidates or [])
+        if date_obj
+    ]
+    if not date_objs:
+        return False
+    return min(date_objs) > today - datetime.timedelta(days=60)
+
+
+def _annual_observation_themes(candidates: list[dict]) -> list[str]:
+    theme_terms = [
+        ("號誌與列車控制", ["cbtc", "signalling", "signaling", "signal", "train control", "號誌", "信號"]),
+        ("自動化與無人駕駛", ["driverless", "automation", "automated", "unattended train", "自動", "無人"]),
+        ("車輛與車隊更新", ["rolling stock", "fleet", "trainset", "new train", "車輛", "列車"]),
+        ("月臺門與車站設備", ["platform screen door", "platform doors", "psd", "elevator", "escalator", "月臺門", "月台門", "電梯", "電扶梯"]),
+        ("供電與能源管理", ["power supply", "traction power", "substation", "third rail", "energy", "供電", "牽引", "變電", "能源"]),
+        ("通訊、資安與資料治理", ["communications", "telecom", "radio", "5g", "lte", "cyber", "data", "通訊", "資安", "資料"]),
+        ("維修監測與影像分析", ["maintenance", "monitoring", "condition monitoring", "video", "camera", "ai", "維修", "監測", "影像", "AI"]),
+        ("AFC 與票務系統", ["afc", "ticketing", "fare gate", "fare", "票務", "票閘", "票價"]),
+    ]
+    combined = " ".join(
+        f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')}"
+        for candidate in candidates or []
+    )
+    return [label for label, terms in theme_terms if _contains_any_term(combined, terms)]
+
+
+def build_annual_observation_section(selected_candidates: list[dict]) -> str:
+    if lookback_int != 365:
+        return ""
+    candidates = selected_candidates or []
+    if not candidates:
+        return "## 年度觀察重點\n本年度回顧未取得可供歸納的已入選新聞，正式報告以下列已輸出章節為準。"
+
+    candidate_regions = [_canonical_candidate_region(dict(candidate)) for candidate in candidates]
+    regions = _unique_limited([
+        region for region in candidate_regions if region not in {"未判定", "國際研究"}
+    ])
+    categories = [
+        category for category in ADVANCED_TYPES
+        if any((candidate.get("classification") or candidate.get("preliminary_type")) == category for candidate in candidates)
+    ]
+    themes = _unique_limited(_annual_observation_themes(candidates), 4)
+
+    region_text = "、".join(regions) if regions else "已入選新聞所載地區"
+    category_text = "、".join(categories) if categories else "已入選新聞類型"
+    sentences = [
+        f"本年度回顧依已入選新聞整理，案例主要分布於{region_text}，新聞類型以{category_text}為主。"
+    ]
+    if themes:
+        sentences.append(f"從入選標題與摘要可見，觀察重點集中在{'、'.join(themes)}等都市軌道議題。")
+    if _annual_observation_dates_are_recent(candidates):
+        sentences.append("本年度回顧係依系統取得之候選資料整理，部分來源回傳資料集中於近期，故本報告以具明確日期與都市軌道關聯之案例為主。")
+    return "## 年度觀察重點\n" + "".join(sentences)
+
+
+def insert_annual_observation_section(report_md: str, selected_candidates: list[dict]) -> str:
+    if lookback_int != 365 or "年度觀察重點" in (report_md or ""):
+        return report_md
+    section = build_annual_observation_section(selected_candidates)
+    if not section:
+        return report_md
+    lines = (report_md or "").splitlines()
+    insert_idx = 1 if lines and lines[0].lstrip().startswith("#") else 0
+    while insert_idx < len(lines) and (not lines[insert_idx].strip() or lines[insert_idx].lstrip().startswith(">")):
+        insert_idx += 1
+    before = "\n".join(lines[:insert_idx]).rstrip()
+    after = "\n".join(lines[insert_idx:]).lstrip()
+    return f"{before}\n\n{section}\n\n{after}".strip()
 
 
 def format_selection_candidate(candidate: dict) -> str:
@@ -3968,7 +4114,10 @@ def _extract_domain_hint(text: str) -> str:
 
 def _normalize_report_date_text(text: str) -> str:
     text = text or ""
-    match = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", text)
+    match = re.search(
+        r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s]\d{1,2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?",
+        text,
+    )
     if not match:
         match = re.search(r"(20\d{2})年\s*(\d{1,2})月\s*(\d{1,2})日", text)
     if match:
@@ -3990,13 +4139,20 @@ def _clean_source_label(content: str, url: str, domain: str) -> str:
     label = re.sub(r"https?://[^\s\)\]）＞>，,；;。]+", "", label)
     if domain:
         label = re.sub(re.escape(domain), "", label, flags=re.IGNORECASE)
-    label = re.sub(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", "", label)
+    label = re.sub(
+        r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}(?:[T\s]\d{1,2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?",
+        "",
+        label,
+    )
     label = re.sub(r"20\d{2}年\s*\d{1,2}月\s*\d{1,2}日", "", label)
+    label = re.sub(r"(資料來源未明確辨識|日期未知)", "", label)
     label = re.sub(r"來源連結\s*[（(][^）)]*[）)]", "", label)
     label = re.sub(r"原始候選資料未提供完整\s*URL", "", label, flags=re.IGNORECASE)
     label = re.sub(r"未提供完整\s*URL", "", label, flags=re.IGNORECASE)
     label = re.sub(r"Google\s*News.*?(?:代理|proxy|來源)?", "", label, flags=re.IGNORECASE)
+    label = label.replace("，。", "，").replace("。 ", " ")
     label = re.sub(r"[（(]\s*[）)]", "", label)
+    label = re.sub(r"[，,。；;：:]+\s*", " ", label)
     label = re.sub(r"\s+", " ", label)
     label = label.strip(" ：:;；,，。-（）()[]【】")
     if label.casefold() in {"http", "https", "google news", url.casefold(), domain.casefold()}:
@@ -4278,6 +4434,11 @@ def normalize_electromechanical_system_line(line: str) -> str:
 def normalize_electromechanical_system_value(value: str, context: str = "") -> str:
     value = (value or "").strip()
     context_without_value = (context or "").replace(value, "")
+    if "未明確載明機電系統" in value:
+        concrete_value = value.replace("未明確載明機電系統", "")
+        concrete_value = re.sub(r"[、,\s]+", "、", concrete_value).strip("、 ，,")
+        if concrete_value:
+            value = concrete_value
     if "資通訊與資安" in value and not _contains_any_term(context_without_value, ICT_SECURITY_CONTEXT_TERMS):
         if _contains_any_term(context_without_value, WORK_ZONE_MONITORING_TERMS):
             value = value.replace("資通訊與資安", "維修安全監測設備")
@@ -5349,6 +5510,7 @@ if generate_btn:
             report_text = enforce_research_section(report_text, journal_candidates)
             report_text = normalize_final_report_md(report_text)
             report_text = normalize_report_statistics_line(report_text)
+            report_text = insert_annual_observation_section(report_text, selected_candidates)
             formal_count = count_report_items(report_text)
             category_counts = count_report_items_by_category(report_text)
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
