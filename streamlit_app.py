@@ -624,11 +624,13 @@ TECH_NEWS_REQUIRED_TERMS = [
     "data", "monitoring", "condition monitoring", "real-time", "digital", "asset management",
     "depot", "maintenance", "workshop", "afc", "fare gate", "ticketing", "elevator",
     "escalator", "system integration", "testing", "commissioning", "trial run",
+    "api", "data governance", "ai image analysis", "video analytics", "system verification",
     "自動運転", "無人運転", "ワンマン運転", "信号", "ホームドア", "車両", "電力",
     "変電所", "通信", "保守", "検査", "試験", "システム",
     "自動駕駛", "無人駕駛", "單人駕駛", "號誌", "信號", "月臺門", "月台門",
     "車輛", "列車", "供電", "牽引", "變電站", "通訊", "資安", "即時監控",
-    "維修", "機廠", "測試", "試運轉", "系統整合",
+    "維修", "機廠", "測試", "試運轉", "系統整合", "列控", "資料治理",
+    "AI 影像分析", "影像分析", "測試驗證",
 ]
 
 TECH_NEWS_SOFT_EXCLUDE_TERMS = [
@@ -3154,8 +3156,14 @@ LOW_VALUE_POLICY_TERMS = [
     "RouteNumber", "route number", "minor delay", "detour", "service alert",
     "trip planner", "schedule change", "planned service change",
     "bus replacement", "shuttle bus", "customer notice", "service update",
-    "temporary stop closure",
+    "temporary stop closure", "take the ttc", "route information", "public preview",
+    "fare table", "game day", "event traffic", "escalator guide", "escalator information",
+    "station entrance", "station access information", "accessibility policy",
+    "accessibility service", "barrier-free", "construction work",
     "搭乘資訊", "假日服務", "週末服務", "服務提醒", "旅客資訊更新",
+    "活動搭乘", "旅客資訊", "路線資訊", "票價表", "球賽", "活動交通",
+    "電扶梯導引", "電扶梯資訊", "出入口資訊", "車站出入口",
+    "無障礙政策", "無障礙服務", "施工通知", "工程通知",
 ]
 HIGH_VALUE_POLICY_TERMS = [
     "fare", "afc", "ticketing", "headway", "special train", "extra train",
@@ -3173,8 +3181,66 @@ HIGH_VALUE_POLICY_TERMS = [
 ACCIDENT_SIGNAL_TERMS = [
     "derailment", "collision", "fire", "smoke", "power outage", "signal failure",
     "service suspension", "disruption", "platform screen door", "train door",
+    "death", "fatal", "killed", "injury", "injured", "crash", "hit", "rammed",
+    "suspended", "heat damage", "damage", "barrier", "platform barrier",
+    "entgleist", "Verletzte", "Unfall", "Zusammenstoß",
     "出軌", "脫軌", "追撞", "火災", "冒煙", "停駛", "供電異常", "號誌異常",
-    "通訊異常", "月臺門", "車門異常",
+    "通訊異常", "月臺門", "車門異常", "死亡", "受傷", "撞擊", "營運中斷",
+    "月臺屏障", "設備損壞",
+]
+
+SAFETY_INCIDENT_DETAIL_TERMS = [
+    "derailment", "collision", "death", "fatal", "killed", "injury", "injured",
+    "crash", "hit", "rammed", "disruption", "suspended", "heat damage",
+    "damage", "platform barrier", "entgleist", "Verletzte", "Unfall",
+    "Zusammenstoß", "死亡", "受傷", "撞擊", "出軌", "脫軌", "營運中斷",
+    "停駛", "月臺屏障", "設備損壞",
+]
+
+LOW_VALUE_OFFICIAL_NOTICE_TERMS = [
+    "construction notice", "contract documents holders list", "bid number",
+    "open date", "take the ttc", "match", "stadium", "fireworks",
+    "event service", "public preview", "route information", "travel information",
+    "service advisory", "platform ilaa", "symbol character", "mascot",
+    "character", "fare table", "game day", "event traffic", "escalator guide",
+    "escalator information", "station entrance", "station access information",
+    "accessibility policy", "accessibility service", "barrier-free", "construction work",
+    "活動搭乘", "花火大會", "加開列車", "觀賽", "吉祥物", "角色",
+    "標案文件持有人", "施工通知", "旅客資訊", "路線資訊", "票價表",
+    "球賽", "活動交通", "電扶梯導引", "電扶梯資訊", "出入口資訊", "車站出入口",
+    "無障礙政策", "無障礙服務", "工程通知",
+]
+
+GENERAL_RAIL_EXCLUDE_TERMS = [
+    "lirr", "long island rail road", "commuter rail", "regional rail",
+    "intercity rail", "amtrak", "national rail",
+]
+
+PROCUREMENT_LIST_NOTICE_TERMS = [
+    "contract documents holders list", "bid number", "open date", "標案文件持有人",
+]
+
+SUBSTANTIVE_POLICY_DETAIL_TERMS = [
+    "headway", "capacity", "crowd control", "station control",
+    "passenger flow control", "afc", "ticketing", "fare gate",
+    "system conversion", "asset renewal", "engineering works",
+    "signal testing", "system testing", "station equipment", "equipment upgrade",
+    "班距", "容量", "人流管制", "車站管制", "旅客流量", "AFC", "票務系統",
+    "票閘", "系統轉換", "資產更新", "號誌測試", "系統測試", "車站設備",
+    "設備更新", "營運規劃",
+]
+
+STRONG_TECHNICAL_DETAIL_TERMS = [
+    "cbtc", "train control", "signalling", "signaling", "signal system",
+    "rolling stock", "trainset", "power supply", "traction power", "substation",
+    "communications", "telecom", "cybersecurity", "api", "data governance",
+    "platform screen door", "platform doors", "psd", "afc", "depot",
+    "maintenance", "condition monitoring", "monitoring equipment",
+    "video analytics", "ai image analysis", "system integration", "testing",
+    "commissioning", "system verification",
+    "號誌", "信號", "列控", "車輛", "供電", "牽引", "變電站", "通訊",
+    "資安", "資料治理", "月臺門", "月台門", "票務系統", "機廠", "維修監測",
+    "AI 影像分析", "影像分析", "系統整合", "測試驗證",
 ]
 
 WORK_ZONE_MONITORING_TERMS = [
@@ -3187,6 +3253,84 @@ WORK_ZONE_TECH_DETAIL_TERMS = [
     "backend platform", "communication", "network", "感測", "攝影", "影像",
     "監測設備", "自動化監測", "後端平台", "通訊", "網路",
 ]
+
+
+def _candidate_selection_text(candidate: dict) -> str:
+    paths = " ".join(
+        urlparse(candidate.get(key, "") or "").path.replace("/", " ")
+        for key in ("url", "source_href")
+    )
+    return (
+        f"{candidate.get('title', '')} {candidate.get('snippet', '')} "
+        f"{candidate.get('source', '')} {candidate.get('query', '')} "
+        f"{candidate.get('url', '')} {candidate.get('source_href', '')} {paths}"
+    )
+
+
+def _is_accident_signal_text(text: str) -> bool:
+    if _contains_any_term(text, SAFETY_INCIDENT_DETAIL_TERMS):
+        return True
+    equipment_terms = [
+        "platform screen door", "platform doors", "train door", "barrier",
+        "platform barrier", "月臺門", "月台門", "車門", "月臺屏障",
+    ]
+    issue_terms = [
+        "failure", "fault", "damage", "incident", "accident", "review",
+        "safety", "stuck", "broken", "異常", "故障", "損壞", "事故", "檢討", "安全",
+    ]
+    return _contains_any_term(text, equipment_terms) and _contains_any_term(text, issue_terms)
+
+
+def _has_explicit_technical_system_detail(candidate: dict) -> bool:
+    flags = set(candidate.get("candidate_flags", []) or [])
+    if "technical_or_system_detail" in flags:
+        return True
+    return _contains_any_term(_candidate_selection_text(candidate), TECH_NEWS_REQUIRED_TERMS)
+
+
+def _has_good_report_signal(candidate: dict) -> bool:
+    flags = set(candidate.get("candidate_flags", []) or [])
+    if flags.intersection({"technical_or_system_detail", "incident_or_safety_signal", "high_value_policy"}):
+        return True
+    text = _candidate_selection_text(candidate)
+    return (
+        _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS)
+        or _is_accident_signal_text(text)
+        or _contains_any_term(text, HIGH_VALUE_POLICY_TERMS)
+    )
+
+
+def _has_low_value_official_notice(candidate: dict) -> bool:
+    return _contains_any_term(_candidate_selection_text(candidate), LOW_VALUE_OFFICIAL_NOTICE_TERMS)
+
+
+def _has_procurement_list_notice(candidate: dict) -> bool:
+    return _contains_any_term(_candidate_selection_text(candidate), PROCUREMENT_LIST_NOTICE_TERMS)
+
+
+def _has_general_rail_exclusion(candidate: dict) -> bool:
+    return _contains_any_term(_candidate_selection_text(candidate), GENERAL_RAIL_EXCLUDE_TERMS)
+
+
+def _has_substantive_detail_for_low_value_notice(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    return (
+        _contains_any_term(text, STRONG_TECHNICAL_DETAIL_TERMS)
+        or _contains_any_term(text, SAFETY_INCIDENT_DETAIL_TERMS)
+        or _contains_any_term(text, SUBSTANTIVE_POLICY_DETAIL_TERMS)
+    )
+
+
+def _is_technical_news_selection_candidate(candidate: dict) -> bool:
+    if candidate.get("classification") != "技術新知":
+        return False
+    if _is_accident_signal_text(_candidate_selection_text(candidate)):
+        return False
+    if not _has_explicit_technical_system_detail(candidate):
+        return False
+    if _has_low_value_official_notice(candidate):
+        return False
+    return True
 
 
 def get_selection_candidate_limit(days: int, fast_mode: bool = False) -> int:
@@ -3231,12 +3375,14 @@ def infer_preliminary_type(candidate: dict) -> str:
     text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')} {candidate.get('source', '')}"
     if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
         return "規範更新"
-    if _contains_any_term(text, WORK_ZONE_MONITORING_TERMS) and not _contains_any_term(text, WORK_ZONE_TECH_DETAIL_TERMS):
-        return "營運政策"
-    if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS):
+    if _is_accident_signal_text(text):
         return "重大事故"
     if _contains_any_term(text, ["strike", "contract dispute", "lawsuit", "fare dispute", "budget overrun", "罷工", "合約糾紛", "票價爭議", "預算超支", "民怨"]):
         return "營運爭議"
+    if _contains_any_term(text, WORK_ZONE_MONITORING_TERMS) and not _contains_any_term(text, WORK_ZONE_TECH_DETAIL_TERMS):
+        return "營運政策"
+    if _contains_any_term(text, LOW_VALUE_OFFICIAL_NOTICE_TERMS):
+        return "營運政策"
     if _contains_any_term(text, HIGH_VALUE_POLICY_TERMS + LOW_VALUE_POLICY_TERMS):
         return "營運政策"
     return "技術新知"
@@ -3270,12 +3416,18 @@ def build_candidate_flags(candidate: dict) -> list[str]:
         flags.append("urban_rail")
     if _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS):
         flags.append("technical_or_system_detail")
-    if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS):
+    if _is_accident_signal_text(text):
         flags.append("incident_or_safety_signal")
     if _contains_any_term(text, HIGH_VALUE_POLICY_TERMS):
         flags.append("high_value_policy")
     if _contains_any_term(text, LOW_VALUE_POLICY_TERMS) or information_issue in {"日常服務推播", "低價值路線公告"}:
         flags.append("low_value_service_notice")
+    if _has_low_value_official_notice(candidate):
+        flags.append("low_value_official_notice")
+    if _has_procurement_list_notice(candidate):
+        flags.append("procurement_list_notice")
+    if _has_general_rail_exclusion(candidate):
+        flags.append("general_rail_exclusion")
     if information_issue == "摘要資訊不足":
         flags.append("insufficient_information")
     if len(candidate.get("title", "")) < 20:
@@ -3339,7 +3491,7 @@ def score_news_candidate(candidate: dict) -> dict:
     if _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS):
         score += 15
         reasons.append("機電/系統技術訊號 +15")
-    if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS):
+    if _is_accident_signal_text(text):
         score += 10
         reasons.append("事故/安全訊號 +10")
     if _contains_any_term(text, HIGH_VALUE_POLICY_TERMS):
@@ -3348,6 +3500,12 @@ def score_news_candidate(candidate: dict) -> dict:
     if _contains_any_term(text, LOW_VALUE_POLICY_TERMS):
         score -= 12
         reasons.append("低價值服務提醒 -12")
+    if _has_low_value_official_notice(candidate) and not _has_explicit_technical_system_detail(candidate):
+        score -= 35
+        reasons.append("低價值官方公告且缺少機電細節 -35")
+    if _has_general_rail_exclusion(candidate):
+        score -= 40
+        reasons.append("一般鐵路/通勤鐵路排除訊號 -40")
     if any(marker in urlparse(candidate.get("url", "")).path.casefold() for marker in LOW_INFORMATION_PATH_MARKERS):
         score -= 18
         reasons.append("入口/路線/查詢頁路徑 -18")
@@ -3373,6 +3531,17 @@ def score_news_candidate(candidate: dict) -> dict:
         reasons.append("摘要資訊不足 -18")
 
     flags = build_candidate_flags(candidate)
+    good_flags = {"technical_or_system_detail", "incident_or_safety_signal", "high_value_policy"}
+    has_good_flag = bool(set(flags).intersection(good_flags))
+    if not has_good_flag:
+        score_cap = 55 if "short_snippet" in flags else 65
+        if score > score_cap:
+            score = score_cap
+            reasons.append(f"缺少技術/事故/高價值政策旗標，分數上限 {score_cap}")
+    if (tier == "D_proxy_low_value" or "low_value_service_notice" in flags) and not _has_explicit_technical_system_detail(candidate):
+        if score > 50:
+            score = 50
+            reasons.append("低價值來源或服務提醒且無技術細節，分數上限 50")
     preliminary_type = infer_preliminary_type(candidate)
     return {
         "python_score": max(0, min(100, score)),
@@ -3479,7 +3648,10 @@ def _selection_good_flag_count(candidate: dict) -> int:
 
 def _selection_bad_flag_count(candidate: dict) -> int:
     flags = set(candidate.get("candidate_flags", []) or [])
-    return sum(1 for flag in ("low_value_service_notice", "insufficient_information", "short_snippet") if flag in flags)
+    return sum(1 for flag in (
+        "low_value_service_notice", "insufficient_information", "short_snippet",
+        "low_value_official_notice", "procurement_list_notice", "general_rail_exclusion",
+    ) if flag in flags)
 
 
 def _candidate_month_key(candidate: dict) -> str:
@@ -3549,24 +3721,27 @@ def _python_candidate_allowed_for_scope(candidate: dict) -> bool:
 def _is_low_value_python_selection_candidate(candidate: dict) -> bool:
     flags = set(candidate.get("candidate_flags", []) or [])
     score = int(candidate.get("python_score", 0) or 0)
-    if candidate.get("source_tier") == "D_proxy_low_value" or "low_value_proxy_or_page" in flags:
+    has_good_signal = _has_good_report_signal(candidate)
+    has_technical_detail = _has_explicit_technical_system_detail(candidate)
+    if "general_rail_exclusion" in flags or _has_general_rail_exclusion(candidate):
         return True
-    if "low_value_service_notice" in flags and score < 70:
+    if _has_procurement_list_notice(candidate):
         return True
-    if "insufficient_information" in flags and score < 65:
+    if _has_low_value_official_notice(candidate) and not _has_substantive_detail_for_low_value_notice(candidate):
+        return True
+    if "low_value_service_notice" in flags and not has_good_signal:
+        return True
+    if "low_value_proxy_or_page" in flags and not has_technical_detail:
+        return True
+    if candidate.get("source_tier") == "D_proxy_low_value" and not has_technical_detail:
+        return True
+    if "insufficient_information" in flags and not has_good_signal:
         return True
     return score < 45
 
 
 def _is_strict_technical_candidate(candidate: dict) -> bool:
-    flags = set(candidate.get("candidate_flags", []) or [])
-    if candidate.get("classification") != "技術新知":
-        return False
-    if "technical_or_system_detail" not in flags:
-        return False
-    if flags.intersection({"incident_or_safety_signal", "high_value_policy", "low_value_service_notice", "insufficient_information"}):
-        return False
-    return True
+    return _is_technical_news_selection_candidate(candidate)
 
 
 def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict | None:
@@ -3586,7 +3761,7 @@ def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
         candidate["classification"] = classification
         if classification not in selected_types:
             continue
-        if selected_types == ["技術新知"] and not _is_strict_technical_candidate(candidate):
+        if classification == "技術新知" and not _is_strict_technical_candidate(candidate):
             continue
         if not _python_candidate_allowed_for_scope(candidate):
             continue
@@ -3646,13 +3821,13 @@ def build_python_unselected_stats(model_candidates: list[dict], selected_candida
         flags = set(candidate.get("candidate_flags", []) or [])
         if classification not in selected_types:
             reason = "類型未勾選"
-        elif selected_types == ["技術新知"] and not _is_strict_technical_candidate(dict(candidate, classification=classification)):
-            reason = "技術新知單選模式排除非純技術候選"
+        elif classification == "技術新知" and not _is_strict_technical_candidate(dict(candidate, classification=classification)):
+            reason = "技術新知缺少明確機電/系統細節或屬低價值公告"
         elif not _python_candidate_allowed_for_scope(dict(candidate, classification=classification)):
             reason = "國家/地區不在指定範圍"
         elif _is_low_value_python_selection_candidate(candidate):
             reason = "Python 規則排除低價值或資訊不足候選"
-        elif flags.intersection({"low_value_service_notice", "insufficient_information", "short_snippet"}):
+        elif flags.intersection({"low_value_service_notice", "insufficient_information", "short_snippet", "low_value_official_notice", "procurement_list_notice", "general_rail_exclusion"}):
             reason = "低價值或摘要不足旗標降權後未入選"
         else:
             reason = "Python 規則排序與類別平衡後未入選"
