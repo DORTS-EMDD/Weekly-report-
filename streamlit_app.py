@@ -17,7 +17,7 @@ import datetime
 import smtplib
 import concurrent.futures
 from io import BytesIO
-from html import escape
+from html import escape, unescape
 from pathlib import Path
 import urllib.parse
 from urllib.parse import urlparse, urlunparse, parse_qs
@@ -665,7 +665,8 @@ SELECTION_MAX_ITEMS = 20
 CANDIDATE_SNIPPET_CHARS = 140
 REPORT_SNIPPET_CHARS = 420
 JOURNAL_MAX_RESULTS_PER_QUERY = 3
-JOURNAL_MAX_ITEMS = 5
+JOURNAL_MAX_ITEMS = 8
+JOURNAL_ARTICLE_FETCH_LIMIT = 18
 
 SOURCE_QUALITY_A_DOMAINS = {
     "tfl.gov.uk", "mta.info", "wmata.com", "ttc.ca", "translink.ca",
@@ -814,6 +815,10 @@ JOURNAL_EXPLORATORY_QUERIES = [
     '"urban rail transit" intelligent operation maintenance',
 ]
 
+JOURNAL_SOURCE_PAGES = [
+    ("Springer Urban Rail Transit articles", "https://link.springer.com/journal/40864/articles"),
+]
+
 JOURNAL_EXCLUDE_TERMS = [
     "high-speed rail", "freight railway", "intercity rail", "road traffic",
     "bus", "autonomous vehicle", "air traffic", "pure algorithm",
@@ -839,6 +844,22 @@ JOURNAL_PREFERRED_SOURCE_TERMS = [
     "mdpi", "sciencedirect", "ieee", "springer", "taylor & francis",
     "tandfonline", "elsevier", "transportation research",
     "railway engineering science",
+]
+
+JOURNAL_SYSTEM_TERMS = [
+    "cbtc", "signalling", "signaling", "train control", "rolling stock",
+    "traction power", "power supply", "maintenance", "condition monitoring",
+    "predictive maintenance", "artificial intelligence", "machine learning",
+    "digital twin", "cybersecurity", "energy efficiency", "data governance",
+    "passenger flow", "system integration", "platform screen door",
+    "號誌", "列控", "車輛", "牽引供電", "維修", "AI", "數位分身",
+    "資安", "能源效率", "資料治理", "旅客流量", "系統整合", "月臺門",
+]
+
+JOURNAL_INSIGHT_TERMS = [
+    "maintenance", "energy", "safety", "risk", "cyber", "data", "system",
+    "integration", "planning", "operations", "condition monitoring",
+    "維修", "能源", "安全", "風險", "資安", "資料", "系統", "整合", "規劃",
 ]
 
 # ── 金鑰狀態 ──────────────────────────────────────────
@@ -1855,16 +1876,55 @@ def _is_standard_update_candidate(text: str, require_url: bool = True) -> bool:
 
 def _candidate_region_text(candidate: dict) -> str:
     return " ".join(str(candidate.get(key, "") or "") for key in (
-        "region", "title", "snippet", "source", "query", "url", "source_href", "source_domain"
+        "region", "title", "snippet", "url", "source_href", "source_domain", "source"
     ))
+
+
+def _region_from_domain_hints(candidate: dict) -> str:
+    source_url = _effective_source_url(candidate)
+    hosts = [
+        candidate.get("source_domain", ""),
+        _domain_from_url(source_url),
+        _domain_from_url(candidate.get("source_href", "")),
+        _domain_from_url(candidate.get("url", "")),
+        _original_source_domain(
+            candidate.get("source", ""),
+            candidate.get("url", ""),
+            candidate.get("source_href", ""),
+            "",
+        ),
+    ]
+    for host in hosts:
+        for domain, region in REGION_DOMAIN_HINTS.items():
+            if host and _host_matches(host, domain):
+                return region
+    return ""
+
+
+def _region_guess_from_candidate(candidate: dict) -> str:
+    path_text = " ".join(
+        urlparse(candidate.get(key, "") or "").path.replace("/", " ")
+        for key in ("url", "source_href")
+    )
+    primary_text = " ".join(str(candidate.get(key, "") or "") for key in (
+        "title", "snippet", "source_domain", "source"
+    ))
+    primary_guess = guess_region_from_text(f"{primary_text} {path_text}")
+    if primary_guess != "未判定":
+        return primary_guess
+    domain_guess = _region_from_domain_hints(candidate)
+    if domain_guess:
+        return domain_guess
+    query_guess = guess_region_from_text(candidate.get("query", ""))
+    return query_guess if query_guess != "未判定" else "未判定"
 
 
 def _canonical_candidate_region(candidate: dict) -> str:
     region = str(candidate.get("region", "") or "").strip()
-    guessed = guess_region_from_text(_candidate_region_text(candidate))
+    guessed = _region_guess_from_candidate(candidate)
     if guessed == "巴西":
         region = "巴西"
-    elif not region or region in {"未判定", "國際", "國際研究"}:
+    elif guessed != "未判定" and (not region or region in {"未判定", "國際", "國際研究"} or region != guessed):
         region = guessed
     if region in {"Brazil", "Brasil", "São Paulo", "Sao Paulo", "聖保羅", "圣保罗"}:
         region = "巴西"
@@ -2650,15 +2710,23 @@ def guess_region_from_text(text: str) -> str:
         "日本": ["japan", "tokyo", "osaka", "日本", "東京", "大阪"],
         "韓國": ["korea", "seoul", "韓國", "韩国", "서울"],
         "新加坡": ["singapore", "lta", "smrt", "新加坡"],
-        "香港": ["hong kong", "mtr", "香港", "港鐵", "港铁"],
+        "香港": ["hong kong", "mtr.com.hk", "香港", "港鐵", "港铁"],
         "澳洲": ["australia", "sydney", "melbourne", "brisbane", "澳洲"],
         "英國": ["united kingdom", "uk", "london", "tfl", "underground", "英國", "英国", "倫敦"],
         "法國": ["france", "paris", "ratp", "法國", "法国", "巴黎"],
         "德國": ["germany", "berlin", "munich", "hamburg", "u-bahn", "德國", "德国"],
-        "美國": ["united states", "new york", "washington", "chicago", "wmata", "cta", "mta", "美國", "美国"],
-        "加拿大": ["canada", "toronto", "vancouver", "ttc", "skytrain", "加拿大"],
+        "美國": [
+            "united states", "new york", "nyc", "manhattan", "washington", "chicago",
+            "seattle", "federal way", "star lake", "sound transit", "link light rail",
+            "wmata", "cta", "mta.info", "soundtransit.org", "美國", "美国",
+        ],
+        "加拿大": [
+            "canada", "toronto", "vancouver", "translink", "yaletown-roundhouse",
+            "yaletown–roundhouse", "ttc", "skytrain", "加拿大",
+        ],
         "西班牙": ["spain", "madrid", "barcelona", "西班牙"],
         "巴西": ["brazil", "brasil", "são paulo", "sao paulo", "sao-paulo", "saopaulo", "巴西", "聖保羅", "圣保罗"],
+        "印度": ["india", "mumbai", "delhi metro", "印度", "孟買", "孟买"],
         "荷蘭": ["netherlands", "amsterdam", "rotterdam", "荷蘭", "荷兰"],
         "瑞士": ["switzerland", "zurich", "lausanne", "瑞士"],
         "義大利": ["italy", "milan", "rome", "turin", "義大利", "意大利"],
@@ -3320,6 +3388,64 @@ STRONG_TECHNICAL_DETAIL_TERMS = [
     "AI 影像分析", "影像分析", "系統整合", "測試驗證",
 ]
 
+MEDIUM_TECHNICAL_DETAIL_TERMS = [
+    "station equipment", "passenger information", "operations control",
+    "operational control", "control centre", "control center", "maintenance facility",
+    "vehicle introduction", "fleet introduction", "system upgrade", "equipment improvement",
+    "safety management", "asset management", "station systems", "platform equipment",
+    "車站設備", "旅客資訊", "營運監控", "行控", "控制中心", "維修設施",
+    "車輛導入", "系統更新", "設備改善", "營運安全管理", "資產管理",
+]
+
+LOW_REPORT_VALUE_TERMS = [
+    "passenger praised", "passenger praises", "traveller praised", "traveler praised",
+    "clean and safe", "low fare", "cheap fare", "social media", "viral video",
+    "youtube", "tiktok", "instagram", "personal experience", "first-time rider",
+    "reviewed the metro", "lost property", "delay certificate", "mascot",
+    "stamp rally", "theme train", "themed train", "road maintenance",
+    "旅客稱讚", "乘客稱讚", "乾淨安全", "低票價", "票價便宜", "社群影片",
+    "個人經驗", "旅客心得", "失物招領", "延誤證明", "吉祥物", "數位集章",
+    "主題列車", "道路維護",
+]
+
+LOW_IMPACT_ACCIDENT_TERMS = [
+    "animal on tracks", "dog on tracks", "cat on tracks", "bird on tracks",
+    "passenger dispute", "minor altercation", "trespasser", "small animal",
+    "動物落軌", "犬隻落軌", "貓落軌", "小動物", "旅客糾紛", "輕微衝突",
+]
+
+HIGH_IMPACT_ACCIDENT_TERMS = [
+    "third rail", "power rail", "platform screen door", "platform barrier",
+    "service suspension", "major disruption", "investigation", "safety review",
+    "brake failure", "switch failure", "points failure", "power outage",
+    "第三軌", "供電軌", "月臺門", "月臺屏障", "停駛", "重大中斷",
+    "制度檢討", "安全檢討", "煞車失效", "轉轍器", "供電異常",
+]
+
+REGION_DOMAIN_HINTS = {
+    "translink.ca": "加拿大",
+    "ttc.ca": "加拿大",
+    "mta.info": "美國",
+    "wmata.com": "美國",
+    "soundtransit.org": "美國",
+    "tokyometro.jp": "日本",
+    "mtr.com.hk": "香港",
+    "lta.gov.sg": "新加坡",
+    "smrt.com.sg": "新加坡",
+    "ratp.fr": "法國",
+    "tfl.gov.uk": "英國",
+}
+
+REPORT_SELECTION_DEBUG_DEFAULT = {
+    "strict_selected_count": 0,
+    "borderline_added_count": 0,
+    "borderline_candidates": [],
+    "shortfall_before_backfill": 0,
+    "shortfall_after_backfill": 0,
+    "backfill_reason": "",
+    "duplicate_event_records": [],
+}
+
 WORK_ZONE_MONITORING_TERMS = [
     "work zone", "speed enforcement", "construction zone", "maintenance safety",
     "工區", "施工區", "速限執法", "維修作業安全", "施工安全", "安全監測",
@@ -3901,37 +4027,128 @@ def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict 
     while pool:
         candidate = min(pool, key=lambda item: _python_selection_dynamic_key(item, selected))
         pool.remove(candidate)
-        if _is_duplicate_selected_event(candidate, selected):
+        duplicate_of = next((item for item in selected if _is_same_report_event(candidate, item)), None)
+        if duplicate_of:
+            try:
+                LAST_PYTHON_SELECTION_DEBUG.setdefault("duplicate_event_records", []).append({
+                    "candidate_id": candidate.get("id", ""),
+                    "candidate_title": candidate.get("title", ""),
+                    "duplicate_of_id": duplicate_of.get("id", ""),
+                    "duplicate_of_title": duplicate_of.get("title", ""),
+                    "duplicate_event_reason": "相同城市/地點、相近日期與相同系統或事故主題，事件級去重。",
+                })
+            except Exception:
+                pass
             continue
         return candidate
     return None
 
 
-def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
-    _, max_items = _selection_target_range(lookback_int)
-    grouped: dict[str, list[dict]] = {category: [] for category in selected_types}
-    for raw_candidate in model_candidates or []:
-        candidate = dict(raw_candidate)
-        classification = _selection_classification(candidate)
-        candidate["classification"] = classification
-        if classification not in selected_types:
-            continue
-        if classification == "技術新知" and not _is_strict_technical_candidate(candidate):
-            continue
-        if not _python_candidate_allowed_for_scope(candidate):
-            continue
-        if _is_low_value_python_selection_candidate(candidate):
-            continue
-        candidate["selected_reason"] = (
-            f"Python 規則選題：score={candidate.get('python_score', 0)}；"
-            f"tier={candidate.get('source_tier', '')}；flags={','.join(candidate.get('candidate_flags', []) or [])}"
-        )
-        candidate["include_in_report"] = True
-        grouped.setdefault(classification, []).append(candidate)
 
-    for category in grouped:
-        grouped[category] = sorted(grouped[category], key=_python_selection_sort_key)
 
+LAST_PYTHON_SELECTION_DEBUG: dict = dict(REPORT_SELECTION_DEBUG_DEFAULT)
+
+
+def _is_hard_excluded_for_borderline(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    if _has_general_rail_exclusion(candidate):
+        return True
+    if _has_procurement_list_notice(candidate):
+        return True
+    if _contains_any_term(text, AIRPORT_PEOPLE_MOVER_EXCLUDE_TERMS):
+        return True
+    if _contains_any_term(text, GENERAL_RAIL_EXCLUDE_TERMS):
+        return True
+    if _contains_any_term(text, LOW_REPORT_VALUE_TERMS):
+        return True
+    if _contains_any_term(text, NON_URBAN_HARD_EXCLUDE_TERMS) and not _contains_any_term(text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS):
+        return True
+    if _contains_any_term(text, [
+        "lost property", "delay certificate", "route page", "trip result",
+        "contract documents holders list", "mtr e-store", "product page",
+        "失物招領", "延誤證明", "標案文件持有人", "商品", "旅遊攻略",
+    ]):
+        return True
+    return False
+
+
+def _is_b_level_technical_candidate(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    if candidate.get("classification") != "技術新知":
+        return False
+    if _is_hard_excluded_for_borderline(candidate):
+        return False
+    if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS):
+        return False
+    if _is_accident_signal_text(text):
+        return False
+    if not _candidate_date_obj(candidate.get("date", "")):
+        return False
+    if not _has_source_reference(candidate):
+        return False
+    if not _is_urban_rail_candidate(text, candidate.get("source", "")):
+        return False
+    return _contains_any_term(text, MEDIUM_TECHNICAL_DETAIL_TERMS)
+
+
+def _is_borderline_report_candidate(candidate: dict) -> tuple[bool, str]:
+    classification = candidate.get("classification") or _selection_classification(candidate)
+    candidate["classification"] = classification
+    if classification not in selected_types:
+        return False, "類型未勾選"
+    if not _python_candidate_allowed_for_scope(candidate):
+        return False, "國家/地區不在指定範圍"
+    if _is_hard_excluded_for_borderline(candidate):
+        return False, "硬排除項"
+    flags = set(candidate.get("candidate_flags", []) or [])
+    text = _candidate_selection_text(candidate)
+    if not _candidate_date_obj(candidate.get("date", "")):
+        return False, "日期不明"
+    if not _has_source_reference(candidate):
+        return False, "來源/URL 不明"
+    if classification == "技術新知":
+        if _is_strict_technical_candidate(candidate):
+            return True, "A級技術新知"
+        if _is_b_level_technical_candidate(candidate):
+            return True, "B級技術新知候補"
+        return False, "技術門檻不足"
+    if classification == "重大事故":
+        if _is_accident_signal_text(text) and not _contains_any_term(text, LOW_IMPACT_ACCIDENT_TERMS):
+            return True, "事故/安全訊號明確"
+        if _contains_any_term(text, LOW_IMPACT_ACCIDENT_TERMS) and _contains_any_term(text, HIGH_IMPACT_ACCIDENT_TERMS):
+            return True, "低影響事故但涉及系統安全議題"
+        return False, "事故價值不足"
+    if classification == "營運政策":
+        if "high_value_policy" in flags or _contains_any_term(text, SUBSTANTIVE_POLICY_DETAIL_TERMS + HIGH_VALUE_POLICY_TERMS):
+            return True, "具營運管理或系統規劃價值"
+        return False, "營運政策價值不足"
+    if classification == "營運爭議":
+        if _contains_any_term(text, GENERAL_RAIL_EXCLUDE_TERMS):
+            return False, "一般鐵路/通勤鐵路爭議"
+        if _contains_any_term(text, URBAN_RAIL_MODE_TERMS):
+            return True, "都市軌道營運爭議"
+        return False, "都市軌道爭議關聯不足"
+    if classification == "規範更新":
+        if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
+            return True, "規範更新條件完整"
+        return False, "規範更新條件不足"
+    return False, "未符合候補條件"
+
+
+def _selection_lower_bound(days: int) -> int:
+    lower, _ = _selection_target_range(days)
+    return lower
+
+
+def _selection_debug_reset() -> dict:
+    debug = dict(REPORT_SELECTION_DEBUG_DEFAULT)
+    debug["duplicate_event_records"] = []
+    debug["borderline_candidates"] = []
+    debug["backfill_reason"] = ""
+    return debug
+
+
+def _select_from_grouped_pools(grouped: dict[str, list[dict]], max_items: int) -> list[dict]:
     selected: list[dict] = []
     if len(selected_types) <= 1:
         only_type = selected_types[0] if selected_types else ""
@@ -3940,9 +4157,8 @@ def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
             if not candidate:
                 break
             selected.append(candidate)
-        return rebalance_selected_candidates(selected)
+        return selected
 
-    # First pass reserves room for every selected type with at least one qualified candidate.
     for category in selected_types:
         if len(selected) >= max_items:
             break
@@ -3961,43 +4177,95 @@ def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
                 added = True
         if not added:
             break
-    return rebalance_selected_candidates(selected)
+    return selected
 
 
-def build_python_unselected_stats(model_candidates: list[dict], selected_candidates: list[dict]) -> dict:
-    selected_ids = {int(item.get("id", 0) or 0) for item in selected_candidates}
-    stats: dict[str, int] = {}
-    examples: list[dict] = []
-    for candidate in model_candidates or []:
-        candidate_id = int(candidate.get("id", 0) or 0)
+def _backfill_borderline_candidates(
+    selected: list[dict],
+    model_candidates: list[dict],
+    min_items: int,
+    max_items: int,
+    debug: dict,
+) -> list[dict]:
+    selected_ids = {int(item.get("id", 0) or 0) for item in selected}
+    shortfall_before = max(0, min_items - len(selected))
+    debug["shortfall_before_backfill"] = shortfall_before
+    if shortfall_before <= 0:
+        debug["shortfall_after_backfill"] = 0
+        debug["backfill_reason"] = "嚴格入選已達目標下限，無需候補。"
+        return selected
+
+    borderline_pool: list[dict] = []
+    for raw_candidate in model_candidates or []:
+        candidate_id = int(raw_candidate.get("id", 0) or 0)
         if candidate_id in selected_ids:
             continue
+        candidate = dict(raw_candidate)
         classification = _selection_classification(candidate)
-        flags = set(candidate.get("candidate_flags", []) or [])
+        candidate["classification"] = classification
+        allowed, reason = _is_borderline_report_candidate(candidate)
+        if not allowed:
+            continue
+        candidate["selected_reason"] = (
+            f"Python 合格候補：{reason}；score={candidate.get('python_score', 0)}；"
+            f"tier={candidate.get('source_tier', '')}；flags={','.join(candidate.get('candidate_flags', []) or [])}"
+        )
+        candidate["include_in_report"] = True
+        candidate["borderline_reason"] = reason
+        borderline_pool.append(candidate)
+
+    borderline_pool = sorted(borderline_pool, key=_python_selection_sort_key)
+    while borderline_pool and len(selected) < min_items and len(selected) < max_items:
+        candidate = _take_next_python_candidate(borderline_pool, selected)
+        if not candidate:
+            break
+        selected.append(candidate)
+        selected_ids.add(int(candidate.get("id", 0) or 0))
+        if len(debug["borderline_candidates"]) < 20:
+            debug["borderline_candidates"].append(build_candidate_card(candidate) | {"borderline_reason": candidate.get("borderline_reason", "")})
+
+    debug["borderline_added_count"] = len(debug["borderline_candidates"])
+    debug["shortfall_after_backfill"] = max(0, min_items - len(selected))
+    if debug["borderline_added_count"]:
+        debug["backfill_reason"] = f"嚴格入選不足 {shortfall_before} 則，已補入合格候補 {debug['borderline_added_count']} 則。"
+    elif debug["shortfall_after_backfill"]:
+        debug["backfill_reason"] = "嚴格入選不足，且未找到符合日期、來源、都市軌道與報告價值門檻之合格候補。"
+    else:
+        debug["backfill_reason"] = "候補後已達目標下限。"
+    return selected
+
+def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
+    global LAST_PYTHON_SELECTION_DEBUG
+    LAST_PYTHON_SELECTION_DEBUG = _selection_debug_reset()
+    min_items, max_items = _selection_target_range(lookback_int)
+    grouped: dict[str, list[dict]] = {category: [] for category in selected_types}
+    for raw_candidate in model_candidates or []:
+        candidate = dict(raw_candidate)
+        classification = _selection_classification(candidate)
+        candidate["classification"] = classification
         if classification not in selected_types:
-            reason = "類型未勾選"
-        elif classification == "技術新知" and not _is_strict_technical_candidate(dict(candidate, classification=classification)):
-            reason = "技術新知缺少明確機電/系統細節或屬低價值公告"
-        elif not _python_candidate_allowed_for_scope(dict(candidate, classification=classification)):
-            reason = "國家/地區不在指定範圍"
-        elif _is_low_value_python_selection_candidate(candidate):
-            reason = "Python 規則排除低價值或資訊不足候選"
-        elif flags.intersection({"low_value_service_notice", "insufficient_information", "short_snippet", "low_value_official_notice", "procurement_list_notice", "general_rail_exclusion"}):
-            reason = "低價值或摘要不足旗標降權後未入選"
-        else:
-            reason = "Python 規則排序與類別平衡後未入選"
-        stats[reason] = stats.get(reason, 0) + 1
-        if len(examples) < 20:
-            examples.append({
-                "id": candidate_id,
-                "title": candidate.get("title", ""),
-                "classification": classification,
-                "python_score": candidate.get("python_score", 0),
-                "source_tier": candidate.get("source_tier", ""),
-                "candidate_flags": candidate.get("candidate_flags", []),
-                "reason": reason,
-            })
-    return {"summary": stats, "examples": examples}
+            continue
+        if classification == "技術新知" and not _is_strict_technical_candidate(candidate):
+            continue
+        if not _python_candidate_allowed_for_scope(candidate):
+            continue
+        if _is_low_value_python_selection_candidate(candidate):
+            continue
+        candidate["selected_reason"] = (
+            f"Python 嚴格規則選題：score={candidate.get('python_score', 0)}；"
+            f"tier={candidate.get('source_tier', '')}；flags={','.join(candidate.get('candidate_flags', []) or [])}"
+        )
+        candidate["include_in_report"] = True
+        grouped.setdefault(classification, []).append(candidate)
+
+    for category in grouped:
+        grouped[category] = sorted(grouped[category], key=_python_selection_sort_key)
+
+    selected = _select_from_grouped_pools(grouped, max_items)
+    LAST_PYTHON_SELECTION_DEBUG["strict_selected_count"] = len(selected)
+    selected = _backfill_borderline_candidates(selected, model_candidates or [], min_items, max_items, LAST_PYTHON_SELECTION_DEBUG)
+    LAST_PYTHON_SELECTION_DEBUG["final_selected_count"] = len(selected)
+    return rebalance_selected_candidates(selected)
 
 
 def build_selection_prompt(candidates: list[dict]) -> str:
@@ -4315,31 +4583,323 @@ def _is_formal_journal_url_or_doi(url: str, text: str) -> bool:
     return False
 
 
+
+
+def get_journal_target_count(days: int) -> tuple[int, int]:
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 90
+    if days >= 365:
+        return 6, 8
+    if days >= 180:
+        return 4, 4
+    return 2, 2
+
+
+def _journal_safe_get(url: str, timeout: int = 8) -> str:
+    if not url or not str(url).startswith(("http://", "https://")):
+        return ""
+    try:
+        session = create_requests_session()
+        response = session.get(url, timeout=timeout, headers={"Accept": "text/html,application/xhtml+xml,*/*"})
+        if response.status_code >= 400:
+            return ""
+        return response.text or ""
+    except Exception:
+        return ""
+
+
+def _html_unescape_clean(text: str) -> str:
+    return _clean_text(unescape(re.sub(r"<[^>]+>", " ", text or "")))
+
+
+def _first_meta_content(html: str, names: list[str]) -> str:
+    for name in names:
+        patterns = [
+            rf'<meta[^>]+(?:name|property)=["\\\']{re.escape(name)}["\\\'][^>]+content=["\\\']([^"\\\']+)["\\\']',
+            rf'<meta[^>]+content=["\\\']([^"\\\']+)["\\\'][^>]+(?:name|property)=["\\\']{re.escape(name)}["\\\']',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, html or "", flags=re.IGNORECASE | re.DOTALL)
+            if match:
+                return _html_unescape_clean(match.group(1))
+    return ""
+
+
+def _jsonld_values(html: str) -> dict:
+    values: dict[str, str] = {}
+    for block in re.findall(r'<script[^>]+type=["\\\']application/ld\+json["\\\'][^>]*>(.*?)</script>', html or "", flags=re.IGNORECASE | re.DOTALL):
+        try:
+            data = json.loads(block.strip())
+        except Exception:
+            continue
+        stack = data if isinstance(data, list) else [data]
+        while stack:
+            item = stack.pop(0)
+            if isinstance(item, dict):
+                for key in ("datePublished", "dateCreated", "dateModified", "headline", "name", "description"):
+                    if key in item and not values.get(key):
+                        values[key] = str(item.get(key) or "")
+                for value in item.values():
+                    if isinstance(value, (dict, list)):
+                        stack.append(value)
+            elif isinstance(item, list):
+                stack.extend(item)
+    return values
+
+
+def fetch_journal_page_metadata(url: str) -> dict:
+    html = _journal_safe_get(url)
+    if not html:
+        return {"metadata_fetch_status": "failed"}
+    jsonld = _jsonld_values(html)
+    title = (
+        _first_meta_content(html, ["citation_title", "dc.title", "og:title", "twitter:title"])
+        or _html_unescape_clean(jsonld.get("headline") or jsonld.get("name") or "")
+    )
+    abstract = (
+        _first_meta_content(html, ["citation_abstract", "description", "dc.description", "og:description", "twitter:description"])
+        or _html_unescape_clean(jsonld.get("description") or "")
+    )
+    date_text = (
+        _first_meta_content(html, [
+            "citation_publication_date", "citation_online_date", "dc.date", "prism.publicationDate",
+            "article:published_time", "datePublished", "date", "DC.Date",
+        ])
+        or jsonld.get("datePublished")
+        or jsonld.get("dateCreated")
+    )
+    doi = _first_meta_content(html, ["citation_doi", "dc.identifier", "prism.doi"])
+    if not doi:
+        doi_match = re.search(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", html, flags=re.IGNORECASE)
+        doi = doi_match.group(0) if doi_match else ""
+    journal_name = _first_meta_content(html, ["citation_journal_title", "prism.publicationName", "dc.source", "og:site_name"])
+    published_date = ""
+    date_confidence = "low"
+    date_reason = "原始頁未解析到完整發表日期"
+    date_obj = _parse_full_research_date(date_text or "") or _candidate_date_obj(date_text or "")
+    if date_obj:
+        cutoff_date = today - datetime.timedelta(days=research_supplement_lookback_days)
+        published_date = date_obj.isoformat()
+        date_confidence = "high"
+        date_reason = "原始文章頁 metadata 提供完整發表日期"
+    return {
+        "metadata_fetch_status": "success",
+        "metadata_title": title,
+        "metadata_abstract": abstract,
+        "metadata_date_text": date_text or "",
+        "published_date": published_date,
+        "date_confidence": date_confidence,
+        "date_reason": date_reason,
+        "is_within_research_period": bool(published_date) and (today - datetime.timedelta(days=research_supplement_lookback_days) <= _candidate_date_obj(published_date) <= today),
+        "doi": doi,
+        "journal_name": journal_name,
+    }
+
+
+def _journal_source_page_results(status_text=None) -> tuple[list[dict], list[dict]]:
+    results: list[dict] = []
+    statuses: list[dict] = []
+    fetched = 0
+    seen_links: set[str] = set()
+    for source_name, page_url in JOURNAL_SOURCE_PAGES:
+        if status_text:
+            status_text.text(f"📚 解析學術來源頁：{source_name}...")
+        html = _journal_safe_get(page_url)
+        if not html:
+            statuses.append({"query": source_name, "status": "來源頁讀取失敗", "count": 0, "url": page_url})
+            continue
+        links = []
+        for href in re.findall(r'href=["\\\']([^"\\\']*(?:/article/)[^"\\\']+)["\\\']', html, flags=re.IGNORECASE):
+            if href.startswith("/"):
+                href = urllib.parse.urljoin(page_url, href)
+            if href.startswith("http") and href not in seen_links:
+                seen_links.add(href)
+                links.append(href)
+            if len(links) >= JOURNAL_ARTICLE_FETCH_LIMIT:
+                break
+        for link in links:
+            if fetched >= JOURNAL_ARTICLE_FETCH_LIMIT:
+                break
+            meta = fetch_journal_page_metadata(link)
+            fetched += 1
+            title = meta.get("metadata_title") or link.rsplit("/", 1)[-1]
+            snippet = meta.get("metadata_abstract") or ""
+            results.append({
+                "title": title,
+                "body": snippet,
+                "href": link,
+                "url": link,
+                "date": meta.get("published_date") or meta.get("metadata_date_text") or "",
+                "journal_metadata": meta,
+                "source_page": source_name,
+            })
+        statuses.append({"query": source_name, "status": "成功" if links else "無文章連結", "count": len(links), "url": page_url})
+    return results, statuses
+
+
+def score_journal_candidate(candidate: dict) -> dict:
+    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('url', '')} {candidate.get('journal_name', '')} {candidate.get('doi', '')}"
+    score = 0
+    reasons: list[str] = []
+    host = _domain_from_url(candidate.get("url", ""))
+    if candidate.get("doi") or (host and any(_host_matches(host, domain) for domain in JOURNAL_ALLOWED_SOURCE_DOMAINS)):
+        score += 20
+        reasons.append("正式期刊來源、DOI 或可信研究頁面 +20")
+    if candidate.get("published_date") and candidate.get("is_within_research_period"):
+        score += 20
+        reasons.append("發表日期明確且符合期間 +20")
+    if _contains_any_term(text, ["urban rail", "urban rail transit", "metro", "subway", "mrt", "light rail", "tram", "都市軌道", "捷運", "地鐵"]):
+        score += 20
+        reasons.append("都市軌道場景明確 +20")
+    if _contains_any_term(text, JOURNAL_SYSTEM_TERMS):
+        score += 25
+        reasons.append("機電/系統研究議題明確 +25")
+    if _contains_any_term(text, JOURNAL_INSIGHT_TERMS):
+        score += 15
+        reasons.append("具規劃、維修、能源、安全或資料治理啟示 +15")
+    return {"journal_score": max(0, min(100, score)), "journal_score_reason": "；".join(reasons) or "未符合主要評分條件"}
+
+
+def _journal_exclusion_stats(excluded: list[dict]) -> dict:
+    stats: dict[str, int] = {}
+    for item in excluded or []:
+        reason = item.get("exclude_reason", "未分類") or "未分類"
+        stats[reason] = stats.get(reason, 0) + 1
+    return stats
+
+
+def _journal_shortfall_reason(selected_count: int, target_min: int, excluded: list[dict]) -> str:
+    if selected_count >= target_min:
+        return "已達學術期刊目標篇數下限。"
+    stats = _journal_exclusion_stats(excluded)
+    if not stats:
+        return "未搜尋到足夠可信學術候選。"
+    top = sorted(stats.items(), key=lambda x: -x[1])[:3]
+    return "符合條件研究不足；主要排除原因：" + "、".join(f"{k} {v} 篇" for k, v in top)
+
+
 def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict], list[dict]]:
     if not include_research_supplement:
         return [], [], []
     if DDGS is None:
         return [], [{"query": "國際學術期刊補充", "status": "ddgs 套件未安裝", "count": 0}], []
 
+    target_min, target_max = get_journal_target_count(research_supplement_lookback_days)
     queries = JOURNAL_PRECISION_QUERIES + JOURNAL_EXPLORATORY_QUERIES
     candidates: list[dict] = []
     statuses: list[dict] = []
     excluded: list[dict] = []
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
+    metadata_fetch_count = 0
 
-    def _exclude(query: str, title: str, url: str, reason: str, snippet: str = "") -> None:
-        if len(excluded) < 80:
-            excluded.append({
+    def _exclude(query: str, title: str, url: str, reason: str, snippet: str = "", extra: dict | None = None) -> None:
+        if len(excluded) < 120:
+            item = {
                 "query": query,
                 "title": title,
                 "url": url,
-                "snippet": _shorten(snippet, 180),
+                "snippet": _shorten(snippet, 220),
                 "exclude_reason": reason,
-            })
+            }
+            if extra:
+                item.update(extra)
+            excluded.append(item)
+
+    def _try_accept_result(result: dict, query: str) -> bool:
+        nonlocal metadata_fetch_count
+        title = _clean_text(result.get("title") or "")
+        snippet = _clean_text(result.get("body") or result.get("excerpt") or result.get("description") or "")
+        url = result.get("href") or result.get("url") or ""
+        if not title or not url:
+            return False
+        metadata = result.get("journal_metadata") if isinstance(result.get("journal_metadata"), dict) else {}
+        text = f"{title} {snippet} {url} {metadata.get('journal_name', '')} {metadata.get('doi', '')}"
+        if any(term.casefold() in text.casefold() for term in JOURNAL_EXCLUDE_TERMS):
+            _exclude(query, title, url, "非都市軌道研究場景或排除運具", snippet)
+            return False
+        if not _is_formal_journal_url_or_doi(url, text):
+            _exclude(query, title, url, "缺少 DOI 或正式期刊 URL", snippet)
+            return False
+
+        date_info = _research_date_info(result, title, snippet)
+        if (date_info["date_confidence"] != "high" or not date_info["is_within_research_period"]) and metadata_fetch_count < JOURNAL_ARTICLE_FETCH_LIMIT:
+            fetched = fetch_journal_page_metadata(url)
+            metadata_fetch_count += 1
+            if fetched.get("metadata_fetch_status") == "success":
+                metadata.update(fetched)
+                if fetched.get("metadata_title") and len(fetched.get("metadata_title", "")) > len(title):
+                    title = fetched["metadata_title"]
+                if fetched.get("metadata_abstract") and len(fetched.get("metadata_abstract", "")) > len(snippet):
+                    snippet = fetched["metadata_abstract"]
+                if fetched.get("published_date"):
+                    date_info = {
+                        "published_date": fetched.get("published_date", ""),
+                        "date_confidence": fetched.get("date_confidence", "low"),
+                        "date_reason": fetched.get("date_reason", "原始文章頁 metadata"),
+                        "is_within_research_period": fetched.get("is_within_research_period", False),
+                    }
+                text = f"{title} {snippet} {url} {metadata.get('journal_name', '')} {metadata.get('doi', '')}"
+
+        if not _contains_any_term(text, JOURNAL_RAIL_CONTEXT_TERMS):
+            _exclude(query, title, url, "缺少 railway/metro/urban rail 等明確場景", snippet, metadata)
+            return False
+        if not _is_urban_rail_candidate(text) and not _contains_any_term(text, ["metro system", "urban rail transit", "rail transit", "urban metro"]):
+            _exclude(query, title, url, "都市軌道關聯不足", snippet, metadata)
+            return False
+        if date_info["date_confidence"] != "high" or not date_info["is_within_research_period"]:
+            _exclude(query, title, url, date_info["date_reason"], snippet, metadata)
+            return False
+
+        title_key = _normalize_title(title)
+        url_key = _dedupe_url(url)
+        if title_key in seen_titles or url_key in seen_urls:
+            _exclude(query, title, url, "重複研究候選", snippet, metadata)
+            return False
+        seen_titles.add(title_key)
+        seen_urls.add(url_key)
+
+        source = metadata.get("journal_name") or _domain_from_url(url) or "研究資料庫"
+        candidate = _make_news_candidate(
+            title=title,
+            date=date_info["published_date"],
+            source=source,
+            url=url,
+            snippet=snippet,
+            query=query,
+            region="國際研究",
+            source_type="國際學術/技術研究",
+        )
+        candidate["year"] = _journal_year(candidate)
+        candidate["published_date"] = date_info["published_date"]
+        candidate["date_confidence"] = date_info["date_confidence"]
+        candidate["date_reason"] = date_info["date_reason"]
+        candidate["is_within_research_period"] = date_info["is_within_research_period"]
+        candidate["doi"] = metadata.get("doi", "")
+        candidate["journal_name"] = metadata.get("journal_name", source)
+        candidate["metadata_fetch_status"] = metadata.get("metadata_fetch_status", "not_needed")
+        candidate.update(score_journal_candidate(candidate))
+        if candidate["journal_score"] < 60:
+            _exclude(query, title, url, "journal_score 低於候補門檻", snippet, candidate)
+            return False
+        candidates.append(candidate)
+        return True
+
+    source_results, source_statuses = _journal_source_page_results(status_text)
+    statuses.extend(source_statuses)
+    source_accepted = 0
+    for result in source_results:
+        if len(candidates) >= target_max:
+            break
+        if _try_accept_result(result, result.get("source_page", "學術來源頁")):
+            source_accepted += 1
+    if source_results:
+        statuses.append({"query": "可信學術來源頁彙整", "status": "成功" if source_accepted else "無符合研究", "count": source_accepted})
 
     for idx, query in enumerate(queries, 1):
-        if len(candidates) >= JOURNAL_MAX_ITEMS:
+        if len(candidates) >= target_max:
             break
         if status_text:
             status_text.text(f"📚 國際學術與技術研究補充搜尋 {idx}/{len(queries)}...")
@@ -4353,65 +4913,23 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
 
         accepted = 0
         for result in results or []:
-            title = _clean_text(result.get("title") or "")
-            snippet = _clean_text(result.get("body") or result.get("excerpt") or result.get("description") or "")
-            url = result.get("href") or result.get("url") or ""
-            if not title or not url:
-                continue
-            text = f"{title} {snippet} {url}"
-            if any(term.casefold() in text.casefold() for term in JOURNAL_EXCLUDE_TERMS):
-                _exclude(query, title, url, "非都市軌道研究場景或排除運具", snippet)
-                continue
-            if not _contains_any_term(text, JOURNAL_RAIL_CONTEXT_TERMS):
-                _exclude(query, title, url, "缺少 railway/metro/urban rail 等明確場景", snippet)
-                continue
-            if not _is_formal_journal_url_or_doi(url, text):
-                _exclude(query, title, url, "缺少 DOI 或正式期刊 URL", snippet)
-                continue
-            if not _is_urban_rail_candidate(text) and not _contains_any_term(text, ["metro system", "urban rail transit", "rail transit"]):
-                _exclude(query, title, url, "都市軌道關聯不足", snippet)
-                continue
-            title_key = _normalize_title(title)
-            url_key = _dedupe_url(url)
-            if title_key in seen_titles or url_key in seen_urls:
-                _exclude(query, title, url, "重複研究候選", snippet)
-                continue
-            source = _domain_from_url(url) or "研究資料庫"
-            date_info = _research_date_info(result, title, snippet)
-            if date_info["date_confidence"] != "high" or not date_info["is_within_research_period"]:
-                _exclude(query, title, url, date_info["date_reason"], snippet)
-                continue
-            seen_titles.add(title_key)
-            seen_urls.add(url_key)
-            preferred_source = any(term.casefold() in text.casefold() for term in JOURNAL_PREFERRED_SOURCE_TERMS)
-            candidate = _make_news_candidate(
-                title=title,
-                date=date_info["published_date"],
-                source=source,
-                url=url,
-                snippet=snippet,
-                query=query,
-                region="國際研究",
-                source_type="國際學術/技術研究",
-            )
-            candidate["year"] = _journal_year(candidate)
-            candidate["published_date"] = date_info["published_date"]
-            candidate["date_confidence"] = date_info["date_confidence"]
-            candidate["date_reason"] = date_info["date_reason"]
-            candidate["is_within_research_period"] = date_info["is_within_research_period"]
-            candidate["journal_priority"] = 0 if preferred_source else 1
-            candidate["journal_priority_reason"] = (
-                f"{date_info['date_reason']}；可靠學術來源優先" if preferred_source else date_info["date_reason"]
-            )
-            candidate["preferred_research_source"] = preferred_source
-            candidates.append(candidate)
-            accepted += 1
-            if len(candidates) >= JOURNAL_MAX_ITEMS:
+            if len(candidates) >= target_max:
                 break
+            if _try_accept_result(result, query):
+                accepted += 1
         statuses.append({"query": query, "status": "成功" if accepted else "無符合研究", "count": accepted})
 
-    candidates = sorted(candidates, key=lambda item: (item.get("journal_priority", 2), item.get("title", "")))
-    return candidates[:JOURNAL_MAX_ITEMS], statuses, excluded
+    high_score = [item for item in candidates if int(item.get("journal_score", 0) or 0) >= 75]
+    borderline = [item for item in candidates if 60 <= int(item.get("journal_score", 0) or 0) < 75]
+    selected = sorted(high_score, key=lambda item: (-int(item.get("journal_score", 0) or 0), item.get("published_date", "")))
+    if len(selected) < target_min:
+        selected.extend(sorted(borderline, key=lambda item: (-int(item.get("journal_score", 0) or 0), item.get("published_date", "")))[: target_min - len(selected)])
+    selected = sorted(selected, key=lambda item: (-int(item.get("journal_score", 0) or 0), item.get("published_date", "")))[:target_max]
+    for item in selected:
+        item["journal_target_count"] = target_min
+        item["journal_selected_count"] = len(selected)
+        item["journal_shortfall_reason"] = _journal_shortfall_reason(len(selected), target_min, excluded)
+    return selected, statuses, excluded
 
 
 def build_report_prompt(selected_candidates: list[dict], journal_candidates: list[dict], search_count: int) -> str:
@@ -4432,7 +4950,10 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
                 json.dumps({
                     "title": item.get("title", ""),
                     "date": item.get("published_date", "") or item.get("date", ""),
-                    "source_display": item.get("source", ""),
+                    "journal_name": item.get("journal_name", item.get("source", "")),
+                    "doi": item.get("doi", ""),
+                    "journal_score": item.get("journal_score", ""),
+                    "journal_score_reason": item.get("journal_score_reason", ""),
                     "url": item.get("url", ""),
                     "snippet": _shorten(item.get("snippet", ""), REPORT_SNIPPET_CHARS),
                 }, ensure_ascii=False)
@@ -4442,7 +4963,7 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
             journal_block = "無符合期間條件且具明確發表日期之研究候選。"
         journal_input_section = f"""
 ## 國際學術與技術研究補充候選
-研究補充已啟用；本次研究補充期間為{research_supplement_period_label}（{research_supplement_start_date.isoformat()} 至 {today.isoformat()}）。如有下方候選，請於最後輸出「{research_heading}」，最多 3 至 5 篇。若沒有候選，請寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
+研究補充已啟用；本次研究補充期間為{research_supplement_period_label}（{research_supplement_start_date.isoformat()} 至 {today.isoformat()}）。如有下方候選，請於最後輸出「{research_heading}」，並使用每篇固定欄位：發表日期、期刊/來源、研究主題、研究摘要、臺北捷運局啟示、資料來源。若有候選，章節最後必須新增「學術期刊綜合結論」，至少 300 字、建議 300～500 字，僅根據候選研究綜整趨勢與對臺北捷運局之啟示。若沒有候選，請寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
 {journal_block}
 """.strip()
     journal_input_text = f"\n\n{journal_input_section}" if journal_input_section else ""
@@ -5352,6 +5873,58 @@ def sanitize_report_text(text: str) -> str:
     return normalize_report_statistics_line(text)
 
 
+
+
+def _journal_theme_summary(journal_candidates: list[dict]) -> list[str]:
+    theme_terms = [
+        ("列車控制與號誌安全", ["cbtc", "signalling", "signaling", "train control", "ato", "atp", "號誌", "列控"]),
+        ("車輛與維修管理", ["rolling stock", "vehicle", "maintenance", "condition monitoring", "車輛", "維修", "監測"]),
+        ("牽引供電與能源效率", ["traction power", "regenerative", "energy", "power supply", "牽引", "供電", "能源"]),
+        ("資料治理、AI 與數位分身", ["data", "ai", "machine learning", "digital twin", "資料", "數位分身", "人工智慧"]),
+        ("旅客流量與營運韌性", ["passenger flow", "resilience", "operation", "capacity", "旅客流量", "韌性", "運能"]),
+        ("資安與系統整合", ["cyber", "system integration", "security", "資安", "系統整合"]),
+    ]
+    text = " ".join(f"{item.get('title','')} {item.get('snippet','')}" for item in journal_candidates or [])
+    themes = [label for label, terms in theme_terms if _contains_any_term(text, terms)]
+    return themes or ["都市軌道機電系統資料化、智慧化與維運管理"]
+
+
+def build_journal_summary_conclusion(journal_candidates: list[dict]) -> str:
+    themes = _unique_limited(_journal_theme_summary(journal_candidates), 4)
+    theme_text = "、".join(themes)
+    source_names = _unique_limited([
+        item.get("journal_name") or item.get("source") or _domain_from_url(item.get("url", ""))
+        for item in journal_candidates or []
+    ], 4)
+    source_text = "、".join(source_names) if source_names else "本期入選研究來源"
+    return (
+        f"本期國際學術期刊補充依系統取得之正式期刊或可信研究頁面整理，入選研究主要來自{source_text}，"
+        f"觀察主題集中於{theme_text}等方向。整體而言，近期都市軌道研究已由單一設備改善，逐步轉向以資料、模型與系統整合支撐營運安全、維修決策及能源效率管理。"
+        f"相關研究對臺北捷運局之啟示，在於新線規劃與既有系統更新時，應及早界定資料來源、欄位格式、系統介面、模型驗證、維修流程與營運安全邊界；"
+        f"導入 AI、數位分身或預測維護等工具時，也應避免僅著重演算法展示，而需同步建立資料品質、資安權限、異常處置與跨系統驗證機制。"
+        f"後續可將此類研究作為機電系統需求規劃、維修管理制度、能源效率策略及風險控管之參考來源，並以可追溯、可驗證、可維運為技術導入原則。"
+    )
+
+
+def ensure_journal_summary_conclusion(report_md: str, journal_candidates: list[dict]) -> str:
+    if not include_research_supplement or not journal_candidates:
+        return report_md
+    if "學術期刊綜合結論" in (report_md or ""):
+        return report_md
+    conclusion = "【學術期刊綜合結論】\n" + build_journal_summary_conclusion(journal_candidates)
+    match = re.search(r"(?m)^📊", report_md or "")
+    if match:
+        return (report_md[:match.start()].rstrip() + "\n\n" + conclusion + "\n\n" + report_md[match.start():].lstrip()).strip()
+    return (report_md or "").rstrip() + "\n\n" + conclusion
+
+
+def count_journal_summary_conclusion_chars(report_md: str) -> int:
+    match = re.search(r"學術期刊綜合結論[】\]]?\s*\n?(.+?)(?=^📊|^⏰|\Z)", report_md or "", flags=re.DOTALL | re.MULTILINE)
+    if not match:
+        return 0
+    return len(re.sub(r"\s+", "", match.group(1)))
+
+
 def enforce_research_section(report_md: str, journal_candidates: list[dict]) -> str:
     if not include_research_supplement:
         return report_md
@@ -6198,12 +6771,14 @@ if generate_btn:
             report_text = report_response
             report_text = sanitize_report_text(report_text)
             report_text = enforce_research_section(report_text, journal_candidates)
+            report_text = ensure_journal_summary_conclusion(report_text, journal_candidates)
             report_text = normalize_final_report_md(report_text)
             report_text = normalize_report_statistics_line(report_text)
             report_text = insert_annual_observation_section(report_text, selected_candidates)
             report_text, dropped_selected_candidates = restore_missing_selected_report_items(report_text, selected_candidates)
             dropped_selected_ids = [int(item.get("id", 0) or 0) for item in dropped_selected_candidates]
             dropped_selected_titles = [item.get("title", "") for item in dropped_selected_candidates]
+            dropped_selected_reasons = ["MaiAgent 未輸出該 Python 入選候選，已由後處理補回。" for _ in dropped_selected_candidates]
             formal_count = count_report_items(report_text)
             category_counts = count_report_items_by_category(report_text)
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
@@ -6246,6 +6821,17 @@ if generate_btn:
                 "source_health_summary": source_health_summary,
                 "dropped_selected_ids": dropped_selected_ids,
                 "dropped_selected_titles": dropped_selected_titles,
+                "dropped_selected_reasons": dropped_selected_reasons,
+                "strict_selected_count": LAST_PYTHON_SELECTION_DEBUG.get("strict_selected_count", 0),
+                "borderline_added_count": LAST_PYTHON_SELECTION_DEBUG.get("borderline_added_count", 0),
+                "shortfall_before_backfill": LAST_PYTHON_SELECTION_DEBUG.get("shortfall_before_backfill", 0),
+                "shortfall_after_backfill": LAST_PYTHON_SELECTION_DEBUG.get("shortfall_after_backfill", 0),
+                "backfill_reason": LAST_PYTHON_SELECTION_DEBUG.get("backfill_reason", ""),
+                "journal_target_count": get_journal_target_count(research_supplement_lookback_days)[0] if include_research_supplement else 0,
+                "journal_selected_count": len(journal_candidates),
+                "journal_exclusion_stats": _journal_exclusion_stats(journal_excluded_candidates),
+                "journal_shortfall_reason": _journal_shortfall_reason(len(journal_candidates), get_journal_target_count(research_supplement_lookback_days)[0], journal_excluded_candidates) if include_research_supplement else "",
+                "journal_summary_conclusion_chars": count_journal_summary_conclusion_chars(report_text),
                 "selection_method": "python_score_rules",
                 "long_term_coverage": long_term_coverage,
                 "demo_cache_mode": False,
@@ -6277,6 +6863,16 @@ if generate_btn:
                 "journal_candidates": journal_candidates,
                 "journal_statuses": journal_statuses,
                 "journal_excluded_candidates": journal_excluded_candidates,
+                "journal_selected_candidates": journal_candidates,
+                "journal_exclusion_stats": _journal_exclusion_stats(journal_excluded_candidates),
+                "journal_source_statuses": journal_statuses,
+                "journal_target_count": get_journal_target_count(research_supplement_lookback_days)[0] if include_research_supplement else 0,
+                "journal_selected_count": len(journal_candidates),
+                "journal_shortfall_reason": _journal_shortfall_reason(len(journal_candidates), get_journal_target_count(research_supplement_lookback_days)[0], journal_excluded_candidates) if include_research_supplement else "",
+                "journal_summary_conclusion_chars": count_journal_summary_conclusion_chars(report_text),
+                "selection_debug": LAST_PYTHON_SELECTION_DEBUG,
+                "borderline_candidates": LAST_PYTHON_SELECTION_DEBUG.get("borderline_candidates", []),
+                "duplicate_event_records": LAST_PYTHON_SELECTION_DEBUG.get("duplicate_event_records", []),
                 "selection_prompt": selection_prompt,
                 "selection_response": selection_response,
                 "selection_method": "python_score_rules",
@@ -6292,6 +6888,7 @@ if generate_btn:
                 "source_health_summary": source_health_summary,
                 "dropped_selected_ids": dropped_selected_ids,
                 "dropped_selected_titles": dropped_selected_titles,
+                "dropped_selected_reasons": dropped_selected_reasons,
                 "report_stats": report_stats,
                 "long_term_coverage": long_term_coverage,
             }
@@ -6469,6 +7066,7 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "include_standards": run_config.get("include_standards"),
             "include_research_supplement": run_config.get("include_research_supplement"),
             "research_supplement_period": run_config.get("research_supplement_period", {}),
+            "research_lookback_days": (run_config.get("research_supplement_period", {}) or {}).get("lookback_days"),
             "fast_mode": run_config.get("fast_mode", True),
             "demo_cache_mode": run_config.get("demo_cache_mode", False),
             "app_source_hash": st.session_state.get("_app_source_hash", ""),
@@ -6503,10 +7101,22 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "source_health_summary": source_health_summary,
             "dropped_selected_ids": latest_stats.get("dropped_selected_ids", debug_info.get("dropped_selected_ids", [])),
             "dropped_selected_titles": latest_stats.get("dropped_selected_titles", debug_info.get("dropped_selected_titles", [])),
+            "dropped_selected_reasons": latest_stats.get("dropped_selected_reasons", debug_info.get("dropped_selected_reasons", [])),
+            "strict_selected_count": latest_stats.get("strict_selected_count", debug_info.get("selection_debug", {}).get("strict_selected_count", 0)),
+            "borderline_added_count": latest_stats.get("borderline_added_count", debug_info.get("selection_debug", {}).get("borderline_added_count", 0)),
+            "shortfall_before_backfill": latest_stats.get("shortfall_before_backfill", debug_info.get("selection_debug", {}).get("shortfall_before_backfill", 0)),
+            "shortfall_after_backfill": latest_stats.get("shortfall_after_backfill", debug_info.get("selection_debug", {}).get("shortfall_after_backfill", 0)),
+            "backfill_reason": latest_stats.get("backfill_reason", debug_info.get("selection_debug", {}).get("backfill_reason", "")),
+            "journal_target_count": latest_stats.get("journal_target_count", debug_info.get("journal_target_count", 0)),
+            "journal_selected_count": latest_stats.get("journal_selected_count", debug_info.get("journal_selected_count", 0)),
+            "journal_shortfall_reason": latest_stats.get("journal_shortfall_reason", debug_info.get("journal_shortfall_reason", "")),
+            "journal_summary_conclusion_chars": latest_stats.get("journal_summary_conclusion_chars", debug_info.get("journal_summary_conclusion_chars", 0)),
+            "journal_exclusion_stats": latest_stats.get("journal_exclusion_stats", debug_info.get("journal_exclusion_stats", {})),
             "selection_method": latest_stats.get("selection_method", debug_info.get("selection_method", "")),
             "demo_cache_mode": latest_stats.get("demo_cache_mode", run_config.get("demo_cache_mode", False)),
             "include_research_supplement": latest_stats.get("include_research_supplement", run_config.get("include_research_supplement", False)),
             "research_supplement_period": latest_stats.get("research_supplement_period", run_config.get("research_supplement_period", {})),
+            "research_lookback_days": (latest_stats.get("research_supplement_period", run_config.get("research_supplement_period", {})) or {}).get("lookback_days"),
         },
         "selection_method": latest_stats.get("selection_method", debug_info.get("selection_method", "")),
         "source_health_summary": source_health_summary,
@@ -6519,15 +7129,27 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
         "selected_ids": debug_info.get("selected_ids", []) if debug_info else [],
         "dropped_selected_ids": latest_stats.get("dropped_selected_ids", debug_info.get("dropped_selected_ids", [])),
         "dropped_selected_titles": latest_stats.get("dropped_selected_titles", debug_info.get("dropped_selected_titles", [])),
+        "dropped_selected_reasons": latest_stats.get("dropped_selected_reasons", debug_info.get("dropped_selected_reasons", [])),
+        "selection_debug": debug_info.get("selection_debug", {}) if debug_info else {},
+        "borderline_candidates": debug_info.get("borderline_candidates", []) if debug_info else [],
+        "duplicate_event_records": debug_info.get("duplicate_event_records", []) if debug_info else [],
         "enriched_selected_candidates": debug_info.get("enriched_selected_candidates", debug_info.get("selected_candidates", [])) if debug_info else [],
         "excluded_candidates": debug_info.get("excluded_candidates", []) if debug_info else [],
         "exclusion_stats": debug_info.get("exclusion_stats", {}) if debug_info else {},
         "dedupe_stats": debug_info.get("dedupe_stats", {}) if debug_info else {},
         "ai_unselected_stats": debug_info.get("ai_unselected_stats", {}) if debug_info else {},
         "python_unselected_stats": debug_info.get("python_unselected_stats", {}) if debug_info else {},
+        "research_lookback_days": (run_config.get("research_supplement_period", {}) or {}).get("lookback_days"),
         "journal_candidates": debug_info.get("journal_candidates", []) if debug_info else [],
+        "journal_selected_candidates": debug_info.get("journal_selected_candidates", debug_info.get("journal_candidates", [])) if debug_info else [],
         "journal_statuses": debug_info.get("journal_statuses", []) if debug_info else [],
+        "journal_source_statuses": debug_info.get("journal_source_statuses", debug_info.get("journal_statuses", [])) if debug_info else [],
         "journal_excluded_candidates": debug_info.get("journal_excluded_candidates", []) if debug_info else [],
+        "journal_exclusion_stats": debug_info.get("journal_exclusion_stats", {}) if debug_info else {},
+        "journal_target_count": debug_info.get("journal_target_count", 0) if debug_info else 0,
+        "journal_selected_count": debug_info.get("journal_selected_count", 0) if debug_info else 0,
+        "journal_shortfall_reason": debug_info.get("journal_shortfall_reason", "") if debug_info else "",
+        "journal_summary_conclusion_chars": debug_info.get("journal_summary_conclusion_chars", 0) if debug_info else 0,
         "maiagent": {
             "selection_prompt": debug_info.get("selection_prompt", "") if debug_info else "",
             "selection_response": debug_info.get("selection_response", "") if debug_info else "",
