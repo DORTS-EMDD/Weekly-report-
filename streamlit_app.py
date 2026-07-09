@@ -3442,6 +3442,234 @@ def rebalance_selected_candidates(selected: list[dict]) -> list[dict]:
     return balanced
 
 
+def _selection_target_range(days: int) -> tuple[int, int]:
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 7
+    if days >= 365:
+        return 12, 20
+    if days >= 180:
+        return 12, 18
+    if days >= 90:
+        return 10, 15
+    if days >= 30:
+        return 10, 15
+    if days >= 14:
+        return 10, 14
+    return 8, 12
+
+
+def _selection_classification(candidate: dict) -> str:
+    preliminary_type = candidate.get("preliminary_type")
+    if preliminary_type in ADVANCED_TYPES:
+        return preliminary_type
+    return infer_preliminary_type(candidate)
+
+
+def _has_source_reference(candidate: dict) -> bool:
+    source_url = _effective_source_url(candidate)
+    return bool(_extract_complete_url(source_url) or candidate.get("source_domain") or _extract_domain_hint(source_url))
+
+
+def _selection_good_flag_count(candidate: dict) -> int:
+    flags = set(candidate.get("candidate_flags", []) or [])
+    return sum(1 for flag in ("technical_or_system_detail", "incident_or_safety_signal", "high_value_policy") if flag in flags)
+
+
+def _selection_bad_flag_count(candidate: dict) -> int:
+    flags = set(candidate.get("candidate_flags", []) or [])
+    return sum(1 for flag in ("low_value_service_notice", "insufficient_information", "short_snippet") if flag in flags)
+
+
+def _candidate_month_key(candidate: dict) -> str:
+    date_obj = _candidate_date_obj(candidate.get("date", ""))
+    return date_obj.strftime("%Y-%m") if date_obj else "日期未知"
+
+
+def _candidate_system_theme(candidate: dict) -> str:
+    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')}"
+    theme_terms = [
+        ("號誌與列車控制", ["cbtc", "signalling", "signaling", "signal", "train control", "號誌", "信號"]),
+        ("自動化與無人駕駛", ["driverless", "automation", "automated", "unattended train", "自動", "無人"]),
+        ("車輛與車隊更新", ["rolling stock", "fleet", "trainset", "new train", "車輛", "列車"]),
+        ("月臺門與車站設備", ["platform screen door", "platform doors", "psd", "elevator", "escalator", "月臺門", "月台門", "電梯", "電扶梯"]),
+        ("供電與能源管理", ["power supply", "traction power", "substation", "third rail", "energy", "供電", "牽引", "變電", "能源"]),
+        ("通訊、資安與資料治理", ["communications", "telecom", "radio", "5g", "lte", "cyber", "data", "通訊", "資安", "資料"]),
+        ("維修監測與影像分析", ["maintenance", "monitoring", "condition monitoring", "video", "camera", "ai", "維修", "監測", "影像", "AI"]),
+        ("AFC 與票務系統", ["afc", "ticketing", "fare gate", "fare", "票務", "票閘", "票價"]),
+    ]
+    for label, terms in theme_terms:
+        if _contains_any_term(text, terms):
+            return label
+    return candidate.get("classification") or candidate.get("preliminary_type") or "未分類"
+
+
+def _python_selection_sort_key(candidate: dict) -> tuple:
+    return (
+        -int(candidate.get("python_score", 0) or 0),
+        _source_tier_rank(candidate.get("source_tier", "C_media")),
+        -_date_sort_key(candidate),
+        -int(_has_source_reference(candidate)),
+        -_selection_good_flag_count(candidate),
+        _selection_bad_flag_count(candidate),
+        int(candidate.get("id", 0) or 0),
+    )
+
+
+def _python_selection_dynamic_key(candidate: dict, selected: list[dict]) -> tuple:
+    base_key = _python_selection_sort_key(candidate)
+    if lookback_int != 365:
+        return base_key
+    selected_regions = [item.get("region", "") for item in selected]
+    selected_months = [_candidate_month_key(item) for item in selected]
+    selected_themes = [_candidate_system_theme(item) for item in selected]
+    diversity_penalty = (
+        selected_regions.count(candidate.get("region", "")),
+        selected_months.count(_candidate_month_key(candidate)),
+        selected_themes.count(_candidate_system_theme(candidate)),
+    )
+    return base_key[:2] + diversity_penalty + base_key[2:]
+
+
+def _python_candidate_allowed_for_scope(candidate: dict) -> bool:
+    if is_global_scope:
+        return True
+    region = _canonical_candidate_region(candidate)
+    if region in active_regions:
+        return True
+    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('query', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
+    looks_like_standard = candidate.get("classification") == "規範更新" or _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True)
+    if region in {"國際", "國際研究", "未判定"} and _is_allowed_international_candidate(candidate, text, looks_like_standard):
+        candidate["region"] = "國際"
+        return True
+    return False
+
+
+def _is_low_value_python_selection_candidate(candidate: dict) -> bool:
+    flags = set(candidate.get("candidate_flags", []) or [])
+    score = int(candidate.get("python_score", 0) or 0)
+    if candidate.get("source_tier") == "D_proxy_low_value" or "low_value_proxy_or_page" in flags:
+        return True
+    if "low_value_service_notice" in flags and score < 70:
+        return True
+    if "insufficient_information" in flags and score < 65:
+        return True
+    return score < 45
+
+
+def _is_strict_technical_candidate(candidate: dict) -> bool:
+    flags = set(candidate.get("candidate_flags", []) or [])
+    if candidate.get("classification") != "技術新知":
+        return False
+    if "technical_or_system_detail" not in flags:
+        return False
+    if flags.intersection({"incident_or_safety_signal", "high_value_policy", "low_value_service_notice", "insufficient_information"}):
+        return False
+    return True
+
+
+def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict | None:
+    if not pool:
+        return None
+    candidate = min(pool, key=lambda item: _python_selection_dynamic_key(item, selected))
+    pool.remove(candidate)
+    return candidate
+
+
+def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
+    _, max_items = _selection_target_range(lookback_int)
+    grouped: dict[str, list[dict]] = {category: [] for category in selected_types}
+    for raw_candidate in model_candidates or []:
+        candidate = dict(raw_candidate)
+        classification = _selection_classification(candidate)
+        candidate["classification"] = classification
+        if classification not in selected_types:
+            continue
+        if selected_types == ["技術新知"] and not _is_strict_technical_candidate(candidate):
+            continue
+        if not _python_candidate_allowed_for_scope(candidate):
+            continue
+        if _is_low_value_python_selection_candidate(candidate):
+            continue
+        candidate["selected_reason"] = (
+            f"Python 規則選題：score={candidate.get('python_score', 0)}；"
+            f"tier={candidate.get('source_tier', '')}；flags={','.join(candidate.get('candidate_flags', []) or [])}"
+        )
+        candidate["include_in_report"] = True
+        grouped.setdefault(classification, []).append(candidate)
+
+    for category in grouped:
+        grouped[category] = sorted(grouped[category], key=_python_selection_sort_key)
+
+    selected: list[dict] = []
+    if len(selected_types) <= 1:
+        only_type = selected_types[0] if selected_types else ""
+        while len(selected) < max_items:
+            candidate = _take_next_python_candidate(grouped.get(only_type, []), selected)
+            if not candidate:
+                break
+            selected.append(candidate)
+        return rebalance_selected_candidates(selected)
+
+    # First pass reserves room for every selected type with at least one qualified candidate.
+    for category in selected_types:
+        if len(selected) >= max_items:
+            break
+        candidate = _take_next_python_candidate(grouped.get(category, []), selected)
+        if candidate:
+            selected.append(candidate)
+
+    while len(selected) < max_items:
+        added = False
+        for category in selected_types:
+            if len(selected) >= max_items:
+                break
+            candidate = _take_next_python_candidate(grouped.get(category, []), selected)
+            if candidate:
+                selected.append(candidate)
+                added = True
+        if not added:
+            break
+    return rebalance_selected_candidates(selected)
+
+
+def build_python_unselected_stats(model_candidates: list[dict], selected_candidates: list[dict]) -> dict:
+    selected_ids = {int(item.get("id", 0) or 0) for item in selected_candidates}
+    stats: dict[str, int] = {}
+    examples: list[dict] = []
+    for candidate in model_candidates or []:
+        candidate_id = int(candidate.get("id", 0) or 0)
+        if candidate_id in selected_ids:
+            continue
+        classification = _selection_classification(candidate)
+        flags = set(candidate.get("candidate_flags", []) or [])
+        if classification not in selected_types:
+            reason = "類型未勾選"
+        elif selected_types == ["技術新知"] and not _is_strict_technical_candidate(dict(candidate, classification=classification)):
+            reason = "技術新知單選模式排除非純技術候選"
+        elif not _python_candidate_allowed_for_scope(dict(candidate, classification=classification)):
+            reason = "國家/地區不在指定範圍"
+        elif _is_low_value_python_selection_candidate(candidate):
+            reason = "Python 規則排除低價值或資訊不足候選"
+        elif flags.intersection({"low_value_service_notice", "insufficient_information", "short_snippet"}):
+            reason = "低價值或摘要不足旗標降權後未入選"
+        else:
+            reason = "Python 規則排序與類別平衡後未入選"
+        stats[reason] = stats.get(reason, 0) + 1
+        if len(examples) < 20:
+            examples.append({
+                "id": candidate_id,
+                "title": candidate.get("title", ""),
+                "classification": classification,
+                "python_score": candidate.get("python_score", 0),
+                "source_tier": candidate.get("source_tier", ""),
+                "candidate_flags": candidate.get("candidate_flags", []),
+                "reason": reason,
+            })
+    return {"summary": stats, "examples": examples}
+
+
 def build_selection_prompt(candidates: list[dict]) -> str:
     candidate_block = "\n\n".join(format_selection_candidate(candidate) for candidate in candidates)
     if not candidate_block:
@@ -3926,6 +4154,7 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 
 必要寫作提醒：
 - 只根據下方已入選新聞資料撰寫；正式報告只輸出已勾選章節，不得輸出未勾選類型。
+- 以下新聞已由 Python 規則完成選題，請勿再自行刪減、改選或新增新聞。
 - 每則新聞標題必須翻成繁體中文正式標題；機構、車型或系統縮寫可保留。
 - 「事件摘要：」與「臺北捷運局啟示：」後方必須換行，不要把正文接在同一行；摘要與啟示不要條列。
 - 事件摘要請根據 title、snippet、source_display、date、region、preliminary_type 與 url 自行判斷撰寫。摘要重點為事件本身、都市軌道場景、涉及的機電系統或營運管理意義。若原始資料未提供細節，請採保守摘要，不得自行補述；除非該缺漏會影響工程判讀，否則不必特別寫「未提供」。不要每則都套用「資料來源未載明」或「原始資料未提供」。不得自行補原文沒有的數字、供應商、金額、GoA 等級、測試項目、車輛規格、事故原因或導入時程。
@@ -5310,8 +5539,10 @@ if generate_btn:
                 "elapsed_seconds_ddgs": 0.0,
                 "elapsed_seconds_candidate_pool": 0.0,
                 "elapsed_seconds_selection": 0.0,
+                "elapsed_seconds_python_selection": 0.0,
                 "elapsed_seconds_report": 0.0,
                 "elapsed_seconds_pdf": 0.0,
+                "selection_method": "demo_cache",
                 "demo_cache_mode": True,
                 "include_research_supplement": include_research_supplement,
                 "research_supplement_period": run_config.get("research_supplement_period", {}),
@@ -5333,6 +5564,9 @@ if generate_btn:
                 "journal_excluded_candidates": [],
                 "selection_prompt": "",
                 "selection_response": "",
+                "selection_method": "demo_cache",
+                "ai_selection_response": "",
+                "python_unselected_stats": {},
                 "report_prompt": "",
                 "report_response": "",
                 "latest_report_md": report_text,
@@ -5430,6 +5664,7 @@ if generate_btn:
                 "elapsed_seconds_ddgs": 0.0,
                 "elapsed_seconds_candidate_pool": 0.0,
                 "elapsed_seconds_selection": 0.0,
+                "elapsed_seconds_python_selection": 0.0,
                 "elapsed_seconds_report": 0.0,
                 "elapsed_seconds_pdf": 0.0,
             }
@@ -5475,16 +5710,20 @@ if generate_btn:
             time.sleep(0.1)
             progress_bar.progress(0.58)
 
-            # Step 2：MaiAgent 第一階段選題
-            status_text.text("🤖 MaiAgent 選題分析……")
-            selection_prompt = build_selection_prompt(model_candidates)
+            # Step 2：Python 規則選題
+            status_text.text("🧮 Python 規則選題……")
+            selection_prompt = ""
+            selection_response = ""
             stage_start = time.perf_counter()
-            selection_response = call_maiagent_cloud(selection_prompt)
-            timings["elapsed_seconds_selection"] = round(time.perf_counter() - stage_start, 2)
-            maiagent_call_count += 1
-            selected_candidates = rebalance_selected_candidates(parse_selection_response(selection_response, model_candidates))
+            selected_candidates = select_candidates_by_python(model_candidates)
+            timings["elapsed_seconds_python_selection"] = round(time.perf_counter() - stage_start, 2)
+            timings["elapsed_seconds_selection"] = timings["elapsed_seconds_python_selection"]
             selected_ids = [int(item.get("id", 0) or 0) for item in selected_candidates]
-            ai_unselected_stats = build_ai_unselected_stats(model_candidates, selected_candidates)
+            python_unselected_stats = build_python_unselected_stats(model_candidates, selected_candidates)
+            ai_unselected_stats = python_unselected_stats
+            selected_long_term_coverage = build_long_term_coverage_warning(selected_candidates)
+            if selected_long_term_coverage.get("long_term_coverage_warning"):
+                long_term_coverage = selected_long_term_coverage
             progress_bar.progress(0.70)
 
             journal_candidates: list[dict] = []
@@ -5516,7 +5755,7 @@ if generate_btn:
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
                 re.search(r"(?m)^🔹\s*\[規範更新\]", report_text)
             )
-            prompt_chars = len(selection_prompt) + len(report_prompt)
+            prompt_chars = len(report_prompt)
             raw_chars = len(rss_results) + len(ddg_results)
 
             os.makedirs("reports", exist_ok=True)
@@ -5546,8 +5785,10 @@ if generate_btn:
                 "elapsed_seconds_ddgs": timings["elapsed_seconds_ddgs"],
                 "elapsed_seconds_candidate_pool": timings["elapsed_seconds_candidate_pool"],
                 "elapsed_seconds_selection": timings["elapsed_seconds_selection"],
+                "elapsed_seconds_python_selection": timings["elapsed_seconds_python_selection"],
                 "elapsed_seconds_report": timings["elapsed_seconds_report"],
                 "elapsed_seconds_pdf": timings["elapsed_seconds_pdf"],
+                "selection_method": "python_score_rules",
                 "long_term_coverage": long_term_coverage,
                 "demo_cache_mode": False,
                 "include_research_supplement": include_research_supplement,
@@ -5580,6 +5821,9 @@ if generate_btn:
                 "journal_excluded_candidates": journal_excluded_candidates,
                 "selection_prompt": selection_prompt,
                 "selection_response": selection_response,
+                "selection_method": "python_score_rules",
+                "ai_selection_response": "",
+                "python_unselected_stats": python_unselected_stats,
                 "report_prompt": report_prompt,
                 "report_response": report_response,
                 "latest_report_md": report_text,
@@ -5761,6 +6005,7 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "fast_mode": run_config.get("fast_mode", True),
             "demo_cache_mode": run_config.get("demo_cache_mode", False),
             "app_source_hash": st.session_state.get("_app_source_hash", ""),
+            "selection_method": latest_stats.get("selection_method", debug_info.get("selection_method", "")),
             "long_term_coverage_warning": long_term_coverage.get("long_term_coverage_warning", False),
             "long_term_coverage_reason": long_term_coverage.get("reason", ""),
         },
@@ -5784,12 +6029,15 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "elapsed_seconds_ddgs": latest_stats.get("elapsed_seconds_ddgs", 0),
             "elapsed_seconds_candidate_pool": latest_stats.get("elapsed_seconds_candidate_pool", 0),
             "elapsed_seconds_selection": latest_stats.get("elapsed_seconds_selection", 0),
+            "elapsed_seconds_python_selection": latest_stats.get("elapsed_seconds_python_selection", 0),
             "elapsed_seconds_report": latest_stats.get("elapsed_seconds_report", 0),
             "elapsed_seconds_pdf": latest_stats.get("elapsed_seconds_pdf", 0),
+            "selection_method": latest_stats.get("selection_method", debug_info.get("selection_method", "")),
             "demo_cache_mode": latest_stats.get("demo_cache_mode", run_config.get("demo_cache_mode", False)),
             "include_research_supplement": latest_stats.get("include_research_supplement", run_config.get("include_research_supplement", False)),
             "research_supplement_period": latest_stats.get("research_supplement_period", run_config.get("research_supplement_period", {})),
         },
+        "selection_method": latest_stats.get("selection_method", debug_info.get("selection_method", "")),
         "source_health": debug_info.get("source_statuses", source_statuses) if debug_info else (source_statuses or []),
         "raw_candidates": debug_info.get("raw_candidates", []) if debug_info else [],
         "deduped_candidates": debug_info.get("deduped_candidates", []) if debug_info else [],
@@ -5802,16 +6050,19 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
         "exclusion_stats": debug_info.get("exclusion_stats", {}) if debug_info else {},
         "dedupe_stats": debug_info.get("dedupe_stats", {}) if debug_info else {},
         "ai_unselected_stats": debug_info.get("ai_unselected_stats", {}) if debug_info else {},
+        "python_unselected_stats": debug_info.get("python_unselected_stats", {}) if debug_info else {},
         "journal_candidates": debug_info.get("journal_candidates", []) if debug_info else [],
         "journal_statuses": debug_info.get("journal_statuses", []) if debug_info else [],
         "journal_excluded_candidates": debug_info.get("journal_excluded_candidates", []) if debug_info else [],
         "maiagent": {
             "selection_prompt": debug_info.get("selection_prompt", "") if debug_info else "",
             "selection_response": debug_info.get("selection_response", "") if debug_info else "",
+            "ai_selection_response": debug_info.get("ai_selection_response", "") if debug_info else "",
             "report_prompt": debug_info.get("report_prompt", "") if debug_info else "",
             "report_response": debug_info.get("report_response", "") if debug_info else "",
         },
         "selection_response": debug_info.get("selection_response", "") if debug_info else "",
+        "ai_selection_response": debug_info.get("ai_selection_response", "") if debug_info else "",
         "report_prompt": debug_info.get("report_prompt", "") if debug_info else "",
         "report_response": debug_info.get("report_response", "") if debug_info else "",
         "final_report_md": debug_info.get("latest_report_md", st.session_state.get("latest_report_md", "")) if debug_info else st.session_state.get("latest_report_md", ""),
