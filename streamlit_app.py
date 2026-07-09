@@ -4435,6 +4435,42 @@ def parse_selection_response(response_text: str, candidates: list[dict]) -> list
     return selected
 
 
+
+def build_python_unselected_stats(model_candidates: list[dict], selected_candidates: list[dict]) -> dict:
+    selected_ids = {int(item.get("id", 0) or 0) for item in selected_candidates}
+    stats: dict[str, int] = {}
+    examples: list[dict] = []
+    for candidate in model_candidates or []:
+        candidate_id = int(candidate.get("id", 0) or 0)
+        if candidate_id in selected_ids:
+            continue
+        classification = _selection_classification(candidate)
+        flags = set(candidate.get("candidate_flags", []) or [])
+        if classification not in selected_types:
+            reason = "類型未勾選"
+        elif classification == "技術新知" and not _is_strict_technical_candidate(dict(candidate, classification=classification)):
+            reason = "技術新知缺少明確機電/系統細節或屬低價值公告"
+        elif not _python_candidate_allowed_for_scope(dict(candidate, classification=classification)):
+            reason = "國家/地區不在指定範圍"
+        elif _is_low_value_python_selection_candidate(candidate):
+            reason = "Python 規則排除低價值或資訊不足候選"
+        elif flags.intersection({"low_value_service_notice", "insufficient_information", "short_snippet", "low_value_official_notice", "procurement_list_notice", "general_rail_exclusion"}):
+            reason = "低價值或摘要不足旗標降權後未入選"
+        else:
+            reason = "Python 規則排序、候補機制與類別平衡後未入選"
+        stats[reason] = stats.get(reason, 0) + 1
+        if len(examples) < 20:
+            examples.append({
+                "id": candidate_id,
+                "title": candidate.get("title", ""),
+                "classification": classification,
+                "python_score": candidate.get("python_score", 0),
+                "source_tier": candidate.get("source_tier", ""),
+                "candidate_flags": candidate.get("candidate_flags", []),
+                "reason": reason,
+            })
+    return {"summary": stats, "examples": examples}
+
 def build_ai_unselected_stats(model_candidates: list[dict], selected_candidates: list[dict]) -> dict:
     selected_ids = {int(item.get("id", 0) or 0) for item in selected_candidates}
     stats: dict[str, int] = {}
