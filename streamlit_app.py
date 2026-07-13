@@ -5535,16 +5535,15 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
     return selected, statuses, excluded
 
 
+# V18.2 Prompt-only 測試版：僅調整正式報告撰寫 Prompt，不變更搜尋、選題、評分、去重及輸出流程。
 def build_report_prompt(selected_candidates: list[dict], journal_candidates: list[dict], search_count: int) -> str:
-    weekday = ['一','二','三','四','五','六','日'][today.weekday()]
     selected_types_str = "、".join(selected_types) if selected_types else "無"
     selected_sections = _selected_report_sections()
     selected_empty_rules = _selected_empty_section_rules()
-    selected_stats = _selected_stats_template()
     research_heading = research_section_heading(markdown=False)
     candidate_block = "\n\n".join(format_report_candidate(candidate) for candidate in selected_candidates)
     if not candidate_block:
-        candidate_block = "第一階段沒有入選新聞。請只依已勾選章節輸出沒有符合資料的文字，不得自行補新聞。"
+        candidate_block = "Python 選題流程沒有入選新聞。請只依已勾選章節輸出沒有符合資料的固定文字，不得自行補新聞。"
 
     journal_input_section = ""
     if include_research_supplement:
@@ -5566,13 +5565,48 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
             journal_block = "無符合期間條件且具明確發表日期之研究候選。"
         journal_input_section = f"""
 ## 國際學術與技術研究補充候選
-研究補充已啟用；本次研究補充期間為{research_supplement_period_label}（{research_supplement_start_date.isoformat()} 至 {today.isoformat()}）。如有下方候選，請於最後輸出「{research_heading}」。每篇期刊標題請用「1、標題」「2、標題」連續編號，不得加上「[技術研究補充]」。每篇使用固定欄位：發表日期、期刊/來源、研究主題、研究摘要、臺北捷運局啟示、資料來源。若有候選，章節最後必須新增「學術期刊綜合結論」，至少 300 字、建議 300～500 字，僅根據候選研究綜整趨勢與對臺北捷運局之啟示。若沒有候選，請寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
+研究補充已啟用；本次研究補充期間為{research_supplement_period_label}（{research_supplement_start_date.isoformat()} 至 {today.isoformat()}）。
+
+如有候選，正式報告最後必須輸出「{research_heading}」，並嚴格使用下列格式：
+
+## {research_heading}
+
+1、繁體中文研究標題
+• 發表日期：YYYY-MM-DD
+• 期刊／來源：期刊完整名稱
+• 研究主題：研究主題
+• 研究摘要：完整段落
+• 臺北捷運局啟示：完整段落
+• 資料來源：完整 URL
+
+2、繁體中文研究標題
+• 發表日期：YYYY-MM-DD
+• 期刊／來源：期刊完整名稱
+• 研究主題：研究主題
+• 研究摘要：完整段落
+• 臺北捷運局啟示：完整段落
+• 資料來源：完整 URL
+
+期刊格式要求：
+- 只有每篇期刊標題可以使用「1、」「2、」等流水編號。
+- 每個欄位名稱與欄位內容必須在同一行，不得將日期、期刊名稱、研究主題或資料來源移到下一行。
+- 統一使用「期刊／來源」，不得使用「期刊/來源」。
+- 不得重複日期、期刊名稱、研究主題或資料來源。
+- 不得在各欄位前新增流水編號，不得使用「[技術研究補充]」。
+- 各篇期刊之間保留一個空行，不得使用「---」分隔。
+- 所有期刊完成後，另起一行輸出「### 學術期刊綜合結論」，並撰寫 300～500 字完整段落。
+- 綜合結論僅能依候選研究歸納共同技術趨勢及對臺北捷運局之啟示，不得杜撰研究成果。
+- 請勿在期刊章節後輸出本期統計、報告產出時間或系統資訊。
+
+若沒有候選，請只寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
+
+研究候選：
 {journal_block}
 """.strip()
     journal_input_text = f"\n\n{journal_input_section}" if journal_input_section else ""
 
     return f"""
-請依照你在 MaiAgent 後台設定的國際捷運技術週報角色指令，根據以下已入選新聞撰寫正式報告。不得自行搜尋，不得補充候選資料以外的新聞、日期、國家、城市、路線、供應商、技術細節、事故原因、統計數據或金額。
+請依照 MaiAgent 後台設定的國際捷運技術週報角色指令，根據以下已入選新聞撰寫正式報告。不得自行搜尋，不得補充候選資料以外的新聞、日期、國家、城市、路線、供應商、技術細節、事故原因、統計數據或金額。
 
 本次是第二階段正式報告撰寫任務。
 報告標題：{report_title}
@@ -5592,15 +5626,17 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 正式報告每則新聞請使用以下固定格式，不得改成表格、簡報式卡片或多層條列，不得自行增減欄位，不得新增「技術關鍵字」欄位，不得把「臺北捷運局啟示」拆成子欄位：
 🔹 [新聞類型] 繁體中文新聞標題
 
-• 發布/事件日期：
+• 發布/事件日期：YYYY-MM-DD
 
 • 國家/地區：
 
 • 相關機電系統：
 
 • 事件摘要：
+完整段落
 
 • 臺北捷運局啟示：
+完整段落
 
 • 資料來源：
 
@@ -5609,23 +5645,39 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 
 必要寫作提醒：
 - 只根據下方已入選新聞資料撰寫；正式報告只輸出已勾選章節，不得輸出未勾選類型。
-- 以下新聞已由 Python 規則完成選題，共 {len(selected_candidates)} 則；請勿再自行刪減、改選或新增新聞，正式報告新聞數必須與已入選新聞資料一致。
-- 每則新聞標題必須翻成繁體中文正式標題；機構、車型或系統縮寫可保留。
-- 「事件摘要：」與「臺北捷運局啟示：」後方必須換行，不要把正文接在同一行；摘要與啟示不要條列。
-- 事件摘要請根據 title、snippet、source_display、date、region、preliminary_type 與 url 自行判斷撰寫。摘要重點為事件本身、都市軌道場景、涉及的機電系統或營運管理意義。若原始資料未提供細節，請採保守摘要，不得自行補述；除非該缺漏會影響工程判讀，否則不必特別寫「未提供」。不要每則都套用「資料來源未載明」或「原始資料未提供」。不得自行補原文沒有的數字、供應商、金額、GoA 等級、測試項目、車輛規格、事故原因或導入時程。
-- 臺北捷運局啟示請從機電系統規劃、系統整合、維修管理、營運安全、資料治理、資安、能源效率或風險控管角度撰寫。不得寫成政策宣傳、空泛口號或與新聞無關的一般性建議。不得暗示臺北捷運局已有相同計畫、設備或問題，除非候選資料明確提供。
-- 資料來源請使用 source_display、date、url 與 source_domain；若候選資料提供完整 URL，資料來源列應保留該 URL 或系統指定之來源連結；若只有 domain，顯示 domain；若沒有完整 URL，寫：「原始候選資料未提供完整 URL。」不得自行編造 URL，不得把來源首頁、分類頁或媒體名稱自行改寫成新聞頁 URL。
-- 不得在正式報告正文使用 MaiAgent、Python 初篩、developer debug、python_score、入選原因、候選資料等模型處理語氣。
+- 下方共 {len(selected_candidates)} 則新聞已由 Python 完成「入選」，所有新聞都必須保留，不得刪除、合併、替換或新增；每則新聞只能出現一次，正式報告新聞總數必須與已入選新聞資料一致。
+- 候選資料中的 preliminary_type、classification、region、source_display 與 source_verb 均為程式初步判定，不是最終答案。請根據 title、snippet、date、source_domain 與 url 重新判斷新聞類型、事件所在地及來源性質。
+- 可在本次已勾選的新聞類型之間更正分類；不得因重新分類而遺漏任何入選新聞，也不得新增未勾選章節。
 
-報告最後保留：
-📊 本期統計：正式新聞共 N 則（{selected_stats}）
-⏰ 報告產出時間：{today.strftime('%Y年%m月%d日')} 週{weekday}
+新聞類型判斷原則：
+- 技術新知：原始資料明確描述都市軌道機電設備或系統的新導入、擴充、升級、汰換、改善、測試驗證或正式投入營運。包括新型車輛投入營運、生物辨識或 AFC 系統應用、新票閘設備、電梯或電扶梯汰換、號誌與列車控制、供電、通訊、月臺門、行控、機廠設備、維修監測、能源管理、系統整合、系統保證及資安等具體案例。
+- 重大事故：已實際發生，且涉及傷亡、出軌、碰撞、火災、重大設備損壞、停駛、重大營運中斷，或具有明確系統安全檢討價值的事件。
+- 營運政策：票價、服務調整、營運諮詢、預定封閉、例行維修、一般工程安排、旅客服務及治理措施。若新聞同時具有明確設備導入、系統升級或技術驗證內容，應優先歸為技術新知。
+- 營運爭議：罷工、勞資、票價、合約、預算、工程延誤、訴訟或公共爭議。
+- 規範更新：必須具備明確新版、修訂、增補、草案、公告、徵詢、撤回或取代資訊。
+- 既有設備單純發生故障，不得列為技術新知；預定封閉、例行維修及一般工程進度不得列為重大事故；不得只因新聞出現 AI、系統、設備、測試或 Metro 等字詞，就判定為技術新知。
+
+地區與來源判斷：
+- 國家／地區以事件實際發生地為準，不得以旅客國籍、媒體所在地、搜尋語言或來源網站所在地判斷。
+- 若標題或摘要已明確出現城市、國家或營運機構，應更正程式初判。例如 Mumbai 應判為印度、St. Paul 應判為美國、Moscow 應判為俄羅斯；原始資料確實無法判定時，才寫「未判定」。
+- 只有政府機關、交通主管機關、捷運營運機構及其官方網站，才可使用「公告」或「官方資料」。MSN、Yahoo、一般新聞媒體、入口網站與轉載平台一律使用「報導」，不得寫成「官方公告」。
+- source_display 或 source_verb 若與 source_domain 明顯矛盾，應以 source_domain 所代表的實際來源性質為準。
+
+內容與格式要求：
+- 每則新聞標題必須翻成繁體中文正式標題；機構、車型或系統縮寫可保留。
+- 發布／事件日期統一顯示為 YYYY-MM-DD，不得輸出 ISO 時間、時區或 `T00:00:00+00:00`。
+- 「事件摘要：」與「臺北捷運局啟示：」後方必須換行，摘要與啟示不得使用條列。
+- 事件摘要僅根據候選資料撰寫，重點為事件本身、都市軌道場景、涉及的機電系統或營運管理意義。原始資料未提供細節時應保守表述，不得自行補述數字、供應商、金額、GoA 等級、測試項目、車輛規格、事故原因或導入時程。
+- 每則「臺北捷運局啟示」只選擇與該事件最直接相關的一至二項工程重點，不得每則同時羅列系統整合、資料治理、維修管理、資安、能源效率及風險控管。例如票閘設備著重 AFC 介面、容量與維修；電梯汰換著重設備生命週期、施工界面與無障礙服務；號誌事故著重故障隔離、備援與營運應變。
+- 資料來源請依 source_domain、source_display、date 與 url 表達；若有完整 URL，必須保留該 URL；若只有 domain，顯示 domain；若沒有完整 URL，寫「原始候選資料未提供完整 URL。」不得自行編造 URL。
+- 不得在正式報告正文使用 MaiAgent、Python 初篩、developer debug、python_score、候選 flags、入選原因或其他模型處理語氣。
+- 請勿輸出「本期統計」、「報告產出時間」、搜尋次數、候選數量或任何系統執行資訊；這些內容將由程式後續統一產生。
+- 未啟用國際學術期刊時，正式報告正文結束於最後一則新聞；啟用期刊時，正文結束於「學術期刊綜合結論」。
 
 ## 已入選新聞資料
 {candidate_block}
 {journal_input_text}
 """.strip()
-
 
 def _extract_maiagent_text(data) -> str:
     """寬鬆解析 MaiAgent 不同版本可能回傳的文字欄位。"""
