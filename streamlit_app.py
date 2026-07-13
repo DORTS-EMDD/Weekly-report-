@@ -584,6 +584,12 @@ URBAN_RAIL_OPERATOR_TERMS = [
     "東京メトロ", "서울교통공사", "港鐵", "巴黎地鐵",
 ]
 
+CIVIC_METRO_NAME_ONLY_TERMS = [
+    "metro vancouver", "metro council", "metro mayor", "metro government",
+    "metro area", "metro region", "metropolitan council", "metropolitan government",
+    "metropolitan planning organization",
+]
+
 SOURCE_NAME_NOISE_TERMS = [
     "metro magazine", "metro report international", "urban transport magazine",
     "mass transit", "railway gazette international", "international railway journal",
@@ -603,10 +609,13 @@ NON_URBAN_TRANSPORT_TERMS = [
     "bus", "coach", "highway", "intercity bus", "long-distance coach", "brt",
     "airport", "aviation", "lax", "airport people mover", "terminal people mover",
     "airport transit", "airport shuttle", "terminal shuttle",
+    "road maintenance", "road works", "road construction", "road closure",
+    "pothole", "highway works", "traffic advisory",
     "高速鐵路", "高速铁路", "高鐵", "高铁", "新幹線", "新干线",
     "台鐵", "臺鐵", "台湾鉄路", "台灣鐵路", "在来線", "特急",
     "貨運", "貨物列車", "客運鐵路", "城際鐵路", "區域鐵路", "通勤鐵路",
-    "公路", "高速公路", "長途巴士", "客運", "機場", "航空", "航廈", "航站",
+    "公路", "高速公路", "道路維護", "道路施工", "道路封閉", "道路坑洞",
+    "交通提醒", "長途巴士", "客運", "機場", "航空", "航廈", "航站",
     "高速鉄道", "高速バス", "バス", "貨物鉄道", "在来線",
 ]
 
@@ -749,12 +758,15 @@ SOURCE_QUALITY_C_DOMAINS = {
 
 LOW_QUALITY_CONTENT_TERMS = [
     "wikipedia", "travel guide", "tourist", "hotel", "airport parking",
-    "things to do", "itinerary", "visitor guide", "seo", "sponsored",
+    "things to do", "itinerary", "visitor guide", "travel tips", "travel reminder",
+    "tourism information", "weekend travel", "seo", "sponsored",
     "minor delay", "detour", "service alert", "service advisory",
     "customer notice", "take transit", "temporary stop closure",
     "hiring", "jobs", "careers", "conference registration", "event page",
-    "product page", "mtr e-store", "列車模型", "吊牌掛飾",
-    "一般旅遊", "旅遊攻略", "景點", "飯店", "酒店",
+    "product page", "mtr e-store", "passenger praised", "passenger review",
+    "traveler review", "viral video", "social media", "列車模型", "吊牌掛飾",
+    "一般旅遊", "旅遊攻略", "景點", "飯店", "酒店", "旅客心得",
+    "社群影片", "旅遊資訊", "週末搭乘提醒",
 ]
 
 LOW_INFORMATION_PAGE_TERMS = [
@@ -785,7 +797,13 @@ HARD_LOW_VALUE_CANDIDATE_TERMS = [
     "service advisory", "rider tools", "careers", "career", "hiring",
     "jobs", "plan-metro", "plan-de-ligne", "route page", "route map",
     "pdf map", "mtr e-store", "product page", "conference registration",
-    "event page", "untitled",
+    "event page", "untitled", "lost property", "delay certificate",
+    "contract documents holders list", "passenger praised", "passenger review",
+    "traveler review", "viral video", "social media", "mascot", "stamp rally",
+    "theme train", "themed train", "tbm farewell", "tbm demobilization",
+    "tbm removal", "tunnel boring machine farewell", "pothole",
+    "失物招領", "延誤證明", "標案文件持有人", "旅客心得", "社群影片",
+    "吉祥物", "集章活動", "主題列車", "潛盾機告別", "潛盾機撤場", "道路坑洞",
 ]
 
 JOURNAL_PRECISION_QUERIES = [
@@ -1358,6 +1376,36 @@ def clean_source_name_for_ui(source_name: str) -> str:
     cleaned = re.sub(r"（\s*）|\(\s*\)", "", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" －-_/|：:")
     return cleaned or str(source_name or "").strip()
+
+
+FORMAL_SOURCE_PROXY_LABELS = {
+    "日本地下鉄/メトロ", "韓國地下鐵", "Singapore MRT", "香港港鐵",
+    "Australia Metro", "UK Underground", "France Metro", "Germany U-Bahn",
+    "Spain Metro/Light Rail", "Netherlands Metro", "Switzerland Metro/Tram",
+    "US Subway/Metro", "Canada Metro", "Italy Metro/Tram", "Sweden Metro/Tram",
+    "Austria U-Bahn/Tram", "Denmark Metro/Light Rail", "Norway Metro/Tram",
+}
+
+
+def _is_query_proxy_source_label(source_name: str) -> bool:
+    raw = str(source_name or "").strip()
+    cleaned = clean_source_name_for_ui(raw).strip()
+    raw_lower = raw.casefold()
+    cleaned_lower = cleaned.casefold()
+    if "google news" in raw_lower or "代理" in raw_lower:
+        return True
+    return any(cleaned_lower == label.casefold() for label in FORMAL_SOURCE_PROXY_LABELS)
+
+
+def _clean_formal_source_proxy_label(label: str) -> str:
+    cleaned = str(label or "").strip()
+    cleaned = re.sub(r"Google\s*News\s*地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"Google\s*News\s*代理", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" －-_/|：:")
+    if _is_query_proxy_source_label(cleaned):
+        return ""
+    return cleaned
 
 
 def _conditional_news_sources(fast_mode: bool) -> tuple[list[tuple[str, str]], list[dict]]:
@@ -1965,7 +2013,10 @@ def _is_urban_rail_candidate(text: str, source_name: str = "") -> bool:
     has_operator = _contains_any_term(f"{source_name} {topic_text}", URBAN_RAIL_OPERATOR_TERMS)
     has_non_urban = _contains_any_term(topic_text, NON_URBAN_TRANSPORT_TERMS)
     has_hard_non_urban = _contains_any_term(topic_text, NON_URBAN_HARD_EXCLUDE_TERMS)
+    has_civic_metro_name_only = _contains_any_term(topic_text, CIVIC_METRO_NAME_ONLY_TERMS)
 
+    if has_civic_metro_name_only and not (has_unambiguous_mode or has_operator):
+        return False
     if has_hard_non_urban and not has_unambiguous_mode:
         return False
     if has_non_urban and not has_mode:
@@ -2684,6 +2735,10 @@ def source_label_for_report(source: str, url: str, source_href: str = "", tier: 
             return label
 
     source_clean = clean_source_name_for_ui(source)
+    if _is_query_proxy_source_label(source):
+        if host and host != "news.google.com":
+            return host
+        return "資料來源未明確辨識"
 
     if source_clean and source_clean not in {"RSS", "ddgs", "Google News"}:
         if tier == "A_official" and "官方" not in source_clean:
@@ -2981,6 +3036,8 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
     information_issue = _information_quality_issue(candidate)
     if information_issue:
         return False, information_issue
+    if _is_low_value_long_term_candidate(candidate):
+        return False, "長期回顧低價值或錯分類候選"
 
     parsed_url = urlparse(url)
     path_lower = (parsed_url.path or "").casefold()
@@ -3332,21 +3389,22 @@ LOW_VALUE_OFFICIAL_NOTICE_TERMS = [
 NON_TECH_NEWS_EXCLUDE_TERMS = [
     "extra train", "special train", "theme train", "themed train",
     "character train", "stamp rally", "digital stamp", "passenger event",
-    "road maintenance", "road works", "road accident", "bus",
+    "road maintenance", "road works", "road construction", "road accident", "pothole", "bus",
     "autonomous bus", "self-driving bus", "tunnel boring machine farewell",
-    "tbm farewell", "mascot", "character",
+    "tbm farewell", "tbm removal", "tbm demobilization", "mascot", "character",
     "加開列車", "主題列車", "角色列車", "數位集章", "集章活動",
-    "一般旅客活動", "旅客活動", "道路維護", "道路施工", "道路事故",
+    "一般旅客活動", "旅客活動", "道路維護", "道路施工", "道路坑洞", "道路事故",
     "巴士", "公車", "自動駕駛巴士", "吉祥物", "角色",
-    "隧道鑽掘機告別", "潛盾機告別",
+    "隧道鑽掘機告別", "潛盾機告別", "潛盾機撤場",
 ]
 
 NON_ACCIDENT_CONTEXT_TERMS = [
     "tunnel boring machine farewell", "tbm farewell", "road maintenance",
-    "road works", "road accident", "traffic accident", "strike date",
+    "tbm removal", "tbm demobilization", "road works", "road construction",
+    "road accident", "traffic accident", "pothole", "strike date",
     "strike dates", "strike notice", "罷工日期", "罷工日期公告",
-    "道路維護", "道路施工", "道路事故", "一般道路事故",
-    "隧道鑽掘機告別", "潛盾機告別",
+    "道路維護", "道路施工", "道路坑洞", "道路事故", "一般道路事故",
+    "隧道鑽掘機告別", "潛盾機告別", "潛盾機撤場",
 ]
 
 URBAN_RAIL_INCIDENT_CONTEXT_TERMS = [
@@ -3393,8 +3451,27 @@ MEDIUM_TECHNICAL_DETAIL_TERMS = [
     "operational control", "control centre", "control center", "maintenance facility",
     "vehicle introduction", "fleet introduction", "system upgrade", "equipment improvement",
     "safety management", "asset management", "station systems", "platform equipment",
+    "escalator", "elevator", "air conditioning", "hvac", "passenger information system",
+    "ai", "image analysis", "video analytics", "monitoring center", "safety center",
+    "control room", "operations control center", "maintenance depot",
     "車站設備", "旅客資訊", "營運監控", "行控", "控制中心", "維修設施",
     "車輛導入", "系統更新", "設備改善", "營運安全管理", "資產管理",
+    "電扶梯", "電梯", "空調", "月臺設備", "月台設備", "旅客資訊系統",
+    "影像分析", "監控中心", "安全中心", "行控中心", "維修機廠",
+]
+
+WEEKLY_BACKFILL_ALLOWED_TERMS = [
+    "station equipment", "escalator", "elevator", "air conditioning", "hvac",
+    "platform equipment", "passenger information system", "ai", "image analysis",
+    "video analytics", "data", "monitoring", "maintenance support",
+    "operations control center", "control centre", "control center", "safety center",
+    "monitoring center", "maintenance facility", "maintenance depot",
+    "vehicle introduction", "fleet introduction", "rolling stock introduction",
+    "safety management", "operations safety", "operational safety",
+    "車站設備", "電扶梯", "電梯", "空調", "月臺設備", "月台設備",
+    "旅客資訊系統", "AI", "影像", "資料", "監控", "維修輔助",
+    "營運安全", "控制中心", "安全中心", "監控中心", "維修設施",
+    "維修機廠", "車輛導入",
 ]
 
 LOW_REPORT_VALUE_TERMS = [
@@ -3403,9 +3480,13 @@ LOW_REPORT_VALUE_TERMS = [
     "youtube", "tiktok", "instagram", "personal experience", "first-time rider",
     "reviewed the metro", "lost property", "delay certificate", "mascot",
     "stamp rally", "theme train", "themed train", "road maintenance",
+    "road works", "road construction", "pothole", "travel information",
+    "weekend service", "weekend travel", "tourism information", "tbm farewell",
+    "tbm removal", "tbm demobilization", "contract documents holders list",
     "旅客稱讚", "乘客稱讚", "乾淨安全", "低票價", "票價便宜", "社群影片",
     "個人經驗", "旅客心得", "失物招領", "延誤證明", "吉祥物", "數位集章",
-    "主題列車", "道路維護",
+    "主題列車", "道路維護", "道路施工", "道路坑洞", "旅遊資訊",
+    "週末搭乘提醒", "潛盾機告別", "潛盾機撤場", "標案文件持有人",
 ]
 
 LOW_IMPACT_ACCIDENT_TERMS = [
@@ -3529,7 +3610,35 @@ def _has_substantive_detail_for_low_value_notice(candidate: dict) -> bool:
         _contains_any_term(text, STRONG_TECHNICAL_DETAIL_TERMS)
         or _contains_any_term(text, SAFETY_INCIDENT_DETAIL_TERMS)
         or _contains_any_term(text, SUBSTANTIVE_POLICY_DETAIL_TERMS)
+        or _contains_any_term(text, WEEKLY_BACKFILL_ALLOWED_TERMS)
     )
+
+
+def _has_long_term_report_value(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    return (
+        _has_good_report_signal(candidate)
+        or _contains_any_term(text, STRONG_TECHNICAL_DETAIL_TERMS)
+        or _contains_any_term(text, SAFETY_INCIDENT_DETAIL_TERMS)
+        or _contains_any_term(text, SUBSTANTIVE_POLICY_DETAIL_TERMS)
+        or _contains_any_term(text, HIGH_IMPACT_ACCIDENT_TERMS)
+    )
+
+
+def _is_low_value_long_term_candidate(candidate: dict) -> bool:
+    if int(lookback_int) not in ADVANCED_LOOKBACK_OPTIONS:
+        return False
+    text = _candidate_selection_text(candidate)
+    classification = candidate.get("classification") or candidate.get("preliminary_type") or infer_preliminary_type(candidate)
+    if _contains_any_term(text, LOW_REPORT_VALUE_TERMS) and not _has_long_term_report_value(candidate):
+        return True
+    if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS) and not _has_long_term_report_value(candidate):
+        return True
+    if _contains_any_term(text, CIVIC_METRO_NAME_ONLY_TERMS) and not _contains_any_term(text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS):
+        return True
+    if classification == "重大事故" and not _is_accident_signal_text(text):
+        return True
+    return False
 
 
 def _is_technical_news_selection_candidate(candidate: dict) -> bool:
@@ -3903,11 +4012,50 @@ EVENT_LOCATION_TERMS = [
 ]
 
 
-def _candidate_event_location(candidate: dict) -> str:
+PROJECT_SERIES_TERMS = [
+    "project", "programme", "program", "extension", "line", "station", "construction",
+    "contract", "upgrade", "rollout", "renewal", "trial", "testing", "commissioning",
+    "opening", "launch", "fleet", "trainset", "cbtc", "signalling", "signaling",
+    "platform screen door", "depot", "maintenance facility",
+    "計畫", "專案", "延伸線", "路線", "車站", "工程", "合約", "升級", "更新",
+    "試運轉", "測試", "通車", "啟用", "車隊", "列車", "號誌", "月臺門", "機廠",
+]
+
+PROJECT_STAGE_GROUPS = {
+    "procurement": [
+        "contract", "award", "tender", "bid", "procurement", "合約", "得標", "招標", "採購",
+    ],
+    "construction": [
+        "construction", "works", "tunnel", "tbm", "civil works", "工程", "施工", "隧道", "潛盾",
+    ],
+    "testing": [
+        "testing", "trial", "commissioning", "test run", "試運轉", "測試", "試車", "調試",
+    ],
+    "opening": [
+        "opening", "opens", "launch", "service begins", "starts service", "通車", "啟用", "營運",
+    ],
+    "vehicle": [
+        "trainset", "rolling stock", "fleet", "vehicle", "train arrival", "車輛", "列車", "車隊",
+    ],
+    "systems": [
+        "cbtc", "signalling", "signaling", "platform screen door", "power supply",
+        "號誌", "信號", "月臺門", "月台門", "供電",
+    ],
+}
+
+
+def _candidate_specific_event_location(candidate: dict) -> str:
     text = _candidate_selection_text(candidate).casefold()
     for term in EVENT_LOCATION_TERMS:
         if term.casefold() in text:
             return term.casefold()
+    return ""
+
+
+def _candidate_event_location(candidate: dict) -> str:
+    specific = _candidate_specific_event_location(candidate)
+    if specific:
+        return specific
     return str(candidate.get("region", "") or "").casefold()
 
 
@@ -3928,24 +4076,61 @@ def _event_similarity_text(candidate: dict) -> str:
     return text.casefold().strip()
 
 
+def _is_project_series_candidate(candidate: dict) -> bool:
+    return _contains_any_term(_candidate_selection_text(candidate), PROJECT_SERIES_TERMS)
+
+
+def _candidate_project_stage(candidate: dict) -> str:
+    text = _candidate_selection_text(candidate)
+    for stage, terms in PROJECT_STAGE_GROUPS.items():
+        if _contains_any_term(text, terms):
+            return stage
+    return ""
+
+
+def _same_project_stage_or_unspecified(left: dict, right: dict) -> bool:
+    left_stage = _candidate_project_stage(left)
+    right_stage = _candidate_project_stage(right)
+    return not left_stage or not right_stage or left_stage == right_stage
+
+
+def _duplicate_event_reason(candidate: dict, selected_item: dict) -> str:
+    if int(lookback_int) in ADVANCED_LOOKBACK_OPTIONS and _is_project_series_candidate(candidate) and _is_project_series_candidate(selected_item):
+        return "同一城市/地點、相同系統主題與相近專案階段，長期回顧視為同一專案系列。"
+    if candidate.get("classification") == "重大事故":
+        return "同一城市/地點、相近日期與相同事故/安全主題，事件級去重。"
+    return "相同城市/地點、相近日期與相同系統主題，事件級去重。"
+
+
 def _is_same_report_event(candidate: dict, selected_item: dict) -> bool:
     if candidate.get("classification") != selected_item.get("classification"):
         return False
     if candidate.get("region") and selected_item.get("region") and candidate.get("region") != selected_item.get("region"):
         return False
-    if not _event_date_close(candidate, selected_item):
-        return False
     if _candidate_system_theme(candidate) != _candidate_system_theme(selected_item):
         return False
     candidate_location = _candidate_event_location(candidate)
     selected_location = _candidate_event_location(selected_item)
-    if candidate_location and selected_location and candidate_location == selected_location:
-        return True
     similarity = difflib.SequenceMatcher(
         None,
         _event_similarity_text(candidate),
         _event_similarity_text(selected_item),
     ).ratio()
+    date_close = _event_date_close(candidate, selected_item, days=7 if candidate.get("classification") == "重大事故" else 3)
+    candidate_specific_location = _candidate_specific_event_location(candidate)
+    selected_specific_location = _candidate_specific_event_location(selected_item)
+    same_specific_location = bool(candidate_specific_location and selected_specific_location and candidate_specific_location == selected_specific_location)
+    if int(lookback_int) in ADVANCED_LOOKBACK_OPTIONS and same_specific_location:
+        if candidate.get("classification") == "重大事故" and (date_close or similarity >= 0.70):
+            return True
+        if _is_project_series_candidate(candidate) and _is_project_series_candidate(selected_item) and _same_project_stage_or_unspecified(candidate, selected_item):
+            return True
+        if similarity >= 0.76:
+            return True
+    if not date_close:
+        return False
+    if candidate_location and selected_location and candidate_location == selected_location:
+        return True
     return similarity >= 0.62
 
 
@@ -4000,6 +4185,8 @@ def _is_low_value_python_selection_candidate(candidate: dict) -> bool:
     has_good_signal = _has_good_report_signal(candidate)
     has_technical_detail = _has_explicit_technical_system_detail(candidate)
     text = _candidate_selection_text(candidate)
+    if _is_low_value_long_term_candidate(candidate):
+        return True
     if "general_rail_exclusion" in flags or _has_general_rail_exclusion(candidate):
         return True
     if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS) and not _has_substantive_detail_for_low_value_notice(candidate):
@@ -4035,7 +4222,7 @@ def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict 
                     "candidate_title": candidate.get("title", ""),
                     "duplicate_of_id": duplicate_of.get("id", ""),
                     "duplicate_of_title": duplicate_of.get("title", ""),
-                    "duplicate_event_reason": "相同城市/地點、相近日期與相同系統或事故主題，事件級去重。",
+                    "duplicate_event_reason": _duplicate_event_reason(candidate, duplicate_of),
                 })
             except Exception:
                 pass
@@ -4051,6 +4238,8 @@ LAST_PYTHON_SELECTION_DEBUG: dict = dict(REPORT_SELECTION_DEBUG_DEFAULT)
 
 def _is_hard_excluded_for_borderline(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
+    if _is_low_value_long_term_candidate(candidate):
+        return True
     if _has_general_rail_exclusion(candidate):
         return True
     if _has_procurement_list_notice(candidate):
@@ -4088,7 +4277,7 @@ def _is_b_level_technical_candidate(candidate: dict) -> bool:
         return False
     if not _is_urban_rail_candidate(text, candidate.get("source", "")):
         return False
-    return _contains_any_term(text, MEDIUM_TECHNICAL_DETAIL_TERMS)
+    return _contains_any_term(text, MEDIUM_TECHNICAL_DETAIL_TERMS + WEEKLY_BACKFILL_ALLOWED_TERMS)
 
 
 def _is_borderline_report_candidate(candidate: dict) -> tuple[bool, str]:
@@ -4119,7 +4308,7 @@ def _is_borderline_report_candidate(candidate: dict) -> tuple[bool, str]:
             return True, "低影響事故但涉及系統安全議題"
         return False, "事故價值不足"
     if classification == "營運政策":
-        if "high_value_policy" in flags or _contains_any_term(text, SUBSTANTIVE_POLICY_DETAIL_TERMS + HIGH_VALUE_POLICY_TERMS):
+        if "high_value_policy" in flags or _contains_any_term(text, SUBSTANTIVE_POLICY_DETAIL_TERMS + HIGH_VALUE_POLICY_TERMS + WEEKLY_BACKFILL_ALLOWED_TERMS):
             return True, "具營運管理或系統規劃價值"
         return False, "營運政策價值不足"
     if classification == "營運爭議":
@@ -5267,11 +5456,13 @@ def _clean_source_label(content: str, url: str, domain: str) -> str:
     label = re.sub(r"原始候選資料未提供完整\s*URL", "", label, flags=re.IGNORECASE)
     label = re.sub(r"未提供完整\s*URL", "", label, flags=re.IGNORECASE)
     label = re.sub(r"Google\s*News.*?(?:代理|proxy|來源)?", "", label, flags=re.IGNORECASE)
+    label = _clean_formal_source_proxy_label(label)
     label = label.replace("，。", "，").replace("。 ", " ")
     label = re.sub(r"[（(]\s*[）)]", "", label)
     label = re.sub(r"[，,。；;：:]+\s*", " ", label)
     label = re.sub(r"\s+", " ", label)
     label = label.strip(" ：:;；,，。-（）()[]【】")
+    label = _clean_formal_source_proxy_label(label)
     if label.casefold() in {"http", "https", "google news", url.casefold(), domain.casefold()}:
         label = ""
     if not label and domain:
@@ -5954,6 +6145,108 @@ def ensure_journal_summary_conclusion(report_md: str, journal_candidates: list[d
     return (report_md or "").rstrip() + "\n\n" + conclusion
 
 
+def _journal_candidate_full_date(item: dict) -> str:
+    for key in ("published_date", "date"):
+        date_obj = _parse_full_research_date(str(item.get(key, "") or ""))
+        if date_obj:
+            return date_obj.isoformat()
+    return ""
+
+
+def _journal_candidate_date_for_text(text: str, journal_candidates: list[dict]) -> str:
+    haystack = text or ""
+    for item in journal_candidates or []:
+        date_text = _journal_candidate_full_date(item)
+        if not date_text:
+            continue
+        for value in (item.get("url", ""), item.get("doi", "")):
+            value = str(value or "").strip()
+            if value and value in haystack:
+                return date_text
+        title_tokens = [
+            token for token in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]{5,}", item.get("title", "") or "")
+            if len(token) >= 5
+        ]
+        if title_tokens and sum(1 for token in title_tokens[:6] if token in haystack) >= 2:
+            return date_text
+    return ""
+
+
+def repair_journal_dates_in_report(report_md: str, journal_candidates: list[dict]) -> str:
+    if not include_research_supplement or not journal_candidates or not report_md:
+        return report_md
+    heading_match = re.search(
+        r"(?m)^#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:技術研究補充|國際學術期刊)\s*$",
+        report_md,
+    )
+    if not heading_match:
+        return report_md
+    end_match = re.search(r"(?m)^(?:📊|⏰)", report_md[heading_match.end():])
+    section_end = heading_match.end() + end_match.start() if end_match else len(report_md)
+    before = report_md[:heading_match.start()]
+    section = report_md[heading_match.start():section_end]
+    after = report_md[section_end:]
+
+    candidate_dates = [date for date in (_journal_candidate_full_date(item) for item in journal_candidates) if date]
+    date_index = 0
+    active_date = ""
+
+    def _next_candidate_date() -> str:
+        nonlocal date_index
+        if date_index >= len(candidate_dates):
+            return ""
+        date_text = candidate_dates[date_index]
+        date_index += 1
+        return date_text
+
+    def _mark_candidate_date_used(date_text: str) -> None:
+        nonlocal date_index
+        while date_text and date_index < len(candidate_dates):
+            current = candidate_dates[date_index]
+            date_index += 1
+            if current == date_text:
+                break
+
+    def _replace_line_date(line_text: str, date_text: str) -> str:
+        if not date_text:
+            return line_text
+        if "日期未知" in line_text:
+            return line_text.replace("日期未知", date_text, 1)
+        if re.search(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", line_text):
+            return re.sub(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", date_text, line_text, count=1)
+        if re.search(r"20\d{2}年\s*\d{1,2}月\s*\d{1,2}日", line_text):
+            return re.sub(r"20\d{2}年\s*\d{1,2}月\s*\d{1,2}日", date_text, line_text, count=1)
+        if re.match(r"^\s*(?:[-*]\s*)?(?:•\s*)?發表日期\s*[：:]\s*$", line_text):
+            return re.sub(r"([：:])\s*$", rf"\1{date_text}", line_text)
+        return line_text
+
+    repaired_lines: list[str] = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if stripped == "---" or stripped.startswith(("###", "🔹")):
+            active_date = ""
+
+        matched_date = _journal_candidate_date_for_text(line, journal_candidates)
+        if matched_date:
+            active_date = matched_date
+            _mark_candidate_date_used(matched_date)
+
+        if "發表日期" in line:
+            replacement_date = matched_date or active_date or _next_candidate_date()
+            if replacement_date:
+                line = _replace_line_date(line, replacement_date)
+                active_date = replacement_date
+        elif "資料來源" in line:
+            replacement_date = matched_date or active_date or _next_candidate_date()
+            if replacement_date:
+                line = _replace_line_date(line, replacement_date)
+                active_date = replacement_date
+
+        repaired_lines.append(line)
+
+    return before + "\n".join(repaired_lines) + after
+
+
 def count_journal_summary_conclusion_chars(report_md: str) -> int:
     match = re.search(r"學術期刊綜合結論[】\]]?\s*\n?(.+?)(?=^📊|^⏰|\Z)", report_md or "", flags=re.DOTALL | re.MULTILINE)
     if not match:
@@ -6097,17 +6390,10 @@ def display_report_markdown(md: str) -> str:
 
 
 def register_pdf_fonts() -> tuple[str, str]:
-    """Register Microsoft JhengHei for CJK and Times New Roman for Latin text when available."""
+    """Register an embeddable CJK font first; fall back to ReportLab CID fonts only if needed."""
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
     from reportlab.pdfbase.ttfonts import TTFont
-
-    try:
-        if not pdfmetrics.getFont("MSung-Light"):
-            pass
-    except Exception:
-        pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
-    return "MSung-Light", "MSung-Light"
 
     def _is_registered(font_name: str) -> bool:
         try:
@@ -6133,13 +6419,27 @@ def register_pdf_fonts() -> tuple[str, str]:
                     continue
         return None
 
-    cjk_font = _register_ttf("MicrosoftJhengHei", [
+    def _register_cid_fallback() -> str:
+        for font_name in ("MSung-Light", "STSong-Light", "HeiseiMin-W3"):
+            try:
+                if not _is_registered(font_name):
+                    pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+                return font_name
+            except Exception:
+                continue
+        return "Helvetica"
+
+    cjk_font = _register_ttf("MetroReportCJK", [
         r"C:\Windows\Fonts\msjh.ttc",
         r"C:\Windows\Fonts\msjh.ttf",
         r"C:\Windows\Fonts\msjhl.ttc",
+        r"C:\Windows\Fonts\msyh.ttc",
+        r"C:\Windows\Fonts\simsun.ttc",
         r"C:\Windows\Fonts\mingliu.ttc",
+        r"C:\Windows\Fonts\ArialUni.ttf",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJKtc-Regular.otf",
+        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.ttf",
         "/usr/share/fonts/truetype/noto/NotoSansCJKtc-Regular.otf",
@@ -6149,15 +6449,14 @@ def register_pdf_fonts() -> tuple[str, str]:
         "/System/Library/Fonts/STHeiti Medium.ttc",
     ])
     if not cjk_font:
-        if not _is_registered("MSung-Light"):
-            pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
-        cjk_font = "MSung-Light"
+        cjk_font = _register_cid_fallback()
 
-    latin_font = _register_ttf("TimesNewRoman", [
+    latin_font = _register_ttf("MetroReportLatin", [
         r"C:\Windows\Fonts\times.ttf",
         r"C:\Windows\Fonts\timesbd.ttf",
         r"C:\Windows\Fonts\timesi.ttf",
-    ]) or "Times-Roman"
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+    ]) or cjk_font
 
     return cjk_font, latin_font
 
@@ -6809,6 +7108,7 @@ if generate_btn:
             report_text = enforce_research_section(report_text, journal_candidates)
             report_text = ensure_journal_summary_conclusion(report_text, journal_candidates)
             report_text = normalize_final_report_md(report_text)
+            report_text = repair_journal_dates_in_report(report_text, journal_candidates)
             report_text = normalize_report_statistics_line(report_text)
             report_text = insert_annual_observation_section(report_text, selected_candidates)
             report_text, dropped_selected_candidates = restore_missing_selected_report_items(report_text, selected_candidates)
