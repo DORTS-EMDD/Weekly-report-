@@ -1,9 +1,7 @@
 """
-國際捷運技術週報 — Streamlit 展示介面
-- 搜尋一：RSS 訂閱源（RSS_SOURCES 清單，每項來源皆已個別查證是否有可訂閱 RSS）
-- 搜尋二：ddgs 多後端（動態精簡關鍵字以加速）
-- 依左側勾選事件篩選各自的新聞 (新增「營運政策」並改為下拉收合選單)
-- 嚴格排除傳統火車/高鐵，優先聚焦捷運、中運量與LRRT系統
+國際捷運技術週報 AI 自動產生系統。
+
+本程式以 Streamlit 建置操作介面，透過 RSS、Google News 代理及 DDGS 蒐集國際捷運新聞與學術資料，並由 Python 進行日期檢核、來源判斷、去重、排除無關內容、初步分類及候選排序。入選資料再交由 MaiAgent 依固定格式撰寫正式報告，內容涵蓋技術新知、重大事故、營運政策、營運爭議、規範更新及國際學術期刊。系統支援週報至年度回顧、PDF 輸出、Email 寄送、除錯 JSON 及排程自動寄送。
 """
 
 import os
@@ -5926,11 +5924,37 @@ def normalize_source_line(line: str) -> str:
     source_ref = url or domain
     source_label = _clean_source_label(content, source_ref, domain or host)
     url_text = source_ref or "原始候選資料未提供完整 URL。"
-    return f"• 資料來源：{source_label}，{date_text}，{url_text}"
+    parts = [source_label]
+    if date_text and date_text != "日期未知":
+        parts.append(date_text)
+    parts.append(url_text)
+    return f"• 資料來源：{'，'.join(part for part in parts if part)}"
+
+
+def _protect_journal_sections(text: str) -> tuple[str, list[str]]:
+    sections: list[str] = []
+    pattern = re.compile(
+        r"(?ms)^#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:技術研究補充|國際學術期刊)\s*$.*?(?=^📊|^⏰|\Z)"
+    )
+
+    def _replace(match: re.Match) -> str:
+        sections.append(match.group(0).strip())
+        return f"\n__JOURNAL_SECTION_{len(sections) - 1}__\n"
+
+    return pattern.sub(_replace, text or "", count=1), sections
+
+
+def _restore_journal_sections(text: str, sections: list[str]) -> str:
+    restored = text or ""
+    for idx, section in enumerate(sections or []):
+        restored = restored.replace(f"__JOURNAL_SECTION_{idx}__", section)
+    return restored
 
 
 def normalize_report_source_lines(text: str) -> str:
-    return "\n".join(normalize_source_line(line) for line in (text or "").splitlines())
+    protected, sections = _protect_journal_sections(text or "")
+    normalized = "\n".join(normalize_source_line(line) for line in protected.splitlines())
+    return _restore_journal_sections(normalized, sections)
 
 
 def compact_report_urls(text: str) -> str:
@@ -6061,28 +6085,37 @@ def strip_unselected_types_from_title(text: str) -> str:
 
 
 def normalize_report_statistics_line(text: str) -> str:
-    if not text:
-        return text
-    selected_parts = [category for category in ADVANCED_TYPES if category in selected_types]
-    if not selected_parts:
-        return text
-    counts = count_report_items_by_category(text)
-    total = sum(counts.get(category, 0) for category in selected_parts)
-    stats_detail = " / ".join(f"{category} {counts.get(category, 0)} 則" for category in selected_parts)
-    stats_line = f"📊 本期統計：共 {total} 則（{stats_detail}）"
-    if re.search(r"(?m)^\s*📊\s*(?:本週|本期)統計.*$", text):
-        return re.sub(r"(?m)^\s*📊\s*(?:本週|本期)統計.*$", stats_line, text, count=1)
-    if re.search(r"(?m)^\s*(?:本週|本期)統計.*$", text):
-        return re.sub(r"(?m)^\s*(?:本週|本期)統計.*$", stats_line, text, count=1)
-    match = re.search(r"(?m)^\s*⏰", text)
-    if match:
-        return text[:match.start()].rstrip() + "\n" + stats_line + "\n" + text[match.start():].lstrip()
-    return text.rstrip() + "\n\n" + stats_line
+    return text
 
 
 def strip_report_footer_lines(text: str) -> str:
+    cleaned = text or ""
+    cleaned = re.sub(
+        r"\s*📊\s*(?:本週|本期)統計\s*[：:].*?(?=(?:\s*⏰\s*報告產出時間|\n|$))",
+        "",
+        cleaned,
+        flags=re.DOTALL,
+    )
+    cleaned = re.sub(
+        r"\s*(?:本週|本期)統計\s*[：:].*?(?=(?:\s*⏰\s*報告產出時間|\n|$))",
+        "",
+        cleaned,
+        flags=re.DOTALL,
+    )
+    cleaned = re.sub(
+        r"\s*⏰\s*報告產出時間\s*[：:].*?(?=\n|$)",
+        "",
+        cleaned,
+        flags=re.DOTALL,
+    )
+    cleaned = re.sub(
+        r"\s*報告產出時間\s*[：:].*?(?=\n|$)",
+        "",
+        cleaned,
+        flags=re.DOTALL,
+    )
     lines = []
-    for raw_line in (text or "").splitlines():
+    for raw_line in cleaned.splitlines():
         line = raw_line.strip()
         if re.match(r"^📊\s*(?:本週|本期)統計", line):
             continue
@@ -6364,6 +6397,8 @@ def _is_report_block_boundary(line: str) -> bool:
     stripped = (line or "").strip()
     if not stripped:
         return False
+    if stripped.startswith("__JOURNAL_SECTION_"):
+        return True
     if _match_report_field_line(stripped):
         return True
     if stripped == "---" or stripped.startswith(("🔹", "📊", "⏰", "#", ">", "________________________________________")):
@@ -6481,6 +6516,7 @@ def normalize_report_title_line(line: str) -> str:
 
 def normalize_final_report_md(md: str) -> str:
     text = md or ""
+    text, protected_journal_sections = _protect_journal_sections(text)
     text = re.sub(r"(?m)^\s*[-*]\s*\*\*(發布/事件日期|國家/地區|相關機電系統|事件摘要|臺北捷運局啟示|資料來源)\*\*\s*[：:]", r"• \1：", text)
     text = re.sub(r"(?m)^\s*[-*]\s*\*\*【臺北捷運局啟示】\*\*\s*[：:]", "• 臺北捷運局啟示：", text)
     text = re.sub(r"(?m)^\s*•\s*【臺北捷運局啟示】\s*[：:]", "• 臺北捷運局啟示：", text)
@@ -6542,6 +6578,7 @@ def normalize_final_report_md(md: str) -> str:
 
     text = "\n".join(output)
     text = normalize_report_source_lines(text)
+    text = _restore_journal_sections(text, protected_journal_sections)
     text = re.sub(r"(?m)^\s*(?:[-*]\s*)?•\s*$", "", text)
     text = re.sub(r"(?m)^•\s*事件摘要：\s*[-*•]\s*", "• 事件摘要：", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -6726,6 +6763,57 @@ def repair_journal_dates_in_report(report_md: str, journal_candidates: list[dict
     return before + "\n".join(repaired_lines) + after
 
 
+def _is_canonical_journal_section(section: str) -> bool:
+    required_fields = ["發表日期", "期刊／來源", "研究主題", "研究摘要", "臺北捷運局啟示", "資料來源"]
+    item_count = 0
+    current_fields: list[str] = []
+    conclusion_count = 0
+    in_conclusion = False
+
+    def _field_name(line: str) -> str:
+        match = re.match(
+            r"^•\s*(發表日期|期刊[/／]來源|研究主題|研究摘要|臺北捷運局啟示|資料來源)\s*[：:].+",
+            line.strip(),
+        )
+        if not match:
+            return ""
+        return "期刊／來源" if match.group(1) in {"期刊/來源", "期刊／來源"} else match.group(1)
+
+    for raw_line in (section or "").splitlines()[1:]:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if re.fullmatch(r"#{1,6}", line):
+            return False
+        if "學術期刊綜合結論" in line:
+            conclusion_count += 1
+            if conclusion_count > 1:
+                return False
+            if item_count and current_fields != required_fields:
+                return False
+            in_conclusion = True
+            continue
+        if in_conclusion:
+            continue
+        if re.match(r"^\d+、\S+", line):
+            if item_count and current_fields != required_fields:
+                return False
+            item_count += 1
+            current_fields = []
+            continue
+        field = _field_name(line)
+        if field:
+            if item_count <= 0:
+                return False
+            current_fields.append(field)
+            continue
+        return False
+
+    if item_count <= 0:
+        return False
+    return current_fields == required_fields or in_conclusion
+
+
 def normalize_journal_section_format(report_md: str, journal_candidates: list[dict]) -> str:
     if not include_research_supplement or not journal_candidates or not report_md:
         return report_md
@@ -6740,6 +6828,16 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
     before = report_md[:heading_match.start()]
     section = report_md[heading_match.start():section_end]
     after = report_md[section_end:]
+
+    if _is_canonical_journal_section(section):
+        return report_md
+
+    section = re.sub(
+        r"(?<=[^\n])(?=\d+、(?!發表日期|期刊[/／]來源|研究主題|研究摘要|臺北捷運局啟示|資料來源))",
+        "\n",
+        section,
+    )
+    section = re.sub(r"(?<=[^\n])(\s*#{0,6}\s*學術期刊綜合結論)", r"\n\1", section)
 
     lines = section.splitlines()
     if not lines:
@@ -6870,8 +6968,8 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
             value = _repair_truncated_value(value, expected)
             if not value or value in {"資料來源未明確辨識", "報導"}:
                 value = expected
-            return value or "期刊來源未明"
-        return value or "資料未載明"
+            return value
+        return value
 
     def _append_blank_if_needed() -> None:
         if output and output[-1].strip():
@@ -6900,6 +6998,8 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
         stripped = raw_line.strip()
         if not stripped:
             _append_blank_if_needed()
+            return
+        if re.fullmatch(r"#{1,6}", stripped):
             return
         if stripped == "---":
             return
@@ -6932,7 +7032,8 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
             continue
         if "學術期刊綜合結論" in stripped:
             prefix, _, suffix = raw_line.partition("學術期刊綜合結論")
-            if prefix.strip():
+            prefix_clean = re.sub(r"^#{1,6}\s*$", "", prefix.strip())
+            if prefix_clean:
                 _process_body_line(prefix)
             _append_blank_if_needed()
             output.append("學術期刊綜合結論")
@@ -7017,6 +7118,11 @@ def _candidate_region_display(candidate: dict) -> str:
     return region or "未判定"
 
 
+def _is_unknown_region_value(value: str) -> bool:
+    cleaned = re.sub(r"\s+", "", value or "").strip("：:，,。-")
+    return cleaned in {"", "未判定", "未知", "不明", "未明", "國家/地區未判定", "國家地區未判定"}
+
+
 def repair_report_region_lines(report_md: str, selected_candidates: list[dict]) -> str:
     if not report_md or not selected_candidates:
         return report_md
@@ -7031,8 +7137,20 @@ def repair_report_region_lines(report_md: str, selected_candidates: list[dict]) 
         matched = next((candidate for candidate in selected_candidates if _report_block_matches_candidate(block, candidate)), None)
         if matched:
             region_display = _candidate_region_display(matched)
-            if re.search(r"(?m)^•\s*國家/地區\s*[：:].*$", body):
-                body = re.sub(r"(?m)^•\s*國家/地區\s*[：:].*$", f"• 國家/地區：{region_display}", body, count=1)
+            if _is_unknown_region_value(region_display):
+                output.extend([heading, body])
+                continue
+            region_match = re.search(r"(?m)^•\s*國家/地區\s*[：:]\s*(.*)$", body)
+            if region_match:
+                current_region = region_match.group(1).strip()
+                if _is_unknown_region_value(current_region):
+                    body = re.sub(r"(?m)^•\s*國家/地區\s*[：:].*$", f"• 國家/地區：{region_display}", body, count=1)
+            else:
+                insert_match = re.search(r"(?m)^•\s*發布/事件日期\s*[：:].*$", body)
+                if insert_match:
+                    body = body[:insert_match.end()] + f"\n• 國家/地區：{region_display}" + body[insert_match.end():]
+                else:
+                    body = f"\n• 國家/地區：{region_display}" + body
         output.extend([heading, body])
     return "".join(output)
 
@@ -7932,7 +8050,6 @@ if generate_btn:
             report_text, dropped_selected_candidates = restore_missing_selected_report_items(report_text, selected_candidates)
             report_text = repair_report_region_lines(report_text, selected_candidates)
             report_text = repair_generic_report_titles(report_text, selected_candidates)
-            report_text = normalize_journal_section_format(report_text, journal_candidates)
             report_text = apply_final_report_footer(report_text, journal_candidates)
             pdf_bytes = try_markdown_to_pdf_bytes(report_text)
             dropped_selected_ids = [int(item.get("id", 0) or 0) for item in dropped_selected_candidates]
