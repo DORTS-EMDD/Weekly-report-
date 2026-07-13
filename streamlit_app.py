@@ -964,17 +964,16 @@ with st.sidebar:
         format_func=lambda d: f"{d} 天（{REPORT_PERIOD_LABELS.get(int(d), '報告')}）",
     )
     if int(lookback_days) in ADVANCED_LOOKBACK_OPTIONS:
-        st.info("長期回顧適合趨勢分析、事故彙整與規範更新追蹤；不建議作為一般新聞週報使用，系統將提高去重與來源審查標準。")
+        st.info("長期回顧適合趨勢分析、事故彙整與規範更新追蹤；不建議作為一般新聞週報使用，系統將提高重複內容排除與來源審查標準。")
 
     selected_types = []
-    selected_target = REPORT_TARGET_BY_DAYS.get(int(lookback_days))
-    target_summary = f"目標至少 {selected_target} 則" if selected_target else LONG_TERM_TARGET_LABELS.get(int(lookback_days), "趨勢回顧")
+    period_summary = LONG_TERM_TARGET_LABELS.get(int(lookback_days), REPORT_PERIOD_LABELS.get(int(lookback_days), "報告"))
     selected_type_count = sum(
         1 for t in ADVANCED_TYPES
         if st.session_state.get(f"type_{t}", t in st.session_state["selected_types_state"])
     )
     st.markdown("**📰 新聞類型**")
-    st.caption(f"已選 {selected_type_count} 種類型｜{target_summary}")
+    st.caption(f"已選 {selected_type_count} 種類型｜{period_summary}")
     with st.expander("展開選擇新聞類型", expanded=False):
         col_t_all, col_t_clear = st.columns(2)
         col_t_all.button(
@@ -1118,7 +1117,7 @@ min_report_items = REPORT_TARGET_BY_DAYS.get(lookback_int, 0)
 report_target_display = f"至少 {min_report_items} 則" if target_is_enforced else LONG_TERM_TARGET_LABELS.get(lookback_int, "趨勢回顧")
 report_output_requirement = f"正式報告至少 {min_report_items} 則" if target_is_enforced else f"{report_target_display}，不強制篇數"
 report_quantity_instruction = (
-    f"本期為 {report_period_label}，正式報告目標至少 {min_report_items} 則。"
+    f"本期為 {report_period_label}，正式報告建議下限為 {min_report_items} 則。"
     f"請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，"
     f"請優先納入中信度但來源、日期、都市軌道關聯明確的候選；"
     f"不要因摘要較短或連結為 Google News 轉址而過度剔除。"
@@ -1130,7 +1129,7 @@ report_quantity_instruction = (
     f"不得列入正式規範更新，也不得計入正式新聞數。**"
     if target_is_enforced
     else f"本期為 {report_period_label}，屬長期趨勢 / 規範追蹤模式，不強制篇數。"
-         f"請以趨勢分析、事故彙整、真正規範更新、來源品質與去重為優先；"
+         f"請以趨勢分析、事故彙整、真正規範更新、來源品質與重複內容排除為優先；"
          f"不得為了增加篇數納入低關聯、重複、非都市軌道或來源不合格新聞。"
          f"規範追蹤清單、持續追蹤中、無單一新聞連結的標準項目，"
          f"不得列入正式規範更新，也不得計入正式新聞數。"
@@ -1139,7 +1138,7 @@ report_quantity_instruction = (
 report_shortfall_summary_line = (
     f"**不足 {min_report_items} 則原因**：（僅正式新聞少於 {min_report_items} 則時輸出；若達標，整行不要出現）"
     if target_is_enforced
-    else "**長期回顧說明**：（簡述本期趨勢、去重後有效候選品質與來源限制）"
+    else "**長期回顧說明**：（簡述本期趨勢、重複內容排除後有效候選品質與來源限制）"
 )
 selected_report_topic = "、".join(selected_types) if selected_types else "技術趨勢"
 report_title = f"【{today.strftime('%Y/%m/%d')}】國際捷運{selected_report_topic}{report_period_label}"
@@ -1822,6 +1821,8 @@ def hard_low_value_candidate_reason(candidate: dict) -> str:
         for domain in LOW_VALUE_EXCLUDED_HOSTS
     ):
         return "硬性低價值來源或子網域"
+    if _contains_any_term(text, FINANCIAL_MARKET_TERMS):
+        return "股票行情或企業財經分析"
 
     has_high_value = _has_high_value_operational_detail(text)
     if has_high_value:
@@ -1954,10 +1955,13 @@ def _region_guess_from_candidate(candidate: dict) -> str:
         urlparse(candidate.get(key, "") or "").path.replace("/", " ")
         for key in ("url", "source_href")
     )
-    primary_text = " ".join(str(candidate.get(key, "") or "") for key in (
-        "title", "snippet", "source_domain", "source"
+    event_text = " ".join(str(candidate.get(key, "") or "") for key in (
+        "title", "snippet"
     ))
-    primary_guess = guess_region_from_text(f"{primary_text} {path_text}")
+    priority_guess = _event_region_hint_from_text(f"{event_text} {path_text}")
+    if priority_guess:
+        return priority_guess
+    primary_guess = guess_region_from_text(f"{event_text} {path_text}")
     if primary_guess != "未判定":
         return primary_guess
     domain_guess = _region_from_domain_hints(candidate)
@@ -2759,8 +2763,28 @@ def source_verb_for_report(tier: str, label: str) -> str:
     return "報導"
 
 
+EVENT_REGION_PRIORITY_HINTS: list[tuple[str, list[str]]] = [
+    ("瑞士", ["basel", "basel tram", "bvb", "zürich", "zurich", "lausanne", "瑞士", "巴塞爾", "蘇黎世", "洛桑"]),
+    ("美國", ["houston", "metrorail", "houston metrorail", "metro rail houston", "休士頓", "休斯頓"]),
+    ("加拿大", ["vancouver", "broadway subway", "toronto", "finch west", "finch west lrt", "metrolinx", "ttc", "skytrain", "溫哥華", "多倫多"]),
+    ("英國", ["northern ireland", "belfast", "translink ni", "translink northern ireland", "北愛爾蘭", "貝爾法斯特"]),
+    ("德國", ["berlin", "adlershof", "leipzig", "munich", "hamburg", "u-bahn", "柏林", "萊比錫", "慕尼黑", "漢堡"]),
+]
+
+
+def _event_region_hint_from_text(text: str) -> str:
+    text_lower = (text or "").casefold()
+    for region, terms in EVENT_REGION_PRIORITY_HINTS:
+        if any(term.casefold() in text_lower for term in terms):
+            return region
+    return ""
+
+
 def guess_region_from_text(text: str) -> str:
     text_lower = (text or "").casefold()
+    priority_hint = _event_region_hint_from_text(text)
+    if priority_hint:
+        return priority_hint
     aliases = {
         "日本": ["japan", "tokyo", "osaka", "日本", "東京", "大阪"],
         "韓國": ["korea", "seoul", "韓國", "韩国", "서울"],
@@ -3402,9 +3426,13 @@ NON_ACCIDENT_CONTEXT_TERMS = [
     "tunnel boring machine farewell", "tbm farewell", "road maintenance",
     "tbm removal", "tbm demobilization", "road works", "road construction",
     "road accident", "traffic accident", "pothole", "strike date",
+    "roadblock", "police roadblock", "law enforcement", "enforcement case",
+    "planned weekend closure", "weekend closure", "maintenance closure",
+    "routine maintenance", "testing progress", "engineering milestone",
     "strike dates", "strike notice", "罷工日期", "罷工日期公告",
     "道路維護", "道路施工", "道路坑洞", "道路事故", "一般道路事故",
-    "隧道鑽掘機告別", "潛盾機告別", "潛盾機撤場",
+    "道路路障", "執法案件", "預定週末封閉", "週末封閉", "例行維修",
+    "一般測試進度", "工程里程碑", "隧道鑽掘機告別", "潛盾機告別", "潛盾機撤場",
 ]
 
 URBAN_RAIL_INCIDENT_CONTEXT_TERMS = [
@@ -3487,6 +3515,15 @@ LOW_REPORT_VALUE_TERMS = [
     "個人經驗", "旅客心得", "失物招領", "延誤證明", "吉祥物", "數位集章",
     "主題列車", "道路維護", "道路施工", "道路坑洞", "旅遊資訊",
     "週末搭乘提醒", "潛盾機告別", "潛盾機撤場", "標案文件持有人",
+]
+
+FINANCIAL_MARKET_TERMS = [
+    "yahoo finance", "finance.yahoo.com", "stock price", "share price",
+    "stock market", "market cap", "trading", "ticker", "nasdaq", "nyse",
+    "earnings", "quarterly results", "financial results", "investor",
+    "investment analysis", "analyst rating", "price target",
+    "股價", "股票", "股市", "財報", "營收", "投資分析", "投資人",
+    "目標價", "券商", "分析師評級",
 ]
 
 LOW_IMPACT_ACCIDENT_TERMS = [
@@ -3600,6 +3637,11 @@ def _has_procurement_list_notice(candidate: dict) -> bool:
     return _contains_any_term(_candidate_selection_text(candidate), PROCUREMENT_LIST_NOTICE_TERMS)
 
 
+def _is_financial_market_candidate(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    return _contains_any_term(text, FINANCIAL_MARKET_TERMS)
+
+
 def _has_general_rail_exclusion(candidate: dict) -> bool:
     return _contains_any_term(_candidate_selection_text(candidate), GENERAL_RAIL_EXCLUDE_TERMS)
 
@@ -3645,6 +3687,8 @@ def _is_technical_news_selection_candidate(candidate: dict) -> bool:
     if candidate.get("classification") != "技術新知":
         return False
     text = _candidate_selection_text(candidate)
+    if _is_financial_market_candidate(candidate):
+        return False
     if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS):
         return False
     if _is_accident_signal_text(text):
@@ -3749,6 +3793,8 @@ def build_candidate_flags(candidate: dict) -> list[str]:
         flags.append("low_value_official_notice")
     if _has_procurement_list_notice(candidate):
         flags.append("procurement_list_notice")
+    if _is_financial_market_candidate(candidate):
+        flags.append("financial_market_content")
     if _has_general_rail_exclusion(candidate):
         flags.append("general_rail_exclusion")
     if information_issue == "摘要資訊不足":
@@ -3829,6 +3875,9 @@ def score_news_candidate(candidate: dict) -> dict:
     if _has_general_rail_exclusion(candidate):
         score -= 40
         reasons.append("一般鐵路/通勤鐵路排除訊號 -40")
+    if _is_financial_market_candidate(candidate):
+        score -= 45
+        reasons.append("股票行情或企業財經分析 -45")
     if any(marker in urlparse(candidate.get("url", "")).path.casefold() for marker in LOW_INFORMATION_PATH_MARKERS):
         score -= 18
         reasons.append("入口/路線/查詢頁路徑 -18")
@@ -4003,12 +4052,14 @@ def _candidate_system_theme(candidate: dict) -> str:
 EVENT_LOCATION_TERMS = [
     "tokyo", "osaka", "seoul", "singapore", "hong kong", "sydney", "melbourne",
     "london", "paris", "berlin", "munich", "new york", "washington", "chicago",
-    "toronto", "vancouver", "madrid", "barcelona", "amsterdam", "rotterdam",
-    "zurich", "milan", "rome", "stockholm", "vienna", "copenhagen", "oslo",
+    "toronto", "vancouver", "houston", "madrid", "barcelona", "amsterdam", "rotterdam",
+    "basel", "zurich", "leipzig", "adlershof", "milan", "rome", "stockholm",
+    "vienna", "copenhagen", "oslo", "northern ireland", "belfast",
     "東京", "大阪", "首爾", "新加坡", "香港", "雪梨", "悉尼", "墨爾本",
     "倫敦", "巴黎", "柏林", "慕尼黑", "紐約", "華盛頓", "芝加哥",
-    "多倫多", "溫哥華", "馬德里", "巴塞隆納", "阿姆斯特丹", "鹿特丹",
-    "蘇黎世", "米蘭", "羅馬", "斯德哥爾摩", "維也納", "哥本哈根", "奧斯陸",
+    "多倫多", "溫哥華", "休士頓", "馬德里", "巴塞隆納", "阿姆斯特丹", "鹿特丹",
+    "巴塞爾", "蘇黎世", "萊比錫", "米蘭", "羅馬", "斯德哥爾摩",
+    "維也納", "哥本哈根", "奧斯陸", "北愛爾蘭", "貝爾法斯特",
 ]
 
 
@@ -4046,6 +4097,19 @@ PROJECT_STAGE_GROUPS = {
 
 def _candidate_specific_event_location(candidate: dict) -> str:
     text = _candidate_selection_text(candidate).casefold()
+    priority_locations = [
+        ("berlin-adlershof", ["adlershof"]),
+        ("basel", ["basel", "巴塞爾"]),
+        ("leipzig", ["leipzig", "萊比錫"]),
+        ("houston", ["houston", "休士頓", "休斯頓"]),
+        ("vancouver", ["vancouver", "broadway subway", "溫哥華"]),
+        ("toronto", ["toronto", "finch west", "多倫多"]),
+        ("northern-ireland", ["northern ireland", "belfast", "北愛爾蘭", "貝爾法斯特"]),
+        ("berlin", ["berlin", "柏林"]),
+    ]
+    for canonical, terms in priority_locations:
+        if any(term.casefold() in text for term in terms):
+            return canonical
     for term in EVENT_LOCATION_TERMS:
         if term.casefold() in text:
             return term.casefold()
@@ -4098,8 +4162,8 @@ def _duplicate_event_reason(candidate: dict, selected_item: dict) -> str:
     if int(lookback_int) in ADVANCED_LOOKBACK_OPTIONS and _is_project_series_candidate(candidate) and _is_project_series_candidate(selected_item):
         return "同一城市/地點、相同系統主題與相近專案階段，長期回顧視為同一專案系列。"
     if candidate.get("classification") == "重大事故":
-        return "同一城市/地點、相近日期與相同事故/安全主題，事件級去重。"
-    return "相同城市/地點、相近日期與相同系統主題，事件級去重。"
+        return "同一城市/地點、相近日期與相同事故/安全主題，事件級重複排除。"
+    return "相同城市/地點、相近日期與相同系統主題，事件級重複排除。"
 
 
 def _is_same_report_event(candidate: dict, selected_item: dict) -> bool:
@@ -4120,6 +4184,8 @@ def _is_same_report_event(candidate: dict, selected_item: dict) -> bool:
     candidate_specific_location = _candidate_specific_event_location(candidate)
     selected_specific_location = _candidate_specific_event_location(selected_item)
     same_specific_location = bool(candidate_specific_location and selected_specific_location and candidate_specific_location == selected_specific_location)
+    if candidate_specific_location and selected_specific_location and candidate_specific_location != selected_specific_location:
+        return False
     if int(lookback_int) in ADVANCED_LOOKBACK_OPTIONS and same_specific_location:
         if candidate.get("classification") == "重大事故" and (date_close or similarity >= 0.70):
             return True
@@ -4129,7 +4195,7 @@ def _is_same_report_event(candidate: dict, selected_item: dict) -> bool:
             return True
     if not date_close:
         return False
-    if candidate_location and selected_location and candidate_location == selected_location:
+    if same_specific_location:
         return True
     return similarity >= 0.62
 
@@ -4185,6 +4251,8 @@ def _is_low_value_python_selection_candidate(candidate: dict) -> bool:
     has_good_signal = _has_good_report_signal(candidate)
     has_technical_detail = _has_explicit_technical_system_detail(candidate)
     text = _candidate_selection_text(candidate)
+    if _is_financial_market_candidate(candidate):
+        return True
     if _is_low_value_long_term_candidate(candidate):
         return True
     if "general_rail_exclusion" in flags or _has_general_rail_exclusion(candidate):
@@ -4223,6 +4291,12 @@ def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict 
                     "duplicate_of_id": duplicate_of.get("id", ""),
                     "duplicate_of_title": duplicate_of.get("title", ""),
                     "duplicate_event_reason": _duplicate_event_reason(candidate, duplicate_of),
+                    "candidate_location": _candidate_specific_event_location(candidate) or _candidate_event_location(candidate),
+                    "duplicate_of_location": _candidate_specific_event_location(duplicate_of) or _candidate_event_location(duplicate_of),
+                    "candidate_date": candidate.get("date", ""),
+                    "duplicate_of_date": duplicate_of.get("date", ""),
+                    "candidate_theme": _candidate_system_theme(candidate),
+                    "duplicate_of_theme": _candidate_system_theme(duplicate_of),
                 })
             except Exception:
                 pass
@@ -4238,6 +4312,8 @@ LAST_PYTHON_SELECTION_DEBUG: dict = dict(REPORT_SELECTION_DEBUG_DEFAULT)
 
 def _is_hard_excluded_for_borderline(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
+    if _is_financial_market_candidate(candidate):
+        return True
     if _is_low_value_long_term_candidate(candidate):
         return True
     if _has_general_rail_exclusion(candidate):
@@ -4903,7 +4979,7 @@ def fetch_journal_page_metadata(url: str) -> dict:
     published_date = ""
     date_confidence = "low"
     date_reason = "原始頁未解析到完整發表日期"
-    date_obj = _parse_full_research_date(date_text or "") or _candidate_date_obj(date_text or "")
+    date_obj = _parse_full_research_date(date_text or "")
     if date_obj:
         cutoff_date = today - datetime.timedelta(days=research_supplement_lookback_days)
         published_date = date_obj.isoformat()
@@ -5075,7 +5151,11 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
             _exclude(query, title, url, "都市軌道關聯不足", snippet, metadata)
             return False
         if date_info["date_confidence"] != "high" or not date_info["is_within_research_period"]:
-            _exclude(query, title, url, date_info["date_reason"], snippet, metadata)
+            if date_info["date_confidence"] == "high" and not date_info["is_within_research_period"]:
+                exclude_reason = f"明確發表日期不在{research_supplement_period_label}研究補充期間"
+            else:
+                exclude_reason = date_info["date_reason"]
+            _exclude(query, title, url, exclude_reason, snippet, metadata)
             return False
 
         title_key = _normalize_title(title)
@@ -5188,7 +5268,7 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
             journal_block = "無符合期間條件且具明確發表日期之研究候選。"
         journal_input_section = f"""
 ## 國際學術與技術研究補充候選
-研究補充已啟用；本次研究補充期間為{research_supplement_period_label}（{research_supplement_start_date.isoformat()} 至 {today.isoformat()}）。如有下方候選，請於最後輸出「{research_heading}」，並使用每篇固定欄位：發表日期、期刊/來源、研究主題、研究摘要、臺北捷運局啟示、資料來源。若有候選，章節最後必須新增「學術期刊綜合結論」，至少 300 字、建議 300～500 字，僅根據候選研究綜整趨勢與對臺北捷運局之啟示。若沒有候選，請寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
+研究補充已啟用；本次研究補充期間為{research_supplement_period_label}（{research_supplement_start_date.isoformat()} 至 {today.isoformat()}）。如有下方候選，請於最後輸出「{research_heading}」。每篇期刊標題請用「1、標題」「2、標題」連續編號，不得加上「[技術研究補充]」。每篇使用固定欄位：發表日期、期刊/來源、研究主題、研究摘要、臺北捷運局啟示、資料來源。若有候選，章節最後必須新增「學術期刊綜合結論」，至少 300 字、建議 300～500 字，僅根據候選研究綜整趨勢與對臺北捷運局之啟示。若沒有候選，請寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
 {journal_block}
 """.strip()
     journal_input_text = f"\n\n{journal_input_section}" if journal_input_section else ""
@@ -5240,7 +5320,7 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 - 不得在正式報告正文使用 MaiAgent、Python 初篩、developer debug、python_score、入選原因、候選資料等模型處理語氣。
 
 報告最後保留：
-📊 本期統計：共 N 則（{selected_stats}）
+📊 本期統計：正式新聞共 N 則（{selected_stats}）
 ⏰ 報告產出時間：{today.strftime('%Y年%m月%d日')} 週{weekday}
 
 ## 已入選新聞資料
@@ -5551,7 +5631,7 @@ def strip_internal_report_fields(text: str) -> str:
         r"^\s*(?:>\s*)?(?:[*-]\s*)?"
         r"(篩選類型|本次\s*ddgs\s*搜尋次數|ddgs\s*搜尋次數|系統內部搜尋次數|"
         r"prompt\s*字數|Prompt\s*字數|MaiAgent\s*呼叫次數|MaiAgent\s*呼叫|"
-        r"來源健康|原始蒐集|去重後|初篩後|developer\s*debug|模型)"
+        r"來源健康|原始蒐集|重複排除後|初篩後|developer\s*debug|模型)"
         r"\s*[：:].*$",
         flags=re.IGNORECASE,
     )
@@ -5646,6 +5726,44 @@ def normalize_report_statistics_line(text: str) -> str:
     if match:
         return text[:match.start()].rstrip() + "\n" + stats_line + "\n" + text[match.start():].lstrip()
     return text.rstrip() + "\n\n" + stats_line
+
+
+def strip_report_footer_lines(text: str) -> str:
+    lines = []
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if re.match(r"^📊\s*(?:本週|本期)統計", line):
+            continue
+        if re.match(r"^(?:本週|本期)統計", line):
+            continue
+        if re.match(r"^⏰\s*報告產出時間", line):
+            continue
+        if re.match(r"^報告產出時間", line):
+            continue
+        lines.append(raw_line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def final_report_statistics_line(report_md: str, journal_candidates: list[dict] | None = None) -> str:
+    selected_parts = [category for category in ADVANCED_TYPES if category in selected_types]
+    counts = count_report_items_by_category(report_md)
+    formal_total = sum(counts.get(category, 0) for category in selected_parts) if selected_parts else count_report_items(report_md)
+    stats_detail = "／".join(f"{category} {counts.get(category, 0)} 則" for category in selected_parts)
+    if stats_detail:
+        line = f"📊 本期統計：正式新聞共 {formal_total} 則（{stats_detail}）"
+    else:
+        line = f"📊 本期統計：正式新聞共 {formal_total} 則"
+    if include_research_supplement:
+        line += f"；國際學術期刊共 {len(journal_candidates or [])} 篇"
+    return line + "。"
+
+
+def apply_final_report_footer(report_md: str, journal_candidates: list[dict] | None = None) -> str:
+    body = strip_report_footer_lines(report_md)
+    weekday = ['一', '二', '三', '四', '五', '六', '日'][today.weekday()]
+    stats_line = final_report_statistics_line(body, journal_candidates)
+    time_line = f"⏰ 報告產出時間：{today.strftime('%Y年%m月%d日')} 週{weekday}"
+    return f"{body.rstrip()}\n\n{stats_line}\n\n{time_line}".strip()
 
 
 def normalize_research_section_heading(text: str) -> str:
@@ -6210,12 +6328,21 @@ def repair_journal_dates_in_report(report_md: str, journal_candidates: list[dict
     def _replace_line_date(line_text: str, date_text: str) -> str:
         if not date_text:
             return line_text
+        if "發表日期" in line_text:
+            return re.sub(
+                r"^\s*(?:[-*]\s*)?(?:•\s*)?發表日期.*$",
+                f"• 發表日期：{date_text}",
+                line_text,
+                count=1,
+            )
         if "日期未知" in line_text:
             return line_text.replace("日期未知", date_text, 1)
         if re.search(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", line_text):
-            return re.sub(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", date_text, line_text, count=1)
+            line_text = re.sub(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", date_text, line_text, count=1)
+            return re.sub(rf"({re.escape(date_text)})[，,\s]*(?:{re.escape(date_text)})", r"\1", line_text)
         if re.search(r"20\d{2}年\s*\d{1,2}月\s*\d{1,2}日", line_text):
-            return re.sub(r"20\d{2}年\s*\d{1,2}月\s*\d{1,2}日", date_text, line_text, count=1)
+            line_text = re.sub(r"20\d{2}年\s*\d{1,2}月\s*\d{1,2}日", date_text, line_text, count=1)
+            return re.sub(rf"({re.escape(date_text)})[，,\s]*(?:{re.escape(date_text)})", r"\1", line_text)
         if re.match(r"^\s*(?:[-*]\s*)?(?:•\s*)?發表日期\s*[：:]\s*$", line_text):
             return re.sub(r"([：:])\s*$", rf"\1{date_text}", line_text)
         return line_text
@@ -6245,6 +6372,67 @@ def repair_journal_dates_in_report(report_md: str, journal_candidates: list[dict
         repaired_lines.append(line)
 
     return before + "\n".join(repaired_lines) + after
+
+
+def normalize_journal_section_format(report_md: str, journal_candidates: list[dict]) -> str:
+    if not include_research_supplement or not journal_candidates or not report_md:
+        return report_md
+    heading_match = re.search(
+        r"(?m)^#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:技術研究補充|國際學術期刊)\s*$",
+        report_md,
+    )
+    if not heading_match:
+        return report_md
+    end_match = re.search(r"(?m)^(?:📊|⏰)", report_md[heading_match.end():])
+    section_end = heading_match.end() + end_match.start() if end_match else len(report_md)
+    before = report_md[:heading_match.start()]
+    section = report_md[heading_match.start():section_end]
+    after = report_md[section_end:]
+
+    lines = section.splitlines()
+    output: list[str] = []
+    item_index = 0
+    in_conclusion = False
+    field_names = ("發表日期", "期刊/來源", "期刊／來源", "研究主題", "研究摘要", "臺北捷運局啟示", "資料來源")
+
+    for line_no, raw_line in enumerate(lines):
+        line = raw_line
+        stripped = line.strip()
+        if line_no == 0:
+            output.append(line)
+            continue
+        if not stripped:
+            output.append(line)
+            continue
+        if "學術期刊綜合結論" in stripped:
+            in_conclusion = True
+            output.append(line)
+            continue
+        if in_conclusion:
+            output.append(line)
+            continue
+        if stripped.startswith("•") and any(name in stripped for name in field_names):
+            output.append(line)
+            continue
+        if stripped == "---":
+            output.append(line)
+            continue
+        if stripped.startswith(("以下", "本期", "國際學術期刊", "研究補充")) and not re.match(r"^\s*(?:\d+[\.\、]|[（(]?\d+[）)])", stripped):
+            output.append(line)
+            continue
+
+        title_match = re.match(r"^\s*(?:#{3,6}\s*)?(?:🔹\s*)?(?:\[[^\]]*(?:技術研究補充|國際學術期刊)[^\]]*\]\s*)?(.*)$", line)
+        candidate_title = title_match.group(1).strip() if title_match else stripped
+        candidate_title = re.sub(r"^\s*(?:\d+[\.\、]|[（(]?\d+[）)]).?\s*", "", candidate_title).strip()
+        candidate_title = re.sub(r"\[[^\]]*(?:技術研究補充|國際學術期刊)[^\]]*\]\s*", "", candidate_title).strip()
+
+        if candidate_title and not any(candidate_title.startswith(name) for name in field_names):
+            item_index += 1
+            output.append(f"{item_index}、{candidate_title}")
+        else:
+            output.append(line)
+
+    return before + "\n".join(output) + after
 
 
 def count_journal_summary_conclusion_chars(report_md: str) -> int:
@@ -6288,6 +6476,126 @@ def _candidate_report_presence_keys(candidate: dict) -> list[str]:
     return [str(value).strip() for value in values if str(value or "").strip()]
 
 
+def _report_block_matches_candidate(block: str, candidate: dict) -> bool:
+    keys = _candidate_report_presence_keys(candidate)
+    if any(key and key in (block or "") for key in keys):
+        return True
+    title_tokens = [
+        token for token in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]{4,}", candidate.get("title", "") or "")
+        if len(token) >= 4
+    ]
+    return bool(title_tokens) and sum(1 for token in title_tokens[:6] if token in (block or "")) >= 2
+
+
+def _candidate_region_display(candidate: dict) -> str:
+    text = _candidate_selection_text(candidate)
+    region = _canonical_candidate_region(dict(candidate))
+    city_map = [
+        ("北愛爾蘭", ["northern ireland", "belfast", "北愛爾蘭", "貝爾法斯特"], "英國（北愛爾蘭）"),
+        ("巴塞爾", ["basel", "巴塞爾"], "瑞士（巴塞爾）"),
+        ("休士頓", ["houston", "休士頓", "休斯頓"], "美國（休士頓）"),
+        ("溫哥華", ["vancouver", "broadway subway", "溫哥華"], "加拿大（溫哥華）"),
+        ("多倫多", ["toronto", "finch west", "多倫多"], "加拿大（多倫多）"),
+        ("柏林", ["berlin", "adlershof", "柏林"], "德國（柏林）"),
+        ("萊比錫", ["leipzig", "萊比錫"], "德國（萊比錫）"),
+    ]
+    for _, terms, label in city_map:
+        if _contains_any_term(text, terms):
+            return label
+    return region or "未判定"
+
+
+def repair_report_region_lines(report_md: str, selected_candidates: list[dict]) -> str:
+    if not report_md or not selected_candidates:
+        return report_md
+    parts = re.split(r"(?m)^(🔹\s*\[[^\]]+\].*)$", report_md)
+    if len(parts) <= 1:
+        return report_md
+    output = [parts[0]]
+    for idx in range(1, len(parts), 2):
+        heading = parts[idx]
+        body = parts[idx + 1] if idx + 1 < len(parts) else ""
+        block = heading + body
+        matched = next((candidate for candidate in selected_candidates if _report_block_matches_candidate(block, candidate)), None)
+        if matched:
+            region_display = _candidate_region_display(matched)
+            if re.search(r"(?m)^•\s*國家/地區\s*[：:].*$", body):
+                body = re.sub(r"(?m)^•\s*國家/地區\s*[：:].*$", f"• 國家/地區：{region_display}", body, count=1)
+        output.extend([heading, body])
+    return "".join(output)
+
+
+GENERIC_FORMAL_TITLES = {
+    "國際捷運技術更新案",
+    "都市軌道系統更新案",
+    "國際捷運營運政策更新",
+    "國際捷運重大事故事件",
+    "都市軌道重大事故事件",
+    "國際捷運營運爭議事件",
+    "國際捷運案例",
+}
+
+
+def _is_generic_formal_title(title: str) -> bool:
+    cleaned = re.sub(r"\s+", "", title or "")
+    return any(re.sub(r"\s+", "", item) in cleaned for item in GENERIC_FORMAL_TITLES)
+
+
+def formal_title_from_candidate(candidate: dict) -> str:
+    category = candidate.get("classification") or candidate.get("preliminary_type") or infer_preliminary_type(candidate)
+    text = _candidate_selection_text(candidate)
+    original_title = _clean_text(candidate.get("title", ""))
+    if _contains_any_term(text, ["finch west", "hitachi"]):
+        return "多倫多 Finch West LRT 啟用 Hitachi Rail 號誌系統"
+    if _contains_any_term(text, ["broadway subway"]):
+        return "溫哥華 Broadway Subway 都市軌道專案進展"
+    if _contains_any_term(text, ["houston", "metrorail"]):
+        return "休士頓 METRORail 都市軌道事件"
+    if _contains_any_term(text, ["adlershof"]):
+        return "柏林 Adlershof 電車撞擊事故"
+    if _contains_any_term(text, ["basel"]) and category == "重大事故":
+        return "巴塞爾電車碰撞事故"
+    if _contains_any_term(text, ["leipzig"]) and category == "重大事故":
+        return "萊比錫路面電車營運安全事件"
+
+    region = _candidate_region_display(candidate)
+    region = re.sub(r"^(.+?)（(.+?)）$", r"\2", region)
+    theme = _candidate_system_theme(candidate)
+    if original_title and not _is_generic_formal_title(original_title):
+        if _looks_like_english_title(original_title):
+            return f"{region} {theme}：{_shorten(original_title, 72)}"
+        return original_title
+    if category == "重大事故":
+        return f"{region}都市軌道營運安全事件"
+    if category == "營運政策":
+        return f"{region}{theme}營運政策更新"
+    if category == "營運爭議":
+        return f"{region}都市軌道營運爭議事件"
+    if category == "規範更新":
+        return f"{region}都市軌道規範更新"
+    return f"{region}{theme}更新"
+
+
+def repair_generic_report_titles(report_md: str, selected_candidates: list[dict]) -> str:
+    if not report_md or not selected_candidates:
+        return report_md
+    parts = re.split(r"(?m)^(🔹\s*\[[^\]]+\]\s*.*)$", report_md)
+    if len(parts) <= 1:
+        return report_md
+    output = [parts[0]]
+    for idx in range(1, len(parts), 2):
+        heading = parts[idx]
+        body = parts[idx + 1] if idx + 1 < len(parts) else ""
+        match = re.match(r"^(🔹\s*\[([^\]]+)\]\s*)(.*)$", heading.strip())
+        if match and _is_generic_formal_title(match.group(3)):
+            block = heading + body
+            matched = next((candidate for candidate in selected_candidates if _report_block_matches_candidate(block, candidate)), None)
+            if matched:
+                heading = f"{match.group(1)}{formal_title_from_candidate(matched)}"
+        output.extend([heading, body])
+    return "".join(output)
+
+
 def identify_dropped_selected_candidates(report_md: str, selected_candidates: list[dict]) -> list[dict]:
     report_text = report_md or ""
     dropped: list[dict] = []
@@ -6324,11 +6632,9 @@ def _fallback_system_value_for_candidate(candidate: dict) -> str:
 
 def _fallback_report_item_for_candidate(candidate: dict) -> str:
     category = candidate.get("classification") or candidate.get("preliminary_type") or "技術新知"
-    title = candidate.get("title", "") or "國際捷運案例"
-    if _looks_like_english_title(title):
-        title = chinese_fallback_title(category, title)
+    title = formal_title_from_candidate(candidate)
     date_text = _normalize_report_date_text(candidate.get("date", "")) if candidate.get("date") else "日期未知"
-    region = candidate.get("region", "未判定")
+    region = _candidate_region_display(candidate)
     source_url = _effective_source_url(candidate)
     source_display = candidate.get("source_display") or source_label_for_report(
         candidate.get("source", ""), candidate.get("url", ""), candidate.get("source_href", ""), candidate.get("source_tier", "")
@@ -6767,7 +7073,7 @@ def load_demo_report_cache() -> tuple[str, bytes | None, dict]:
     report_text = sanitize_report_text(report_text)
     report_text = enforce_research_section(report_text, [])
     report_text = normalize_final_report_md(report_text)
-    report_text = normalize_report_statistics_line(report_text)
+    report_text = apply_final_report_footer(report_text, [])
 
     if demo_pdf_path.exists():
         pdf_bytes = demo_pdf_path.read_bytes()
@@ -7055,7 +7361,7 @@ if generate_btn:
             timings["elapsed_seconds_ddgs"] = round(time.perf_counter() - stage_start, 2)
             progress_bar.progress(0.42)
 
-            status_text.text("🧹 去重與初步篩選……")
+            status_text.text("🧹 整理候選資料，排除重複與不相關新聞……")
             stage_start = time.perf_counter()
             candidate_pool = prepare_candidate_pool(rss_results, ddg_results)
             timings["elapsed_seconds_candidate_pool"] = round(time.perf_counter() - stage_start, 2)
@@ -7109,9 +7415,14 @@ if generate_btn:
             report_text = ensure_journal_summary_conclusion(report_text, journal_candidates)
             report_text = normalize_final_report_md(report_text)
             report_text = repair_journal_dates_in_report(report_text, journal_candidates)
-            report_text = normalize_report_statistics_line(report_text)
+            report_text = normalize_journal_section_format(report_text, journal_candidates)
             report_text = insert_annual_observation_section(report_text, selected_candidates)
             report_text, dropped_selected_candidates = restore_missing_selected_report_items(report_text, selected_candidates)
+            report_text = repair_report_region_lines(report_text, selected_candidates)
+            report_text = repair_generic_report_titles(report_text, selected_candidates)
+            report_text = normalize_journal_section_format(report_text, journal_candidates)
+            report_text = apply_final_report_footer(report_text, journal_candidates)
+            pdf_bytes = try_markdown_to_pdf_bytes(report_text)
             dropped_selected_ids = [int(item.get("id", 0) or 0) for item in dropped_selected_candidates]
             dropped_selected_titles = [item.get("title", "") for item in dropped_selected_candidates]
             dropped_selected_reasons = ["MaiAgent 未輸出該 Python 入選候選，已由後處理補回。" for _ in dropped_selected_candidates]
@@ -7177,6 +7488,7 @@ if generate_btn:
             }
             st.session_state["latest_report_md"] = report_text
             st.session_state["latest_report"] = report_text
+            st.session_state["latest_pdf"] = pdf_bytes
             st.session_state["latest_report_summary"] = {
                 "formal_count": formal_count,
                 "has_standards": has_standard_updates,
