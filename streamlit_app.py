@@ -880,6 +880,42 @@ JOURNAL_INSIGHT_TERMS = [
     "維修", "能源", "安全", "風險", "資安", "資料", "系統", "整合", "規劃",
 ]
 
+JOURNAL_CORE_SYSTEM_TERMS = [
+    "rolling stock", "vehicle system", "trainset", "signalling", "signaling",
+    "train control", "cbtc", "ato", "atp", "ats", "operations control",
+    "operation control", "traction power", "regenerative braking", "energy storage",
+    "power supply", "communications", "wireless", "data transmission",
+    "platform screen door", "platform door", "automatic fare collection", "afc",
+    "depot equipment", "maintenance equipment", "condition monitoring",
+    "fault diagnosis", "predictive maintenance", "image recognition",
+    "video analytics", "system integration", "system assurance", "rams",
+    "safety verification", "cybersecurity", "hvac", "ventilation", "fire safety",
+    "environmental control", "energy management", "digital twin",
+    "電聯車", "車輛系統", "號誌", "信號", "列車控制", "列控", "行車監控",
+    "行控中心", "牽引供電", "再生煞車", "儲能", "供電", "通訊", "無線通訊",
+    "月臺門", "月台門", "自動收費", "票務系統", "機廠設備", "維修設備",
+    "狀態監測", "故障診斷", "預測性維護", "影像辨識", "系統整合", "系統保證",
+    "安全驗證", "RAMS", "資安", "空調", "通風", "消防", "環控", "能源管理",
+    "數位孿生", "數位分身",
+]
+
+JOURNAL_SECONDARY_SYSTEM_TERMS = [
+    "track monitoring", "tunnel monitoring", "construction interface",
+    "equipment layout", "installation interface", "metro construction interface",
+    "軌道監測", "隧道監測", "施工介面", "設備配置", "安裝介面", "機電安裝",
+]
+
+JOURNAL_LOW_PRIORITY_TERMS = [
+    "crew scheduling", "crew rostering", "staff scheduling", "workforce scheduling",
+    "manpower scheduling", "passenger behavior", "passenger behaviour", "mode choice",
+    "passenger choice", "commuter behavior", "pure operation management",
+    "construction site layout", "civil construction", "civil engineering",
+    "tunnel excavation", "excavation optimization", "general railway",
+    "commuter rail", "人力排班", "人員排班", "乘務排班", "旅客行為",
+    "旅客運具選擇", "通勤行為", "純營運管理", "施工場地配置", "土建施工",
+    "隧道開挖", "一般鐵路", "通勤鐵路",
+]
+
 # ── 金鑰狀態 ──────────────────────────────────────────
 # AI 報告產製改用 MaiAgent 雲端 API。
 # 請在 Streamlit Cloud Secrets 或環境變數設定：
@@ -3526,6 +3562,88 @@ FINANCIAL_MARKET_TERMS = [
     "目標價", "券商", "分析師評級",
 ]
 
+PROPERTY_OR_CAMPUS_DEVELOPMENT_TERMS = [
+    "property development", "real estate", "land development", "campus development",
+    "university campus", "commercial development", "shopping mall", "housing development",
+    "white shek kok", "pak shek kok", "station-area development",
+    "土地開發", "物業開發", "車站周邊開發", "校園發展", "校園開發",
+    "白石角", "大學校園", "商場", "住宅開發",
+]
+
+GENERIC_TEST_WITHOUT_TECH_TERMS = [
+    "resume weekend testing", "weekend testing resumes", "testing resumes",
+    "restore weekend testing", "restored weekend testing", "trial runs resume",
+    "恢復週末測試", "週末測試恢復", "恢復測試", "測試恢復", "試運轉恢復",
+]
+
+EQUIPMENT_FAILURE_TERMS = [
+    "signal failure", "signalling failure", "signaling failure", "signal fault",
+    "power failure", "power outage", "communications failure", "communication fault",
+    "platform screen door failure", "platform door fault", "train door failure",
+    "switch failure", "points failure", "afc failure", "ticketing system failure",
+    "equipment failure", "equipment fault",
+    "號誌故障", "號誌異常", "信號故障", "信號異常", "供電故障", "供電異常",
+    "通訊故障", "通訊異常", "月臺門故障", "月台門故障", "車門故障",
+    "轉轍器故障", "道岔故障", "票務系統故障", "自動收費故障", "設備故障",
+]
+
+ENGINEERING_MILESTONE_ONLY_TERMS = [
+    "tunnel boring machine", "tbm", "tbm removal", "tbm demobilization",
+    "tbm breakthrough", "construction milestone", "civil works complete",
+    "construction progress", "site handover", "boring machine leaves",
+    "隧道鑽掘機", "潛盾機", "潛盾機撤場", "潛盾機離場", "隧道鑽掘機離場",
+    "工程里程碑", "施工進度", "土建完工", "工地移交",
+]
+
+SECURITY_OR_CRIME_TERMS = [
+    "knife", "stabbing", "fight", "assault", "pepper spray", "tear gas",
+    "irritant gas", "security incident", "police incident", "fare evasion",
+    "roadblock", "law enforcement", "刀具", "持刀", "刺傷", "鬥毆", "打架",
+    "刺激性氣體", "催淚氣體", "治安事件", "警方事件", "逃票", "道路路障", "執法案件",
+]
+
+MAJOR_SECURITY_RAIL_IMPACT_TERMS = [
+    "fatal", "killed", "death", "multiple injuries", "serious injuries",
+    "service suspended", "service suspension", "major disruption", "station evacuated",
+    "train evacuated", "emergency response", "security lockdown",
+    "死亡", "多人受傷", "重傷", "停駛", "營運中斷", "重大中斷",
+    "車站疏散", "列車疏散", "緊急應變", "封鎖車站",
+]
+
+CORE_METRO_TECHNICAL_TERMS = [
+    "rolling stock", "railcar", "trainset", "vehicle equipment", "depot equipment",
+    "maintenance equipment", "signalling", "signaling", "signal system", "train control",
+    "cbtc", "ato", "atp", "ats", "operations control", "operation control",
+    "control centre", "control center", "occ", "traction power", "power supply",
+    "substation", "regenerative braking", "energy storage", "energy management",
+    "communications", "telecom", "radio", "wireless", "data transmission",
+    "platform screen door", "platform door", "psd", "afc", "fare gate",
+    "station equipment", "hvac", "air conditioning", "ventilation", "fire system",
+    "environmental control", "escalator", "elevator", "condition monitoring",
+    "fault diagnosis", "predictive maintenance", "video analytics", "image recognition",
+    "ai image", "system integration", "system assurance", "rams", "safety verification",
+    "interface management", "ot security", "ics security", "cybersecurity",
+    "commissioning", "system testing", "technical verification",
+    "電聯車", "車輛設備", "機廠設備", "維修設備", "號誌", "信號", "列車控制",
+    "列控", "行車監控", "行控中心", "牽引供電", "一般電力", "變電站", "再生煞車",
+    "儲能", "能源管理", "通訊系統", "無線通訊", "資料傳輸", "月臺門", "月台門",
+    "自動收費", "票務系統", "票閘", "車站機電", "空調", "通風", "消防",
+    "環境控制", "電扶梯", "電梯", "無障礙機電", "狀態監測", "故障診斷",
+    "預測性維護", "影像辨識", "系統整合", "系統保證", "安全驗證", "介面管理",
+    "資安", "工控資安", "系統測試", "技術驗證", "投入營運",
+]
+
+TECHNICAL_IMPLEMENTATION_TERMS = [
+    "introduce", "introduced", "deploy", "deployed", "roll out", "upgrade",
+    "renewal", "replace", "replacement", "retrofit", "modernisation", "modernization",
+    "commission", "commissioning", "enter service", "entered service", "launch",
+    "trial", "pilot", "test", "testing", "verification", "validated", "validation",
+    "installation", "integrated", "integration", "improvement", "new system",
+    "new equipment", "導入", "啟用", "部署", "升級", "更新", "汰換",
+    "改造", "現代化", "試辦", "試行", "測試", "驗證", "改善", "新系統",
+    "新設備", "安裝", "整合", "投入營運", "正式營運",
+]
+
 LOW_IMPACT_ACCIDENT_TERMS = [
     "animal on tracks", "dog on tracks", "cat on tracks", "bird on tracks",
     "passenger dispute", "minor altercation", "trespasser", "small animal",
@@ -3591,6 +3709,8 @@ def _candidate_selection_text(candidate: dict) -> str:
 def _is_accident_signal_text(text: str) -> bool:
     if _contains_any_term(text, NON_ACCIDENT_CONTEXT_TERMS):
         return False
+    if _contains_any_term(text, SECURITY_OR_CRIME_TERMS) and not _contains_any_term(text, MAJOR_SECURITY_RAIL_IMPACT_TERMS):
+        return False
     if not _contains_any_term(text, URBAN_RAIL_INCIDENT_CONTEXT_TERMS):
         return False
     if _contains_any_term(text, SAFETY_INCIDENT_DETAIL_TERMS):
@@ -3640,6 +3760,47 @@ def _has_procurement_list_notice(candidate: dict) -> bool:
 def _is_financial_market_candidate(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
     return _contains_any_term(text, FINANCIAL_MARKET_TERMS)
+
+
+def _is_security_or_crime_candidate(candidate: dict) -> bool:
+    return _contains_any_term(_candidate_selection_text(candidate), SECURITY_OR_CRIME_TERMS)
+
+
+def _has_major_security_rail_impact(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    return _contains_any_term(text, MAJOR_SECURITY_RAIL_IMPACT_TERMS)
+
+
+def _has_core_metro_technical_content(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    if _is_financial_market_candidate(candidate):
+        return False
+    if _is_security_or_crime_candidate(candidate):
+        return False
+    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS):
+        return False
+    if _contains_any_term(text, PROPERTY_OR_CAMPUS_DEVELOPMENT_TERMS) and not _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS):
+        return False
+    if _contains_any_term(text, ENGINEERING_MILESTONE_ONLY_TERMS) and not _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS):
+        return False
+    if _contains_any_term(text, GENERIC_TEST_WITHOUT_TECH_TERMS) and not _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS):
+        return False
+
+    has_core_system = _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS)
+    has_implementation = _contains_any_term(text, TECHNICAL_IMPLEMENTATION_TERMS)
+    has_ai_or_data = _contains_any_term(text, ["ai", "artificial intelligence", "data analytics", "machine learning", "影像辨識", "資料分析", "人工智慧"])
+    has_ai_application_context = _contains_any_term(
+        text,
+        [
+            "maintenance", "monitoring", "condition monitoring", "fault diagnosis",
+            "predictive maintenance", "operations control", "safety", "equipment",
+            "signal", "power", "platform door", "維修", "監測", "故障診斷",
+            "預測性維護", "行控", "營運安全", "設備", "號誌", "供電", "月臺門", "月台門",
+        ],
+    )
+    if not has_core_system:
+        return False
+    return has_implementation or (has_ai_or_data and has_ai_application_context)
 
 
 def _has_general_rail_exclusion(candidate: dict) -> bool:
@@ -3693,6 +3854,8 @@ def _is_technical_news_selection_candidate(candidate: dict) -> bool:
         return False
     if _is_accident_signal_text(text):
         return False
+    if not _has_core_metro_technical_content(candidate):
+        return False
     if not _has_explicit_technical_system_detail(candidate):
         return False
     if _has_low_value_official_notice(candidate):
@@ -3742,6 +3905,14 @@ def infer_preliminary_type(candidate: dict) -> str:
     text = _candidate_selection_text(candidate)
     if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
         return "規範更新"
+    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS):
+        if _contains_any_term(text, HIGH_IMPACT_ACCIDENT_TERMS + ["service suspension", "service suspended", "major disruption", "營運中斷", "停駛", "重大中斷"]):
+            return "重大事故"
+        return "營運政策"
+    if _contains_any_term(text, ENGINEERING_MILESTONE_ONLY_TERMS) and not _has_core_metro_technical_content(candidate):
+        return "營運政策"
+    if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
+        return "營運政策"
     if _is_accident_signal_text(text):
         return "重大事故"
     if _contains_any_term(text, ["strike", "contract dispute", "lawsuit", "fare dispute", "budget overrun", "罷工", "合約糾紛", "票價爭議", "預算超支", "民怨"]):
@@ -3783,6 +3954,8 @@ def build_candidate_flags(candidate: dict) -> list[str]:
         flags.append("urban_rail")
     if _has_strong_technical_detail_text(text):
         flags.append("technical_or_system_detail")
+    if _has_core_metro_technical_content(candidate):
+        flags.append("core_metro_technical_content")
     if _is_accident_signal_text(text):
         flags.append("incident_or_safety_signal")
     if _contains_any_term(text, HIGH_VALUE_POLICY_TERMS):
@@ -3795,6 +3968,14 @@ def build_candidate_flags(candidate: dict) -> list[str]:
         flags.append("procurement_list_notice")
     if _is_financial_market_candidate(candidate):
         flags.append("financial_market_content")
+    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS):
+        flags.append("equipment_failure_not_tech")
+    if _is_security_or_crime_candidate(candidate):
+        flags.append("security_or_crime_context")
+    if _contains_any_term(text, PROPERTY_OR_CAMPUS_DEVELOPMENT_TERMS):
+        flags.append("property_or_campus_development")
+    if _contains_any_term(text, GENERIC_TEST_WITHOUT_TECH_TERMS):
+        flags.append("generic_testing_notice")
     if _has_general_rail_exclusion(candidate):
         flags.append("general_rail_exclusion")
     if information_issue == "摘要資訊不足":
@@ -4049,6 +4230,23 @@ def _candidate_system_theme(candidate: dict) -> str:
     return candidate.get("classification") or candidate.get("preliminary_type") or "未分類"
 
 
+def _candidate_incident_type(candidate: dict) -> str:
+    text = _candidate_selection_text(candidate)
+    incident_terms = [
+        ("tram_collision", ["tram", "streetcar", "collision", "crash", "hit", "rammed", "電車", "路面電車", "撞擊", "碰撞"]),
+        ("derailment", ["derailment", "derailed", "entgleist", "出軌", "脫軌"]),
+        ("power_supply", ["power outage", "power failure", "traction power", "third rail", "供電", "牽引", "第三軌"]),
+        ("signal_or_switch", ["signal failure", "signalling", "signaling", "switch failure", "points failure", "號誌", "信號", "轉轍器", "道岔"]),
+        ("platform_door", ["platform screen door", "platform door", "psd", "月臺門", "月台門"]),
+        ("service_disruption", ["service suspension", "disruption", "suspended", "停駛", "營運中斷", "重大中斷"]),
+        ("security", SECURITY_OR_CRIME_TERMS),
+    ]
+    for label, terms in incident_terms:
+        if _contains_any_term(text, terms):
+            return label
+    return _candidate_system_theme(candidate)
+
+
 EVENT_LOCATION_TERMS = [
     "tokyo", "osaka", "seoul", "singapore", "hong kong", "sydney", "melbourne",
     "london", "paris", "berlin", "munich", "new york", "washington", "chicago",
@@ -4218,17 +4416,65 @@ def _python_selection_sort_key(candidate: dict) -> tuple:
 
 def _python_selection_dynamic_key(candidate: dict, selected: list[dict]) -> tuple:
     base_key = _python_selection_sort_key(candidate)
-    if lookback_int != 365:
+    if int(lookback_int) not in ADVANCED_LOOKBACK_OPTIONS:
         return base_key
+    selected_locations = [_candidate_specific_event_location(item) or _candidate_event_location(item) for item in selected]
     selected_regions = [item.get("region", "") for item in selected]
     selected_months = [_candidate_month_key(item) for item in selected]
     selected_themes = [_candidate_system_theme(item) for item in selected]
+    selected_incidents = [_candidate_incident_type(item) for item in selected]
+    candidate_location = _candidate_specific_event_location(candidate) or _candidate_event_location(candidate)
     diversity_penalty = (
+        selected_locations.count(candidate_location),
         selected_regions.count(candidate.get("region", "")),
+        selected_incidents.count(_candidate_incident_type(candidate)),
         selected_months.count(_candidate_month_key(candidate)),
         selected_themes.count(_candidate_system_theme(candidate)),
     )
     return base_key[:2] + diversity_penalty + base_key[2:]
+
+
+def _long_term_diversity_skip_reason(candidate: dict, selected: list[dict]) -> str:
+    if int(lookback_int) not in ADVANCED_LOOKBACK_OPTIONS or len(selected) < 6:
+        return ""
+    classification = _selection_classification(candidate)
+    location = _candidate_specific_event_location(candidate) or _candidate_event_location(candidate)
+    region = candidate.get("region", "")
+    theme = _candidate_system_theme(candidate)
+    incident_type = _candidate_incident_type(candidate)
+    same_location_count = sum(
+        1 for item in selected
+        if (_candidate_specific_event_location(item) or _candidate_event_location(item)) == location
+        and _selection_classification(item) == classification
+    )
+    same_region_incident_count = sum(
+        1 for item in selected
+        if item.get("region", "") == region
+        and _candidate_incident_type(item) == incident_type
+        and _selection_classification(item) == classification
+    )
+    same_theme_count = sum(
+        1 for item in selected
+        if _candidate_system_theme(item) == theme
+        and _selection_classification(item) == classification
+    )
+    if classification == "重大事故":
+        if location and same_location_count >= 2:
+            return "長期代表性限制：同一城市/地點重大事故已達 2 則，避免年度回顧過度集中。"
+        if region and incident_type and same_region_incident_count >= 2:
+            return "長期代表性限制：同一國家/地區相同事故型態已達 2 則，避免單一事故類型過度占用篇幅。"
+        if theme and same_theme_count >= 4:
+            return "長期代表性限制：相同系統主題重大事故已達 4 則，候選不足時可少列。"
+    if _is_project_series_candidate(candidate) and location and theme:
+        same_project_theme_count = sum(
+            1 for item in selected
+            if (_candidate_specific_event_location(item) or _candidate_event_location(item)) == location
+            and _candidate_system_theme(item) == theme
+            and _is_project_series_candidate(item)
+        )
+        if same_project_theme_count >= 2:
+            return "長期代表性限制：同一城市/系統專案系列已達 2 則，避免宣傳稿或相近里程碑重複占用篇幅。"
+    return ""
 
 
 def _python_candidate_allowed_for_scope(candidate: dict) -> bool:
@@ -4252,6 +4498,12 @@ def _is_low_value_python_selection_candidate(candidate: dict) -> bool:
     has_technical_detail = _has_explicit_technical_system_detail(candidate)
     text = _candidate_selection_text(candidate)
     if _is_financial_market_candidate(candidate):
+        return True
+    if _selection_classification(candidate) == "技術新知" and not _has_core_metro_technical_content(dict(candidate, classification="技術新知")):
+        return True
+    if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
+        return True
+    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS) and _selection_classification(candidate) == "技術新知":
         return True
     if _is_low_value_long_term_candidate(candidate):
         return True
@@ -4301,6 +4553,26 @@ def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict 
             except Exception:
                 pass
             continue
+        diversity_reason = _long_term_diversity_skip_reason(candidate, selected)
+        if diversity_reason:
+            try:
+                LAST_PYTHON_SELECTION_DEBUG.setdefault("duplicate_event_records", []).append({
+                    "candidate_id": candidate.get("id", ""),
+                    "candidate_title": candidate.get("title", ""),
+                    "duplicate_of_id": "",
+                    "duplicate_of_title": "",
+                    "duplicate_event_reason": diversity_reason,
+                    "candidate_location": _candidate_specific_event_location(candidate) or _candidate_event_location(candidate),
+                    "duplicate_of_location": "",
+                    "candidate_date": candidate.get("date", ""),
+                    "duplicate_of_date": "",
+                    "candidate_theme": _candidate_system_theme(candidate),
+                    "duplicate_of_theme": "",
+                    "candidate_incident_type": _candidate_incident_type(candidate),
+                })
+            except Exception:
+                pass
+            continue
         return candidate
     return None
 
@@ -4313,6 +4585,10 @@ LAST_PYTHON_SELECTION_DEBUG: dict = dict(REPORT_SELECTION_DEBUG_DEFAULT)
 def _is_hard_excluded_for_borderline(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
     if _is_financial_market_candidate(candidate):
+        return True
+    if _selection_classification(candidate) == "技術新知" and not _has_core_metro_technical_content(dict(candidate, classification="技術新知")):
+        return True
+    if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
         return True
     if _is_low_value_long_term_candidate(candidate):
         return True
@@ -5045,6 +5321,9 @@ def score_journal_candidate(candidate: dict) -> dict:
     score = 0
     reasons: list[str] = []
     host = _domain_from_url(candidate.get("url", ""))
+    has_core_system = _contains_any_term(text, JOURNAL_CORE_SYSTEM_TERMS)
+    has_secondary_system = _contains_any_term(text, JOURNAL_SECONDARY_SYSTEM_TERMS)
+    has_low_priority_topic = _contains_any_term(text, JOURNAL_LOW_PRIORITY_TERMS)
     if candidate.get("doi") or (host and any(_host_matches(host, domain) for domain in JOURNAL_ALLOWED_SOURCE_DOMAINS)):
         score += 20
         reasons.append("正式期刊來源、DOI 或可信研究頁面 +20")
@@ -5055,11 +5334,30 @@ def score_journal_candidate(candidate: dict) -> dict:
         score += 20
         reasons.append("都市軌道場景明確 +20")
     if _contains_any_term(text, JOURNAL_SYSTEM_TERMS):
-        score += 25
-        reasons.append("機電/系統研究議題明確 +25")
+        system_points = 25 if has_core_system else (10 if has_secondary_system else 0)
+        if system_points:
+            score += system_points
+            reasons.append(f"機電/系統研究議題明確 +{system_points}")
     if _contains_any_term(text, JOURNAL_INSIGHT_TERMS):
         score += 15
         reasons.append("具規劃、維修、能源、安全或資料治理啟示 +15")
+    if has_core_system:
+        score += 25
+        reasons.append("符合捷運機電核心研究範圍 +25")
+    elif has_secondary_system:
+        score += 10
+        reasons.append("屬施工介面或監測等次要補充研究 +10")
+    else:
+        score -= 20
+        reasons.append("未見明確捷運機電核心研究內容 -20")
+    if has_low_priority_topic:
+        score -= 35
+        reasons.append("偏人力排班、旅客行為、純土建或一般營運研究 -35")
+    if not has_core_system:
+        score_cap = 50 if has_low_priority_topic else (70 if has_secondary_system else 55)
+        if score > score_cap:
+            score = score_cap
+            reasons.append(f"非核心機電研究分數上限 {score_cap}")
     return {"journal_score": max(0, min(100, score)), "journal_score_reason": "；".join(reasons) or "未符合主要評分條件"}
 
 
@@ -5543,7 +5841,9 @@ def _clean_source_label(content: str, url: str, domain: str) -> str:
     label = re.sub(r"\s+", " ", label)
     label = label.strip(" ：:;；,，。-（）()[]【】")
     label = _clean_formal_source_proxy_label(label)
-    if label.casefold() in {"http", "https", "google news", url.casefold(), domain.casefold()}:
+    if label.casefold() in {"http", "https", "google news", "news", "article", "report", "source", url.casefold(), domain.casefold()}:
+        label = ""
+    if re.sub(r"\s+", "", label) in {"報導", "新聞", "公告", "來源", "資料來源"}:
         label = ""
     if not label and domain:
         label = domain
@@ -6330,7 +6630,7 @@ def repair_journal_dates_in_report(report_md: str, journal_candidates: list[dict
             return line_text
         if "發表日期" in line_text:
             return re.sub(
-                r"^\s*(?:[-*]\s*)?(?:•\s*)?發表日期.*$",
+                r"^\s*(?:\d+[\.\、]\s*)?(?:[-*]\s*)?(?:•\s*)?發表日期.*$",
                 f"• 發表日期：{date_text}",
                 line_text,
                 count=1,
@@ -6364,8 +6664,8 @@ def repair_journal_dates_in_report(report_md: str, journal_candidates: list[dict
                 line = _replace_line_date(line, replacement_date)
                 active_date = replacement_date
         elif "資料來源" in line:
-            replacement_date = matched_date or active_date or _next_candidate_date()
-            if replacement_date:
+            replacement_date = matched_date or active_date
+            if replacement_date and ("日期未知" in line or re.search(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", line)):
                 line = _replace_line_date(line, replacement_date)
                 active_date = replacement_date
 
@@ -6390,49 +6690,209 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
     after = report_md[section_end:]
 
     lines = section.splitlines()
-    output: list[str] = []
+    if not lines:
+        return report_md
+    output: list[str] = [lines[0]]
     item_index = 0
     in_conclusion = False
     field_names = ("發表日期", "期刊/來源", "期刊／來源", "研究主題", "研究摘要", "臺北捷運局啟示", "資料來源")
+    seen_fields_by_item: dict[int, set[str]] = {}
 
-    for line_no, raw_line in enumerate(lines):
-        line = raw_line
-        stripped = line.strip()
-        if line_no == 0:
-            output.append(line)
-            continue
+    def _candidate_for_item(index: int) -> dict:
+        if 1 <= index <= len(journal_candidates):
+            return journal_candidates[index - 1] or {}
+        return {}
+
+    def _candidate_display_title(index: int) -> str:
+        item = _candidate_for_item(index)
+        title = _clean_text(str(item.get("title", "") or ""))
+        title = re.sub(r"\[[^\]]*(?:技術研究補充|國際學術期刊)[^\]]*\]\s*", "", title).strip()
+        return title or f"國際學術期刊研究 {index}"
+
+    def _candidate_source_name(index: int) -> str:
+        item = _candidate_for_item(index)
+        source = (
+            item.get("journal_name")
+            or item.get("source")
+            or item.get("source_display")
+            or _domain_from_url(item.get("url", ""))
+        )
+        source = _clean_source_label(str(source or ""), item.get("url", ""), _domain_from_url(item.get("url", "")))
+        if source == "資料來源未明確辨識":
+            return ""
+        return source
+
+    def _repair_truncated_value(value: str, expected: str) -> str:
+        value = (value or "").strip()
+        expected = (expected or "").strip()
+        if not value or not expected:
+            return value
+        if expected.casefold() == value.casefold():
+            return expected
+        if expected.casefold().endswith(value.casefold()) and 0 < len(expected) - len(value) <= 3:
+            return expected
+        return value
+
+    def _field_match(raw_line: str) -> tuple[str, str] | None:
+        stripped = raw_line.strip()
+        match = re.match(
+            r"^\s*(?:\d+[\.\、]\s*)?(?:[-*]\s*)?(?:•\s*)?"
+            r"(發表日期|期刊[/／]來源|研究主題|研究摘要|臺北捷運局啟示|資料來源)"
+            r"\s*[：:]\s*(.*)$",
+            stripped,
+        )
+        if match:
+            field = "期刊／來源" if match.group(1) in {"期刊/來源", "期刊／來源"} else match.group(1)
+            return field, match.group(2).strip()
+        match = re.match(
+            r"^\s*(?:\d+[\.\、]\s*)?(?:[-*]\s*)?(?:•\s*)?發表日期\s*[Pp]\s*(.*)$",
+            stripped,
+        )
+        if match:
+            return "發表日期", match.group(1).strip()
+        return None
+
+    def _clean_journal_title_line(raw_line: str) -> str:
+        title = raw_line.strip()
+        title = re.sub(r"^\s*#{3,6}\s*", "", title)
+        title = re.sub(r"^\s*🔹\s*", "", title)
+        title = re.sub(r"\[[^\]]*(?:技術研究補充|國際學術期刊)[^\]]*\]\s*", "", title)
+        title = re.sub(r"^\s*(?:\d+[\.\、]|[（(]?\d+[）)])\s*", "", title)
+        title = title.strip(" ：:　")
+        return title
+
+    def _matches_candidate_title(candidate_title: str, candidate: dict) -> bool:
+        original = str(candidate.get("title", "") or "")
+        if not original or not candidate_title:
+            return False
+        if candidate_title.casefold() in original.casefold() or original.casefold() in candidate_title.casefold():
+            return True
+        original_tokens = [
+            token.casefold()
+            for token in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]{5,}", original)
+            if len(token) >= 5
+        ]
+        title_lower = candidate_title.casefold()
+        return bool(original_tokens) and sum(1 for token in original_tokens[:8] if token in title_lower) >= 2
+
+    def _looks_like_title_line(raw_line: str, title: str) -> bool:
+        stripped = raw_line.strip()
+        if not title or any(title.startswith(name) for name in field_names):
+            return False
+        if "學術期刊綜合結論" in title:
+            return False
+        if re.match(r"^\s*(?:#{3,6}|🔹|\d+[\.\、]|[（(]?\d+[）)])", stripped):
+            return True
+        if re.search(r"\[[^\]]*(?:技術研究補充|國際學術期刊)[^\]]*\]", stripped):
+            return True
+        if any(_matches_candidate_title(title, item) for item in journal_candidates or []):
+            return True
+        if item_index < len(journal_candidates) and "：" not in title and ":" not in title:
+            if len(title) <= 120 and not title.endswith(("。", "；", ";")) and not title.startswith(("以下", "本期", "研究補充", "國際學術期刊")):
+                return True
+        return False
+
+    def _repair_date_value(value: str, index: int) -> str:
+        candidate_date = _journal_candidate_full_date(_candidate_for_item(index))
+        if candidate_date:
+            return candidate_date
+        value = (value or "").strip()
+        match = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", value)
+        if match:
+            return f"{int(match.group(1)):04d}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+        if re.fullmatch(r"(?:0?\d{2}|\d{3})[-/]\d{1,2}[-/]\d{1,2}", value):
+            return "日期未明"
+        year_match = re.fullmatch(r"(20\d{2}|19\d{2})\s*年?", value)
+        if year_match:
+            return f"{year_match.group(1)}年"
+        if not value or value in {"日期未知", "日期未明", "未知"}:
+            return "日期未明"
+        return value
+
+    def _repair_field_value(field: str, value: str, index: int) -> str:
+        value = _clean_text(value)
+        if field == "發表日期":
+            return _repair_date_value(value, index)
+        if field == "期刊／來源":
+            expected = _candidate_source_name(index)
+            value = _repair_truncated_value(value, expected)
+            if not value or value in {"資料來源未明確辨識", "報導"}:
+                value = expected
+            return value or "期刊來源未明"
+        return value or "資料未載明"
+
+    def _append_blank_if_needed() -> None:
+        if output and output[-1].strip():
+            output.append("")
+
+    def _append_title(title: str) -> None:
+        nonlocal item_index
+        item_index += 1
+        _append_blank_if_needed()
+        output.append(f"{item_index}、{title}")
+        seen_fields_by_item.setdefault(item_index, set())
+
+    def _ensure_item_started() -> None:
+        if item_index <= 0:
+            _append_title(_candidate_display_title(1))
+
+    def _append_field(field: str, value: str) -> None:
+        _ensure_item_started()
+        seen_fields = seen_fields_by_item.setdefault(item_index, set())
+        if field in seen_fields:
+            return
+        output.append(f"• {field}：{_repair_field_value(field, value, item_index)}")
+        seen_fields.add(field)
+
+    def _process_body_line(raw_line: str) -> None:
+        stripped = raw_line.strip()
         if not stripped:
-            output.append(line)
+            _append_blank_if_needed()
+            return
+        if stripped == "---":
+            return
+        field_match = _field_match(raw_line)
+        if field_match:
+            _append_field(field_match[0], field_match[1])
+            return
+        explicit_title_marker = bool(
+            re.match(r"^\s*(?:#{3,6}|🔹|\d+[\.\、]|[（(]?\d+[）)])", stripped)
+            or re.search(r"\[[^\]]*(?:技術研究補充|國際學術期刊)[^\]]*\]", stripped)
+        )
+        if output and output[-1].startswith("• ") and not explicit_title_marker:
+            output[-1] = output[-1].rstrip() + " " + stripped
+            return
+        title = _clean_journal_title_line(raw_line)
+        if _looks_like_title_line(raw_line, title):
+            _append_title(title)
+            return
+        if item_index == 0:
+            output.append(stripped)
+        elif output and output[-1].startswith("• "):
+            output[-1] = output[-1].rstrip() + " " + stripped
+        else:
+            output.append(stripped)
+
+    for raw_line in lines[1:]:
+        stripped = raw_line.strip()
+        if in_conclusion:
+            output.append(raw_line)
             continue
         if "學術期刊綜合結論" in stripped:
+            prefix, _, suffix = raw_line.partition("學術期刊綜合結論")
+            if prefix.strip():
+                _process_body_line(prefix)
+            _append_blank_if_needed()
+            output.append("學術期刊綜合結論")
+            suffix = suffix.strip(" ：:】]「」")
+            if suffix:
+                output.append(suffix)
             in_conclusion = True
-            output.append(line)
             continue
-        if in_conclusion:
-            output.append(line)
-            continue
-        if stripped.startswith("•") and any(name in stripped for name in field_names):
-            output.append(line)
-            continue
-        if stripped == "---":
-            output.append(line)
-            continue
-        if stripped.startswith(("以下", "本期", "國際學術期刊", "研究補充")) and not re.match(r"^\s*(?:\d+[\.\、]|[（(]?\d+[）)])", stripped):
-            output.append(line)
-            continue
+        _process_body_line(raw_line)
 
-        title_match = re.match(r"^\s*(?:#{3,6}\s*)?(?:🔹\s*)?(?:\[[^\]]*(?:技術研究補充|國際學術期刊)[^\]]*\]\s*)?(.*)$", line)
-        candidate_title = title_match.group(1).strip() if title_match else stripped
-        candidate_title = re.sub(r"^\s*(?:\d+[\.\、]|[（(]?\d+[）)]).?\s*", "", candidate_title).strip()
-        candidate_title = re.sub(r"\[[^\]]*(?:技術研究補充|國際學術期刊)[^\]]*\]\s*", "", candidate_title).strip()
-
-        if candidate_title and not any(candidate_title.startswith(name) for name in field_names):
-            item_index += 1
-            output.append(f"{item_index}、{candidate_title}")
-        else:
-            output.append(line)
-
-    return before + "\n".join(output) + after
+    normalized = re.sub(r"\n{3,}", "\n\n", "\n".join(output)).strip()
+    return before + normalized + after
 
 
 def count_journal_summary_conclusion_chars(report_md: str) -> int:
