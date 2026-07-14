@@ -2751,7 +2751,7 @@ def _fast_query_bucket(query: str) -> str:
 
 
 def _search_language_from_query(query: str) -> str:
-    metadata = LAST_DDGS_QUERY_METADATA.get(query or "")
+    metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {}
     if metadata.get("lang"):
         return metadata["lang"]
     q = query or ""
@@ -2769,7 +2769,7 @@ def _search_language_from_query(query: str) -> str:
 
 
 def _search_family_from_query(query: str) -> str:
-    metadata = LAST_DDGS_QUERY_METADATA.get(query or "")
+    metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {}
     if metadata.get("family"):
         return metadata["family"]
     q = (query or "").casefold()
@@ -3489,7 +3489,7 @@ def _make_news_candidate(
     region_value = region if region and region != "未判定" else guess_region_from_text(
         f"{title} {snippet} {source} {query} {url} {source_href}"
     )
-    query_metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {})
+    query_metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {}
     search_family = query_metadata.get("family") or _search_family_from_query(query or source)
     search_language = query_metadata.get("lang") or _search_language_from_query(query or source)
     return {
