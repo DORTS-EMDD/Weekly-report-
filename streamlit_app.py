@@ -436,19 +436,19 @@ EMPTY_TEXT_BY_TYPE = {
     "營運爭議": "本期未發現符合條件之營運爭議事件。",
     "規範更新": "本期未發現符合條件之規範版本更新、修訂草案、公告或徵詢事件。",
 }
-MIN_REPORT_ITEMS = 15
+MIN_REPORT_ITEMS = 3
 MAX_ITEMS_PER_SOURCE = 25
 DDGS_MAX_RESULTS = 25
 RESEARCH_SUPPLEMENT_LOOKBACK_DAYS = 90
 NORMAL_LOOKBACK_OPTIONS = [7, 14, 30]
 ADVANCED_LOOKBACK_OPTIONS = [90, 180, 365]
 REPORT_TARGET_BY_DAYS = {
-    7: 8,
-    14: 10,
-    30: 10,
-    90: 10,
-    180: 12,
-    365: 12,
+    7: 3,
+    14: 6,
+    30: 6,
+    90: 9,
+    180: 9,
+    365: 9,
 }
 LONG_TERM_TARGET_LABELS = {
     90: "趨勢回顧",
@@ -479,7 +479,7 @@ def get_research_supplement_lookback_days(days: int) -> int:
 ADVANCED_REGIONS = [
     "日本", "韓國", "新加坡", "香港", "澳洲", "英國", "法國", "德國",
     "美國", "加拿大", "西班牙", "荷蘭", "瑞士", "義大利", "瑞典",
-    "奧地利", "丹麥", "挪威",
+    "奧地利", "丹麥", "挪威", "俄羅斯", "葡萄牙", "巴西", "印度",
 ]
 
 DEFAULT_REGIONS = [
@@ -506,6 +506,10 @@ REGION_SEARCH_TERMS = {
     "奧地利": "Austria Vienna U-Bahn Wiener Linien tram metro",
     "丹麥": "Denmark Copenhagen Metro light rail",
     "挪威": "Norway Oslo Metro tram light rail",
+    "俄羅斯": "Russia Moscow Metro tram metro rolling stock signalling",
+    "葡萄牙": "Portugal Lisbon Metro Porto Metro tram funicular",
+    "巴西": "Brazil Sao Paulo Metro Rio Metro metro tram",
+    "印度": "India Delhi Metro Mumbai Metro Bengaluru Metro metro rail",
 }
 
 STANDARDS_WATCHLIST = {
@@ -521,7 +525,7 @@ STANDARD_UPDATE_TERMS = [
 ]
 
 BLOCKED_DOMAINS = {
-    ".cn", ".ru", ".kp", ".by", ".ir",
+    ".cn", ".kp", ".by", ".ir",
 }
 
 LOW_VALUE_EXCLUDED_HOSTS = {
@@ -530,6 +534,7 @@ LOW_VALUE_EXCLUDED_HOSTS = {
     "portal.mtr.com.hk",
     "link.mtrmb.mtr.com.hk",
     "art.tfl.gov.uk",
+    "travelandtourworld.com",
 }
 
 PORTAL_REPOST_DOMAINS = {"msn.com", "yahoo.com", "aol.com", "patch.com"}
@@ -570,7 +575,7 @@ URBAN_RAIL_MODE_TERMS = [
     "metro", "subway", "underground", "tube", "metrorail", "mass rapid transit", "mrt",
     "light rail", "tram", "tramway", "streetcar", "lrrt", "lrt",
     "urban rail", "urban metro", "rapid transit", "people mover", "automated guideway transit",
-    "agt", "monorail", "u-bahn", "stadtbahn", "skytrain", "dlr", "mover",
+    "agt", "monorail", "funicular", "u-bahn", "stadtbahn", "skytrain", "dlr", "mover",
     "地下鉄", "メトロ", "新交通システム", "都市鉄道", "路面電車", "トラム",
     "지하철", "도시철도", "경전철",
     "地鐵", "港鐵", "輕軌", "轻轨", "都市軌道", "捷運",
@@ -644,6 +649,86 @@ NON_URBAN_QUERY_EXCLUSIONS = (
     '-Amtrak -Korail -RegioJet -bus -coach -highway'
 )
 
+TECH_PRECISION_QUERIES = [
+    '("metro" OR subway OR MRT OR LRT OR tram) '
+    '("contactless payment" OR "tap to pay" OR "scan to pay" OR "open-loop payment" OR AFC OR validator OR "fare gate" OR "biometric payment") '
+    '(rollout OR deployment OR upgrade OR expansion OR launch) -bus -retail -promotion -campaign -airport',
+    '("metro" OR subway OR MRT OR LRT OR tram OR U-Bahn) '
+    '("new train" OR "train cars" OR "rolling stock" OR "light rail vehicle" OR LRV OR "metro cars") '
+    '(delivered OR unveiled OR ordered OR rollout OR "enter service" OR commissioned) -museum -tour -model -heritage',
+    '("metro" OR subway OR MRT OR U-Bahn) '
+    '(signalling OR signaling OR CBTC OR ATO OR ATP OR ATS OR "train control") '
+    '(upgrade OR modernization OR modernisation OR migration OR testing OR commissioning)',
+    '("metro" OR subway OR tram) '
+    '("life-cycle management" OR "life cycle management" OR "asset management" OR overhaul OR "predictive maintenance" OR "condition monitoring") '
+    '(fleet OR depot OR equipment OR maintenance)',
+    '("subway station" OR "metro station" OR MRT OR U-Bahn) '
+    '("fire protection" OR "fire safety" OR ventilation OR elevator OR escalator OR accessibility) '
+    '("design services" OR tender OR upgrade OR replacement)',
+    '(tram OR streetcar OR LRT OR metro) '
+    '("track renewal" OR "track lubrication" OR "lubricator replacement" OR depot OR OMC OR "maintenance centre" OR "maintenance center") '
+    '(work OR replacement OR overhaul OR upgrade)',
+]
+
+ACCIDENT_PRECISION_QUERY = (
+    '("metro" OR subway OR MRT OR LRT OR tram OR streetcar OR funicular OR U-Bahn OR métro) '
+    '(derailment OR collision OR fire OR smoke OR evacuation OR fatal OR killed OR injured OR shutdown '
+    'OR "signalling failure" OR "signaling failure" OR "power failure" OR "brake failure") '
+    '(investigation OR inquiry OR suspension OR disruption OR regulator OR safety) '
+    '-crime -shooting -stabbing -theft -assault -bus'
+)
+
+POLICY_PRECISION_QUERY = (
+    '("metro" OR MRT OR subway OR tram OR LRT) '
+    '("line opening" OR "opening date" OR "service restructuring" OR "closure for works" OR "fare reform" '
+    'OR "operating hours" OR "line extension" OR "capacity increase" OR "system renewal") '
+    '-tourism -guide -festival -weekend -promotion -campaign'
+)
+
+DISPUTE_PRECISION_QUERY = (
+    '("metro" OR subway OR MRT OR LRT OR tram) '
+    '(strike OR "union dispute" OR lawsuit OR "procurement dispute" OR "contract dispute" '
+    'OR "cost overrun" OR protest OR arbitration) '
+    '(service OR project OR contract OR delay OR construction)'
+)
+
+GLOBAL_MULTILINGUAL_TECH_QUERIES = [
+    ('de', '(U-Bahn OR Stadtbahn OR Straßenbahn) (CBTC OR Signaltechnik OR Fahrzeuge OR Brandschutz OR "kontaktloses Bezahlen") (Modernisierung OR bestellt OR Inbetriebnahme OR Ausschreibung) -Bus'),
+    ('fr', '(métro OR tramway) (signalisation OR "matériel roulant" OR "protection incendie" OR "paiement sans contact") (modernisation OR commande OR "mise en service" OR appel d\'offres) -bus'),
+    ('es', '(metro OR tranvía OR "tren ligero") (señalización OR "material rodante" OR "pago sin contacto") (modernización OR pedido OR "puesta en servicio" OR licitación) -autobús'),
+    ('ru', '(метро OR трамвай) (сигнализация OR вагоны OR "биометрическая оплата" OR модернизация) (заказ OR ввод OR испытания OR тендер) -автобус'),
+    ('pt-it', '(metro OR metropolitana OR eléctrico OR tram) ("material circulante" OR segnalamento OR señalización OR "pagamento sem contacto" OR "protezione antincendio") (modernização OR modernizzazione OR encomenda OR ordine OR "entrada em serviço") -bus'),
+]
+
+GLOBAL_MULTILINGUAL_ACCIDENT_QUERIES = [
+    ('de', '(U-Bahn OR Straßenbahn OR Stadtbahn) (Entgleisung OR Kollision OR Brand OR Evakuierung OR Tote OR Verletzte OR "Betrieb eingestellt" OR Untersuchung) -Bus'),
+    ('fr', '(métro OR tramway OR funiculaire) (déraillement OR collision OR incendie OR évacuation OR morts OR blessés OR interruption OR enquête) -bus'),
+    ('es', '(metro OR tranvía OR funicular) (descarrilamiento OR colisión OR incendio OR evacuación OR muertos OR heridos OR suspensión OR investigación) -autobús'),
+    ('ru', '(метро OR трамвай OR фуникулер) ("сход с рельсов" OR столкновение OR пожар OR эвакуация OR погиб OR пострадал OR "остановка движения" OR расследование) -автобус'),
+    ('ja', '(地下鉄 OR メトロ OR 路面電車 OR トラム) (脱線 OR 衝突 OR 火災 OR 避難 OR 死亡 OR 負傷 OR 運休 OR 調査) -バス -新幹線'),
+    ('ko', '(지하철 OR 도시철도 OR 경전철 OR 트램) (탈선 OR 충돌 OR 화재 OR 대피 OR 사망 OR 부상 OR 운행중단 OR 조사) -버스'),
+    ('zh', '(地鐵 OR 地铁 OR 捷運 OR 輕軌 OR 轻轨 OR 有軌電車 OR 有轨电车) (脫軌 OR 脱轨 OR 碰撞 OR 火災 OR 火灾 OR 疏散 OR 死亡 OR 受傷 OR 受伤 OR 停駛 OR 停驶 OR 調查 OR 调查) -公車 -巴士'),
+]
+
+OFFICIAL_INVESTIGATION_SITE_QUERIES = [
+    'site:ntsb.gov (subway OR metro OR light rail OR streetcar OR transit) (derailment OR collision OR fire OR investigation)',
+    'site:tsb.gc.ca (metro OR subway OR light rail OR streetcar OR transit) (derailment OR collision OR fire OR investigation)',
+    'site:atsb.gov.au (metro OR tram OR light rail) (derailment OR collision OR fire OR investigation)',
+    'site:bea-tt.developpement-durable.gouv.fr (métro OR tramway OR funiculaire) (déraillement OR collision OR incendie OR enquête)',
+    'site:gov.uk/raib (tram OR metro OR light rail OR funicular) (derailment OR collision OR fire OR investigation)',
+]
+
+SEARCH_LANGUAGE_MARKERS = [
+    ("ja", ["地下鉄", "メトロ", "脱線", "運休", "新幹線"]),
+    ("ko", ["지하철", "도시철도", "탈선", "운행중단"]),
+    ("zh", ["地鐵", "地铁", "捷運", "輕軌", "脫軌", "調查"]),
+    ("ru", ["метро", "трамвай", "сход", "пожар", "биометрическая"]),
+    ("de", ["u-bahn", "stadtbahn", "straßenbahn", "entgleisung", "brandschutz"]),
+    ("fr", ["métro", "tramway", "déraillement", "évacuation", "enquête"]),
+    ("es", ["tranvía", "descarrilamiento", "colisión", "investigación"]),
+    ("pt-it", ["metropolitana", "eléctrico", "pagamento", "segnalamento"]),
+]
+
 AIRPORT_PEOPLE_MOVER_EXCLUDE_TERMS = [
     "airport", "aviation", "lax", "airport people mover", "terminal people mover",
     "airport transit", "airport shuttle", "terminal shuttle",
@@ -711,7 +796,11 @@ SOURCE_QUALITY_A_DOMAINS = {
     "ratp.fr", "lta.gov.sg", "smrt.com.sg", "mtr.com.hk",
     "seoulmetro.co.kr", "tokyometro.jp", "metro.tokyo.lg.jp",
     "metro-madrid.es", "tmb.cat", "wienerlinien.at", "sl.se",
-    "cph.dk", "rta.ae", "railwaygazette.com", "railjournal.com",
+    "cph.dk", "rta.ae", "bvg.de", "sydneymetro.info",
+    "infrastructure.gov.au", "kaupunkiliikenne.fi", "mosmetro.ru",
+    "transport.mos.ru", "lrta.gov.ph", "ntsb.gov", "tsb.gc.ca",
+    "atsb.gov.au", "bea-tt.developpement-durable.gouv.fr", "gov.uk",
+    "raib.gov.uk", "railwaygazette.com", "railjournal.com",
     "railway-technology.com", "railway-news.com",
     "urban-transport-magazine.com", "masstransitmag.com",
     "intelligenttransport.com", "metro-magazine.com",
@@ -723,6 +812,10 @@ SOURCE_TIER_OFFICIAL_DOMAINS = {
     "seoulmetro.co.kr", "tokyometro.jp", "metro.tokyo.lg.jp",
     "metro-madrid.es", "tmb.cat", "wienerlinien.at", "sl.se",
     "cph.dk", "rta.ae", "uitp.org", "societedesgrandsprojets.fr",
+    "bvg.de", "sydneymetro.info", "infrastructure.gov.au",
+    "kaupunkiliikenne.fi", "mosmetro.ru", "transport.mos.ru",
+    "lrta.gov.ph", "ntsb.gov", "tsb.gc.ca", "atsb.gov.au",
+    "bea-tt.developpement-durable.gouv.fr", "gov.uk", "raib.gov.uk",
 }
 
 SOURCE_TIER_PROFESSIONAL_DOMAINS = {
@@ -753,6 +846,19 @@ SOURCE_DISPLAY_BY_DOMAIN = {
     "masstransitmag.com": "Mass Transit Magazine",
     "metro-magazine.com": "METRO Magazine",
     "railwayage.com": "Railway Age",
+    "bvg.de": "BVG 官方公告",
+    "sydneymetro.info": "Sydney Metro 官方公告",
+    "infrastructure.gov.au": "澳洲基礎建設主管機關",
+    "kaupunkiliikenne.fi": "Kaupunkiliikenne 官方公告",
+    "mosmetro.ru": "Moscow Metro 官方公告",
+    "transport.mos.ru": "Moscow Transport 官方公告",
+    "lrta.gov.ph": "LRTA 官方公告",
+    "ntsb.gov": "NTSB 事故調查資料",
+    "tsb.gc.ca": "TSB Canada 事故調查資料",
+    "atsb.gov.au": "ATSB 事故調查資料",
+    "bea-tt.developpement-durable.gouv.fr": "BEA-TT 事故調查資料",
+    "gov.uk": "英國政府/RAIB 事故調查資料",
+    "raib.gov.uk": "RAIB 事故調查資料",
 }
 
 SOURCE_DOMAIN_HINT_BY_LABEL = {
@@ -777,18 +883,29 @@ SOURCE_DOMAIN_HINT_BY_LABEL = {
     "mass transit magazine": "masstransitmag.com",
     "metro magazine": "metro-magazine.com",
     "railway age": "railwayage.com",
+    "bvg": "bvg.de",
+    "sydney metro": "sydneymetro.info",
+    "moscow metro": "mosmetro.ru",
+    "mosmetro": "mosmetro.ru",
+    "lrta": "lrta.gov.ph",
+    "ntsb": "ntsb.gov",
+    "tsb canada": "tsb.gc.ca",
+    "atsb": "atsb.gov.au",
+    "bea-tt": "bea-tt.developpement-durable.gouv.fr",
+    "raib": "gov.uk",
 }
 
 SOURCE_QUALITY_C_DOMAINS = {
     "msn.com", "yahoo.com", "aol.com", "tripadvisor.com", "timeout.com",
     "lonelyplanet.com", "booking.com", "expedia.com", "trip.com",
-    "wikipedia.org", "wikivoyage.org",
+    "wikipedia.org", "wikivoyage.org", "travelandtourworld.com",
 }
 
 LOW_QUALITY_CONTENT_TERMS = [
     "wikipedia", "travel guide", "tourist", "hotel", "airport parking",
     "things to do", "itinerary", "visitor guide", "travel tips", "travel reminder",
-    "tourism information", "weekend travel", "seo", "sponsored",
+    "tourism information", "weekend travel", "airport travel", "travel and tour world",
+    "futuristic metro network", "international expansion", "seo", "sponsored",
     "minor delay", "detour", "service alert", "service advisory",
     "customer notice", "take transit", "temporary stop closure",
     "hiring", "jobs", "careers", "conference registration", "event page",
@@ -1803,6 +1920,20 @@ def _domain_from_url(url: str) -> str:
         return ""
 
 
+def _normalize_source_domain(domain: str) -> str:
+    host = (domain or "").strip().lower().removeprefix("www.")
+    if not host:
+        return ""
+    aliases = {
+        "news.google.com": "",
+        "finance.yahoo.com": "yahoo.com",
+        "uk.news.yahoo.com": "yahoo.com",
+        "ca.news.yahoo.com": "yahoo.com",
+        "www.gov.uk": "gov.uk",
+    }
+    return aliases.get(host, host)
+
+
 def _extract_site_domain_from_google_news(url: str) -> str:
     try:
         query = parse_qs(urlparse(url).query).get("q", [""])[0]
@@ -1863,24 +1994,24 @@ def _domain_hint_from_source_label(text: str) -> str:
 
 def _original_source_domain(source: str = "", url: str = "", source_href: str = "", query: str = "") -> str:
     for value in (source_href, url):
-        host = _domain_from_url(value)
+        host = _normalize_source_domain(_domain_from_url(value))
         if host and host != "news.google.com":
             return host
     for value in (url, source_href, query):
-        domain = _extract_site_domain_from_google_news(value)
+        domain = _normalize_source_domain(_extract_site_domain_from_google_news(value))
         if domain and domain != "news.google.com":
             return domain
-    return _domain_hint_from_source_label(f"{source} {query}")
+    return _normalize_source_domain(_domain_hint_from_source_label(f"{source} {query}"))
 
 
 def _strict_source_domain(url: str = "", source_href: str = "", query: str = "") -> str:
     """Return only URL, source_href or explicit site: domains; never infer from display labels."""
     for value in (source_href, url):
-        host = _domain_from_url(value)
+        host = _normalize_source_domain(_domain_from_url(value))
         if host and host != "news.google.com":
             return host
     for value in (url, source_href, query):
-        domain = _extract_site_domain_from_google_news(value)
+        domain = _normalize_source_domain(_extract_site_domain_from_google_news(value))
         if domain and domain != "news.google.com":
             return domain
     return ""
@@ -1965,7 +2096,7 @@ def hard_low_value_candidate_reason(candidate: dict) -> str:
     source = candidate.get("source", "")
     url = candidate.get("url", "")
     source_href = candidate.get("source_href", "")
-    text = f"{title} {snippet} {source} {candidate.get('query', '')} {url} {source_href}"
+    text = f"{title} {snippet} {source} {url} {source_href}"
     text_lower = text.casefold()
     host_candidates = [
         _domain_from_url(source_href),
@@ -2003,7 +2134,7 @@ def _information_quality_issue(candidate: dict) -> str:
     title = candidate.get("title", "")
     snippet = candidate.get("snippet", "")
     source = candidate.get("source", "")
-    text = f"{title} {snippet} {source} {candidate.get('query', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
+    text = f"{title} {snippet} {source} {candidate.get('url', '')} {candidate.get('source_href', '')}"
     title_count = _wordish_count(title)
     snippet_count = _wordish_count(snippet)
     is_official = candidate.get("source_tier") == "A_official"
@@ -2559,8 +2690,51 @@ def _fast_query_bucket(query: str) -> str:
     return "general"
 
 
+def _search_language_from_query(query: str) -> str:
+    q = query or ""
+    q_lower = q.casefold()
+    for language, markers in SEARCH_LANGUAGE_MARKERS:
+        if any(marker.casefold() in q_lower for marker in markers):
+            return language
+    return "en"
+
+
+def _search_family_from_query(query: str) -> str:
+    q = (query or "").casefold()
+    if any(standard.casefold() in q for standards in STANDARDS_WATCHLIST.values() for standard in standards):
+        return "standards_update"
+    if any(domain in q for domain in ("ntsb.gov", "tsb.gc.ca", "atsb.gov.au", "bea-tt.developpement-durable.gouv.fr", "gov.uk/raib")):
+        return "official_investigation"
+    if any(term in q for term in (
+        "derailment", "collision", "evacuation", "fatal", "killed", "injured",
+        "entgleisung", "déraillement", "descarrilamiento", "сход", "脱線",
+        "탈선", "脫軌", "脱轨",
+    )):
+        return "major_accident"
+    if any(term in q for term in ("strike", "union dispute", "lawsuit", "procurement dispute", "contract dispute", "cost overrun", "arbitration", "罷工")):
+        return "operational_dispute"
+    if any(term in q for term in ("line opening", "service restructuring", "fare reform", "operating hours", "capacity increase", "system renewal")):
+        return "operational_policy"
+    if any(term in q for term in (
+        "contactless payment", "rolling stock", "signalling", "signaling", "cbtc",
+        "life-cycle management", "fire protection", "track renewal", "biometric",
+        "modernisierung", "modernisation", "modernización", "modernização",
+    )):
+        return "technology"
+    if "google news" in q or "site:" in q:
+        return "official_site_or_rss"
+    return "general"
+
+
+def _query_with_period(query: str) -> str:
+    q = query.strip()
+    if lookback_int <= 31:
+        return f"{q} {today:%B %Y}"
+    return f"{q} {today:%Y}"
+
+
 def limit_fast_search_queries(queries: list[str], news_query_indices: set[int]) -> tuple[list[str], set[int]]:
-    max_queries = 10 if not is_global_scope else 8
+    max_queries = 12 if not is_global_scope else (24 if lookback_int in ADVANCED_LOOKBACK_OPTIONS else 18)
     selected_pairs: list[tuple[int, str]] = []
     seen_buckets: set[str] = set()
 
@@ -2594,57 +2768,45 @@ def limit_fast_search_queries(queries: list[str], news_query_indices: set[int]) 
 
 
 def build_search_queries() -> tuple[list[str], set[int]]:
-    """依據勾選的選項動態合併搜尋字，大幅減少發送次數"""
+    """依據勾選類型建立精準查詢族群；指定國家模式只加使用者勾選國家。"""
     queries = []
     news_indices = set()
 
-    # 1. 核心通用關鍵字（只查有勾的）
-    if "技術新知" in selected_types:
-        queries.extend([
-            f"metro subway MRT LRRT LRT light rail automated guideway transit signalling rolling stock power depot technology {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            f"metro subway CBTC GoA4 driverless platform screen doors communications power supply depot maintenance {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            f"metro subway MRT LRT tram AFC contactless payment fare gate ticketing system validator payment system integration {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            f"地下鉄 メトロ 新交通システム 都市鉄道 自動運転 信号 車両 ホームドア 電力 通信 保守 {today:%Y} -新幹線 -JR -在来線 -高速バス"
-        ])
-    if "重大事故" in selected_types:
-        queries.extend([
-            f"metro subway light rail LRT tram derailment collision incident {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            f"地下鉄 メトロ 新交通システム 路面電車 事故 脱線 運休 {today:%Y年%m月} -新幹線 -JR -在来線 -高速バス"
-        ])
-    if "營運政策" in selected_types:
-        queries.extend([
-            f"metro subway MRT light rail passenger safety fare accessibility regulation {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            f"地下鉄 メトロ 新交通システム 規則 安全対策 {today:%Y年%m月} -新幹線 -JR -在来線 -高速バス"
-        ])
-    if "營運爭議" in selected_types:
-        queries.extend([
-            f"metro subway light rail LRT tram strike delay controversy fare dispute {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            f"地下鉄 メトロ 新交通システム 路面電車 遅延 争議 {today:%Y年%m月} -新幹線 -JR -在来線 -高速バス"
-        ])
+    def _add(query: str, use_news: bool = True) -> None:
+        queries.append(_query_with_period(query))
+        if use_news:
+            news_indices.add(len(queries))
 
-    if is_global_scope:
-        if "技術新知" in selected_types:
-            queries.extend([
-                f"urban rail metro subway light rail rolling stock signalling power supply CBTC automation depot {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-                f"metro subway MRT platform screen doors CBTC communications cybersecurity upgrade {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-                f"tram LRT LRRT automated depot maintenance system integration {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-                f"metro subway MRT LRT tram AFC contactless payment fare gate ticketing system handheld inspection device rollout flaw system interface problem ticketing outage {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            ])
-        if "重大事故" in selected_types:
-            queries.extend([
-                f"metro subway LRT light rail derailment collision fire service suspended investigation {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-                f"urban rail tram light rail accident signalling power outage passengers evacuated {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            ])
-        if "營運政策" in selected_types:
-            queries.extend([
-                f"metro subway MRT transit safety policy fare accessibility regulation {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-                f"urban rail light rail tram operator policy ridership service frequency procurement {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            ])
-        if "營運爭議" in selected_types:
-            queries.extend([
-                f"metro subway light rail tram strike delay dispute budget overrun contract dispute {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-                f"urban rail metro light rail public controversy service disruption fare protest {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
-            ])
+    def _region_prefix() -> list[str]:
+        if is_global_scope:
+            return [""]
+        return [REGION_SEARCH_TERMS.get(region, region) for region in active_regions]
+
+    prefixes = _region_prefix()
+    if "技術新知" in selected_types:
+        for prefix in prefixes:
+            for query in TECH_PRECISION_QUERIES:
+                _add(f"{prefix} {query}".strip())
+        if is_global_scope:
+            for _, query in GLOBAL_MULTILINGUAL_TECH_QUERIES:
+                _add(query)
+
+    if "重大事故" in selected_types:
+        for prefix in prefixes:
+            _add(f"{prefix} {ACCIDENT_PRECISION_QUERY}".strip())
+        if is_global_scope:
+            for _, query in GLOBAL_MULTILINGUAL_ACCIDENT_QUERIES:
+                _add(query)
+            for query in OFFICIAL_INVESTIGATION_SITE_QUERIES:
+                _add(query)
+
+    if "營運政策" in selected_types:
+        for prefix in prefixes:
+            _add(f"{prefix} {POLICY_PRECISION_QUERY}".strip())
+
+    if "營運爭議" in selected_types:
+        for prefix in prefixes:
+            _add(f"{prefix} {DISPUTE_PRECISION_QUERY}".strip())
 
     if "規範更新" in selected_types:
         update_terms = " OR ".join(f'"{term}"' for term in STANDARD_UPDATE_TERMS)
@@ -2653,19 +2815,6 @@ def build_search_queries() -> tuple[list[str], set[int]]:
                 idx = len(queries) + 1
                 queries.append(f'"{standard}" ({update_terms}) metro rail standard update {today:%Y}')
                 news_indices.add(idx)
-
-    # 2. 地區合併關鍵字：指定模式才套用 ADVANCED_REGIONS；全球模式不以國家限制刪除新聞。
-    for i, region in enumerate(active_regions):
-        term = REGION_SEARCH_TERMS.get(region, region)
-        if "技術新知" in selected_types:
-            queries.append(f"{term} metro subway MRT LRRT LRT light rail tram CBTC driverless signalling rolling stock power depot maintenance system integration {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}")
-            queries.append(f"{term} metro subway MRT LRT tram AFC contactless payment fare gate ticketing system validator compatibility {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}")
-
-        # 將事故、政策、爭議合併為一個查詢字串，精簡發送數量
-        if any(t in selected_types for t in ["重大事故", "營運政策", "營運爭議"]):
-            idx = len(queries) + 1
-            queries.append(f"{term} metro subway light rail incident strike policy controversy {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}")
-            news_indices.add(idx)
 
     if fast_mode_enabled:
         return limit_fast_search_queries(queries, news_indices)
@@ -3040,7 +3189,8 @@ def _make_news_candidate(
     source_type: str,
     source_href: str = "",
 ) -> dict:
-    original_domain = _original_source_domain(source, url, source_href, query)
+    raw_domain = _domain_from_url(source_href or url) or _extract_site_domain_from_google_news(url) or _domain_hint_from_source_label(source)
+    original_domain = _normalize_source_domain(_original_source_domain(source, url, source_href, query))
     quality, quality_reason = classify_source_quality(source, url, source_href)
     source_tier, source_tier_reason = classify_source_tier(source, url, source_href)
     source_display = source_label_for_report(source, url, source_href, source_tier)
@@ -3048,6 +3198,8 @@ def _make_news_candidate(
     region_value = region if region and region != "未判定" else guess_region_from_text(
         f"{title} {snippet} {source} {query} {url} {source_href}"
     )
+    search_family = _search_family_from_query(query or source)
+    search_language = _search_language_from_query(query or source)
     return {
         "title": _clean_text(title),
         "date": _clean_text(date) or "日期未知",
@@ -3064,7 +3216,12 @@ def _make_news_candidate(
         "source_tier_reason": source_tier_reason,
         "source_display": source_display,
         "source_verb": source_verb,
-        "source_domain": original_domain or _domain_from_url(source_href or url),
+        "source_domain_raw": raw_domain,
+        "source_domain": original_domain or _normalize_source_domain(_domain_from_url(source_href or url)),
+        "source_domain_normalized": original_domain or _normalize_source_domain(_domain_from_url(source_href or url)),
+        "search_family": search_family,
+        "search_query": _clean_text(query),
+        "search_language": search_language,
     }
 
 
@@ -3271,46 +3428,108 @@ def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], dict[str, int
     return deduped, stats
 
 
+def _candidate_page_type(candidate: dict) -> tuple[str, str]:
+    url = candidate.get("url", "")
+    source_href = candidate.get("source_href", "")
+    parsed = urlparse(url or "")
+    path = (parsed.path or "").casefold()
+    query = (parsed.query or "").casefold()
+    text = _candidate_selection_text(candidate).casefold()
+    if parsed.path in ("", "/") and "news.google.com" not in parsed.netloc:
+        return "home_page", "URL path 為首頁"
+    if any(marker in path for marker in ("/search", "/tag/", "/tags/", "/category", "/categories", "/archive", "/archives", "/topic", "/topics")) or "q=" in query:
+        return "index_or_search_page", "索引、分類或搜尋頁"
+    if any(marker in path for marker in ("/login", "/signin", "/sign-in", "/account", "/subscribe", "/privacy", "/terms")):
+        return "login_or_policy_page", "登入、會員或政策頁"
+    route_like_path = any(
+        re.search(pattern, path)
+        for pattern in (
+            r"/schedules?(?:/|$)", r"/timetables?(?:/|$)", r"/trips?(?:/|$)",
+            r"/journey(?:-|/|$)", r"/routes?(?:/|$)", r"/buses?(?:/|$)",
+        )
+    )
+    if route_like_path:
+        return "route_schedule_or_bus_page", "時刻表、路線、旅程規劃或公車頁"
+    if any(marker in path for marker in ("/store", "/estore", "/e-store", "/shop", "/product", "/promotion", "/promotions", "/campaign", "/campaigns")):
+        return "ticketing_promotion_or_product_page", "票券、促銷或商品頁"
+    if any(marker in path for marker in ("/event", "/events", "/anniversary", "/celebration", "/jobs", "/careers", "/hiring")):
+        return "event_or_recruiting_page", "活動、週年或招募頁"
+    if _contains_any_term(text, FINANCIAL_MARKET_TERMS):
+        return "financial_market_page", "股票、財務或市場分析"
+    if _contains_any_term(text, PROPERTY_OR_CAMPUS_DEVELOPMENT_TERMS):
+        return "property_or_life_page", "房地產、校園或周邊生活內容"
+    if _contains_any_term(text, SECURITY_OR_CRIME_TERMS) and not _has_major_security_rail_impact(candidate):
+        return "security_or_crime_page", "治安或一般警察案件"
+    if _contains_any_term(text, LOW_QUALITY_CONTENT_TERMS + LOW_INFORMATION_PAGE_TERMS + HARD_LOW_VALUE_CANDIDATE_TERMS):
+        return "low_information_page", "旅遊、入口、活動、常設服務或低資訊頁"
+    if _is_airport_people_mover_only_text(text, candidate.get("source", "")):
+        return "airport_people_mover_page", "機場航廈 people mover 或航空旅遊內容"
+    if source_href and "news.google.com" not in _domain_from_url(source_href):
+        return "news_article", "Google News 代理已提供原始來源"
+    return "news_article", "具備候選新聞頁基本結構"
+
+
 def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
     url = candidate.get("url", "")
     source_href = candidate.get("source_href", "")
     source = candidate.get("source", "")
     title = candidate.get("title", "")
     snippet = candidate.get("snippet", "")
-    text = f"{title} {snippet} {source} {url} {source_href} {candidate.get('query', '')}"
+    text = f"{title} {snippet} {source} {url} {source_href}"
     text_lower = text.casefold()
     candidate_region = _canonical_candidate_region(candidate)
 
+    def _reject(reason: str) -> tuple[bool, str]:
+        candidate["preliminary_keep"] = False
+        candidate["preliminary_reject_reason"] = reason
+        candidate.setdefault("date_validation", "")
+        return False, reason
+
+    def _keep() -> tuple[bool, str]:
+        candidate["preliminary_keep"] = True
+        candidate["preliminary_reject_reason"] = ""
+        return True, ""
+
     if not url:
-        return False, "沒有 URL"
+        return _reject("沒有 URL")
 
     is_valid, reason = _is_valid_news_url(url, source_href=source_href)
     if not is_valid:
-        return False, reason
+        return _reject(reason)
 
     date_obj = _candidate_date_obj(candidate.get("date", ""))
     if not date_obj:
-        return False, "日期不明或無法判斷"
+        candidate["date_validation"] = "invalid_or_missing"
+        return _reject("日期不明或無法判斷")
     cutoff_date = today - datetime.timedelta(days=max(1, min(int(lookback_days), 365)) + 3)
     if date_obj < cutoff_date:
-        return False, "日期不符搜尋期間"
+        candidate["date_validation"] = "out_of_range_old"
+        return _reject("日期不符搜尋期間")
     if date_obj > today + datetime.timedelta(days=1):
-        return False, "未來日期不合理"
+        candidate["date_validation"] = "future_date"
+        return _reject("未來日期不合理")
+    candidate["date_validation"] = "valid_in_range"
+
+    page_type, page_type_reason = _candidate_page_type(candidate)
+    candidate["page_type"] = page_type
+    candidate["page_type_reason"] = page_type_reason
+    if page_type != "news_article":
+        return _reject(page_type_reason)
 
     if _contains_taiwan_reference(text):
-        return False, "國內新聞排除"
+        return _reject("國內新聞排除")
 
     if _is_airport_people_mover_only_text(text, source):
-        return False, "機場/航空 people mover 排除"
+        return _reject("機場/航空 people mover 排除")
 
     if any(term.casefold() in text_lower for term in LOW_QUALITY_CONTENT_TERMS):
-        return False, "旅遊/SEO/內容農場"
+        return _reject("旅遊/SEO/內容農場")
 
     information_issue = _information_quality_issue(candidate)
     if information_issue:
-        return False, information_issue
+        return _reject(information_issue)
     if _is_low_value_long_term_candidate(candidate):
-        return False, "長期回顧低價值或錯分類候選"
+        return _reject("長期回顧低價值或錯分類候選")
 
     parsed_url = urlparse(url)
     path_lower = (parsed_url.path or "").casefold()
@@ -3333,7 +3552,7 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
         or has_policy_value
         or _is_standard_update_candidate(text, require_url=True)
     ):
-        return False, "入口頁/服務頁/分類頁且缺少明確事件"
+        return _reject("入口頁/服務頁/分類頁且缺少明確事件")
 
     looks_like_standard = _is_standards_source(source) or any(
         standard.casefold() in text_lower
@@ -3342,30 +3561,90 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
     )
     if looks_like_standard:
         if "規範更新" not in selected_types:
-            return False, "規範更新未勾選"
+            return _reject("規範更新未勾選")
         if not _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
-            return False, "規範更新條件不足"
-        return True, ""
+            return _reject("規範更新條件不足")
+        return _keep()
 
     if not is_global_scope:
         if candidate_region not in active_regions:
             if candidate_region in {"國際", "國際研究", "未判定"} and _is_allowed_international_candidate(candidate, text, looks_like_standard):
                 candidate["region"] = "國際"
             else:
-                return False, "國家/地區不在指定範圍"
+                return _reject("國家/地區不在指定範圍")
     elif candidate_region in {"國際", "國際研究"} and not _is_allowed_international_candidate(candidate, text, looks_like_standard):
         candidate["region"] = "未判定"
 
     if not _is_urban_rail_candidate(text, source):
-        return False, "非捷運/都市軌道"
+        return _reject("非捷運/都市軌道")
 
     if _is_tech_news_only_mode() and not _is_technical_news_candidate(text, source):
-        return False, "非技術新知"
+        return _reject("非技術新知")
+
+    gate_info = evaluate_category_gates(candidate)
+    candidate.update(gate_info)
+    if gate_info.get("primary_category") == "excluded":
+        candidate["classification"] = "excluded"
+        candidate["exclude_reason"] = "no_category_gate"
+        return _reject("no_category_gate")
+    candidate["classification"] = gate_info.get("primary_category", "")
 
     if candidate.get("source_quality") == "C" and not _contains_any_term(text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS):
-        return False, "C級來源且主題關聯不足"
+        return _reject("C級來源且主題關聯不足")
 
-    return True, ""
+    return _keep()
+
+
+def build_pipeline_debug_stats(
+    raw_candidates: list[dict],
+    filtered_candidates: list[dict],
+    excluded_candidates: list[dict],
+) -> dict:
+    def _count_by(items: list[dict], key: str) -> dict:
+        counts: dict[str, int] = {}
+        for item in items or []:
+            value = item.get(key, "") or "未標記"
+            if isinstance(value, dict):
+                for sub_key, enabled in value.items():
+                    if enabled:
+                        counts[sub_key] = counts.get(sub_key, 0) + 1
+            else:
+                counts[str(value)] = counts.get(str(value), 0) + 1
+        return counts
+
+    category_gate_pass_counts: dict[str, int] = {}
+    for item in filtered_candidates or []:
+        for gate, enabled in (item.get("category_gates") or {}).items():
+            if enabled:
+                category_gate_pass_counts[gate] = category_gate_pass_counts.get(gate, 0) + 1
+    return {
+        "page_type_exclusion_counts": _count_by(excluded_candidates, "page_type"),
+        "no_category_gate_count": sum(1 for item in excluded_candidates or [] if item.get("final_exclude_reason") == "no_category_gate" or item.get("exclude_reason") == "no_category_gate"),
+        "category_gate_pass_counts": category_gate_pass_counts,
+        "A_candidate_count": sum(1 for item in filtered_candidates or [] if item.get("candidate_level") == "A"),
+        "B_candidate_count": sum(1 for item in filtered_candidates or [] if item.get("candidate_level") == "B"),
+        "C_candidate_count": sum(1 for item in filtered_candidates or [] if item.get("candidate_level") == "C"),
+        "source_tier_counts": _count_by(filtered_candidates, "source_tier"),
+        "multilingual_candidate_counts": _count_by(
+            [item for item in raw_candidates or [] if item.get("search_language", "en") != "en"],
+            "search_language",
+        ),
+        "normalized_domain_change_count": sum(
+            1 for item in raw_candidates or []
+            if item.get("source_domain_raw")
+            and item.get("source_domain_normalized")
+            and _normalize_source_domain(item.get("source_domain_raw", "")) != item.get("source_domain_normalized")
+        ),
+        "incident_search_raw_count": sum(
+            1 for item in raw_candidates or []
+            if item.get("search_family") in {"major_accident", "official_investigation"}
+            or _contains_any_term(_candidate_selection_text(item), ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS)
+        ),
+        "incident_gate_pass_count": sum(
+            1 for item in filtered_candidates or []
+            if (item.get("category_gates") or {}).get("major_accident")
+        ),
+    }
 
 
 def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
@@ -3405,21 +3684,24 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
         ),
     )
     candidate_limit = min(get_selection_candidate_limit(lookback_int, fast_mode=fast_mode_enabled), MAX_SELECTION_CANDIDATES)
-    model_candidates = [dict(item, id=idx) for idx, item in enumerate(filtered_candidates, 1)]
+    model_candidates = [dict(item, id=idx, candidate_id=idx) for idx, item in enumerate(filtered_candidates, 1)]
+    model_candidates = [annotate_candidate_for_scheme_d(item) for item in model_candidates]
+    pipeline_debug_stats = build_pipeline_debug_stats(raw_candidates, model_candidates, excluded_candidates)
     candidate_cards = [build_candidate_card(candidate) for candidate in model_candidates[:candidate_limit]]
     return {
         "raw_candidates": raw_candidates,
         "deduped_candidates": deduped_candidates,
-        "filtered_candidates": filtered_candidates,
+        "filtered_candidates": model_candidates,
         "excluded_candidates": excluded_candidates,
         "model_candidates": model_candidates,
         "candidate_cards": candidate_cards,
         "candidate_card_limit": candidate_limit,
         "dedupe_stats": dedupe_stats,
         "exclusion_stats": exclusion_stats,
+        "pipeline_debug_stats": pipeline_debug_stats,
         "raw_count": len(raw_candidates),
         "deduped_count": len(deduped_candidates),
-        "filtered_count": len(filtered_candidates),
+        "filtered_count": len(model_candidates),
     }
 
 
@@ -3486,7 +3768,7 @@ def _annual_observation_themes(candidates: list[dict]) -> list[str]:
         ("AFC 與票務系統", ["afc", "ticketing", "fare gate", "fare", "票務", "票閘", "票價"]),
     ]
     combined = " ".join(
-        f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')}"
+        f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')}"
         for candidate in candidates or []
     )
     return [label for label, terms in theme_terms if _contains_any_term(combined, terms)]
@@ -3701,7 +3983,7 @@ NON_ACCIDENT_CONTEXT_TERMS = [
 
 URBAN_RAIL_INCIDENT_CONTEXT_TERMS = [
     "metro", "subway", "underground", "tram", "light rail", "lrt", "mrt",
-    "urban rail", "station", "platform", "train", "track", "railcar",
+    "urban rail", "funicular", "station", "platform", "train", "track", "railcar",
     "metro train", "subway train", "捷運", "地鐵", "都市軌道", "輕軌",
     "車站", "月臺", "月台", "列車", "軌道", "軌道車輛",
 ]
@@ -3908,6 +4190,12 @@ REGION_DOMAIN_HINTS = {
 REPORT_SELECTION_DEBUG_DEFAULT = {
     "strict_selected_count": 0,
     "borderline_added_count": 0,
+    "B_added_count": 0,
+    "incident_search_raw_count": 0,
+    "incident_gate_pass_count": 0,
+    "incident_selected_count": 0,
+    "incident_coverage_warning": False,
+    "incident_coverage_reason": "",
     "borderline_candidates": [],
     "shortfall_before_backfill": 0,
     "shortfall_after_backfill": 0,
@@ -3931,7 +4219,7 @@ URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS.extend(["metros"])
 SOURCE_QUALITY_C_DOMAINS.update(PORTAL_REPOST_DOMAINS | PORTAL_SOCIAL_LOW_VALUE_DOMAINS)
 
 TECH_NEWS_REQUIRED_TERMS.extend([
-    "ato", "atp", "ats", "metro rail", "light rail vehicle", "train cars",
+    "ato", "atp", "ats", "metro rail", "light rail vehicle", "light rail vehicles", "LRV", "LRVs", "train cars",
     "fleet renewal", "fleet replacement", "overhaul", "energy storage",
     "regenerative braking", "power system", "energy management",
     "automatic fare collection", "contactless payment", "tap to pay",
@@ -3957,7 +4245,7 @@ TITLE_TECHNICAL_ACTION_TERMS.extend([
 ])
 
 CORE_METRO_TECHNICAL_TERMS.extend([
-    "ato", "atp", "ats", "light rail vehicle", "train cars", "new train",
+    "ato", "atp", "ats", "light rail vehicle", "light rail vehicles", "LRV", "LRVs", "train cars", "new train",
     "two-car sets", "two car sets", "car sets", "automated metro", "automated metros",
     "line modernization", "line modernisation", "metro modernization", "metro modernisation",
     "modernization", "modernisation", "life cycle management", "life cycle management services",
@@ -3989,7 +4277,7 @@ STRONG_TECHNICAL_DETAIL_TERMS.extend([
     "scan to pay", "tap or scan to pay", "biometric fare payment",
     "validator", "ticketing system", "fare gate", "handheld inspection device",
     "payment system integration", "passenger information system",
-    "light rail vehicle", "train cars", "two-car sets", "two car sets",
+    "light rail vehicle", "light rail vehicles", "LRV", "LRVs", "train cars", "two-car sets", "two car sets",
     "automated metros", "line modernization", "line modernisation",
     "modernization", "modernisation", "fleet renewal", "fleet replacement",
     "life-cycle management services", "life cycle management services", "fire protection", "fire safety",
@@ -4074,17 +4362,45 @@ HIGH_VALUE_POLICY_GATE_TERMS = STRICT_HIGH_VALUE_POLICY_TEXT_TERMS + [
     "車隊更新計畫", "路線重整", "系統升級", "號誌升級", "軌道升級",
 ]
 
+CANONICAL_TAG_PATTERNS: list[tuple[str, list[str]]] = [
+    ("derailment", ["derailment", "derailed", "entgleisung", "entgleist", "déraillement", "descarrilamiento", "сход с рельсов", "脱線", "탈선", "脫軌", "脱轨", "出軌"]),
+    ("collision", ["collision", "collided", "kollision", "colisión", "столкновение", "衝突", "충돌", "碰撞", "相撞"]),
+    ("fire", ["fire", "brand", "incendie", "incendio", "пожар", "火災", "火灾", "화재"]),
+    ("evacuation", ["evacuation", "evacuated", "evakuierung", "évacuation", "evacuación", "эвакуация", "避難", "대피", "疏散"]),
+    ("fatality", ["fatal", "killed", "death", "tote", "morts", "muertos", "погиб", "死亡", "사망"]),
+    ("injury", ["injured", "verletzte", "blessés", "heridos", "пострадал", "負傷", "부상", "受傷", "受伤"]),
+    ("service_suspension", ["shutdown", "service suspended", "service suspension", "betrieb eingestellt", "interruption", "suspensión", "остановка движения", "運休", "운행중단", "停駛", "停驶"]),
+    ("investigation", ["investigation", "inquiry", "untersuchung", "enquête", "investigación", "расследование", "調査", "조사", "調查", "调查"]),
+    ("order", ["ordered", "order", "bestellen", "commande", "pedido", "заказ", "採購", "訂購"]),
+    ("enter service", ["enter service", "entered service", "go into service", "inbetriebnahme", "mise en service", "puesta en servicio", "ввод", "投入營運", "投入运营"]),
+    ("modernization", ["modernization", "modernisation", "modernisierung", "modernización", "modernização", "modernizzazione", "модернизация", "現代化"]),
+    ("fire protection", ["fire protection", "fire safety", "brandschutz", "protection incendie", "protezione antincendio", "消防"]),
+    ("contactless payment", ["contactless payment", "tap to pay", "scan to pay", "kontaktloses bezahlen", "paiement sans contact", "pago sin contacto", "pagamento sem contacto", "非接触決済", "非接觸支付"]),
+    ("biometric payment", ["biometric payment", "biometric fare", "biometrische zahlung", "биометрическая оплата", "生物辨識支付"]),
+]
+
+
+def _canonical_tags_from_text(text: str) -> list[str]:
+    text_lower = (text or "").casefold()
+    tags: list[str] = []
+    for tag, terms in CANONICAL_TAG_PATTERNS:
+        if any(term.casefold() in text_lower for term in terms):
+            tags.append(tag)
+    return tags
+
 
 def _candidate_selection_text(candidate: dict) -> str:
     paths = " ".join(
         urlparse(candidate.get(key, "") or "").path.replace("/", " ")
         for key in ("url", "source_href")
     )
-    return (
+    base_text = (
         f"{candidate.get('title', '')} {candidate.get('snippet', '')} "
         f"{candidate.get('source', '')} "
         f"{candidate.get('url', '')} {candidate.get('source_href', '')} {paths}"
     )
+    canonical_tags = " ".join(_canonical_tags_from_text(base_text))
+    return f"{base_text} {canonical_tags}".strip()
 
 
 def _technical_system_gate(candidate: dict) -> bool:
@@ -4147,6 +4463,13 @@ def _passes_major_accident_gate(candidate: dict) -> bool:
     )
     road_interface = _contains_any_term(text, ROAD_INTERFACE_ACCIDENT_TERMS)
     low_impact = _contains_any_term(text, LOW_IMPACT_ACCIDENT_TERMS + LOW_IMPACT_ROAD_INTERFACE_TERMS)
+    explicitly_minor_road_interface = road_interface and low_impact and _contains_any_term(text, [
+        "no derailment", "not derailed", "without derailment", "no formal investigation",
+        "no investigation", "short delay", "brief delay", "minor injury", "slight injury",
+        "未出軌", "無出軌", "未脫軌", "無正式調查", "短暫延誤", "輕傷",
+    ])
+    if explicitly_minor_road_interface:
+        return False
     if low_impact and not has_severity:
         return False
     if road_interface and not has_severity:
@@ -4180,6 +4503,80 @@ def _passes_high_value_policy_gate(candidate: dict) -> bool:
     if _contains_any_term(text, ["bus riders", "bus, train", "bus and train", "公車", "巴士"]) and not _contains_any_term(text, ["metro", "subway", "mrt", "lrt", "tram", "light rail"]):
         return False
     return _contains_any_term(text, HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS)
+
+
+def evaluate_category_gates(candidate: dict) -> dict:
+    text = _candidate_selection_text(candidate)
+    canonical_tags = _canonical_tags_from_text(text)
+    gates = {
+        "major_accident": _passes_major_accident_gate(candidate),
+        "technology": _passes_technical_triad(candidate),
+        "operational_dispute": _passes_operational_dispute_gate(candidate),
+        "operational_policy": _passes_high_value_policy_gate(candidate),
+    }
+    reasons: dict[str, str] = {}
+    if gates["major_accident"]:
+        reasons["major_accident"] = "具都市軌道情境、事故/故障訊號及嚴重度。"
+    elif _contains_any_term(text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS):
+        reasons["major_accident"] = "有事故訊號但未達重大事故嚴重度或非都市軌道。"
+    if gates["technology"]:
+        reasons["technology"] = "具都市軌道對象、機電/設備主題及導入/更新/維修行為。"
+    elif _technical_system_gate(candidate) or _technical_action_gate(candidate):
+        reasons["technology"] = "技術三聯條件不完整。"
+    if gates["operational_dispute"]:
+        reasons["operational_dispute"] = "具衝突主體、爭議議題及服務/合約/成本/治理影響。"
+    elif _contains_any_term(text, DISPUTE_SIGNAL_TERMS):
+        reasons["operational_dispute"] = "有爭議詞但缺少明確主體或營運影響。"
+    if gates["operational_policy"]:
+        reasons["operational_policy"] = "具系統、路線、容量或制度層級營運影響。"
+    elif _contains_any_term(text, HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS):
+        reasons["operational_policy"] = "政策訊號不足或被低價值公告排除。"
+
+    primary_category = "excluded"
+    for key, label in (
+        ("major_accident", "重大事故"),
+        ("technology", "技術新知"),
+        ("operational_dispute", "營運爭議"),
+        ("operational_policy", "營運政策"),
+    ):
+        if gates.get(key):
+            primary_category = label
+            break
+    alternatives = [
+        label for key, label in (
+            ("major_accident", "重大事故"),
+            ("technology", "技術新知"),
+            ("operational_dispute", "營運爭議"),
+            ("operational_policy", "營運政策"),
+        )
+        if gates.get(key) and label != primary_category
+    ]
+    if primary_category == "excluded":
+        reasons.setdefault("no_category_gate", "未通過重大事故、技術新知、營運爭議或營運政策 gate。")
+    return {
+        "category_gates": gates,
+        "category_gate_reasons": reasons,
+        "canonical_tags": canonical_tags,
+        "primary_category": primary_category,
+        "alternative_category_flags": alternatives,
+    }
+
+
+def _candidate_level(candidate: dict, score: int | None = None) -> str:
+    score_value = int(candidate.get("python_score", score or 0) or score or 0)
+    tier = candidate.get("source_tier", "C_media")
+    primary = candidate.get("primary_category") or infer_preliminary_type(candidate)
+    has_date = bool(_candidate_date_obj(candidate.get("date", "")))
+    has_source = _has_source_reference(candidate) if "_has_source_reference" in globals() else bool(candidate.get("source_domain"))
+    if primary == "excluded" or tier == "D_proxy_low_value" or not has_date or not has_source:
+        return "C"
+    if primary == "重大事故" and score_value < 62:
+        return "C"
+    if score_value >= 68 and tier in {"A_official", "B_professional", "C_media"}:
+        return "A"
+    if score_value >= (62 if primary == "重大事故" else 58) and tier in {"A_official", "B_professional"}:
+        return "B"
+    return "C"
 
 
 def _is_accident_signal_text(text: str) -> bool:
@@ -4368,25 +4765,8 @@ def infer_preliminary_type(candidate: dict) -> str:
     text = _candidate_selection_text(candidate)
     if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
         return "規範更新"
-    if _passes_major_accident_gate(candidate):
-        return "重大事故"
-    if _passes_technical_triad(candidate):
-        return "技術新知"
-    if _passes_operational_dispute_gate(candidate):
-        return "營運爭議"
-    if _passes_high_value_policy_gate(candidate):
-        return "營運政策"
-    if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
-        return "營運政策"
-    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS):
-        return "營運政策"
-    if _contains_any_term(text, WORK_ZONE_MONITORING_TERMS) and not _contains_any_term(text, WORK_ZONE_TECH_DETAIL_TERMS):
-        return "營運政策"
-    if _contains_any_term(text, LOW_VALUE_OFFICIAL_NOTICE_TERMS):
-        return "營運政策"
-    if _contains_any_term(text, LOW_VALUE_POLICY_TERMS):
-        return "營運政策"
-    return "技術新知"
+    gate_info = evaluate_category_gates(candidate)
+    return gate_info.get("primary_category", "excluded")
 
 
 def build_candidate_flags(candidate: dict) -> list[str]:
@@ -4456,6 +4836,8 @@ def build_candidate_flags(candidate: dict) -> list[str]:
 
 def score_news_candidate(candidate: dict) -> dict:
     text = _candidate_selection_text(candidate)
+    gate_info = evaluate_category_gates(candidate)
+    primary_category = gate_info.get("primary_category", "excluded")
     score = 50
     reasons: list[str] = []
     tier = candidate.get("source_tier", "C_media")
@@ -4571,14 +4953,29 @@ def score_news_candidate(candidate: dict) -> dict:
         if score > 50:
             score = 50
             reasons.append("低價值來源或服務提醒且無技術細節，分數上限 50")
-    preliminary_type = infer_preliminary_type(candidate)
+    if primary_category == "excluded":
+        score = min(score, 35)
+        reasons.append("未通過類別 gate，分數上限 35")
+    preliminary_type = "規範更新" if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True) else primary_category
+    temp_candidate = dict(candidate, python_score=max(0, min(100, score)), primary_category=primary_category)
     return {
         "python_score": max(0, min(100, score)),
         "score_reason": "；".join(reasons),
         "candidate_flags": flags,
         "preliminary_type": preliminary_type,
         "short_snippet": _shorten(candidate.get("snippet", ""), CANDIDATE_SNIPPET_CHARS),
-        "source_domain": candidate.get("source_domain") or _domain_from_url(_effective_source_url(candidate)),
+        "source_domain": candidate.get("source_domain") or _normalize_source_domain(_domain_from_url(_effective_source_url(candidate))),
+        "source_domain_normalized": candidate.get("source_domain_normalized") or candidate.get("source_domain") or _normalize_source_domain(_domain_from_url(_effective_source_url(candidate))),
+        "source_domain_raw": candidate.get("source_domain_raw") or _domain_from_url(candidate.get("source_href") or candidate.get("url", "")),
+        "category_gates": gate_info.get("category_gates", {}),
+        "category_gate_reasons": gate_info.get("category_gate_reasons", {}),
+        "canonical_tags": gate_info.get("canonical_tags", []),
+        "primary_category": primary_category,
+        "alternative_category_flags": gate_info.get("alternative_category_flags", []),
+        "candidate_level": _candidate_level(temp_candidate, score),
+        "urban_rail_gate": _is_urban_rail_candidate(text, candidate.get("source", "")),
+        "technical_triplet_status": "pass" if _passes_technical_triad(candidate) else "fail",
+        "accident_severity_score": 80 if _passes_major_accident_gate(candidate) else (35 if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS) else 0),
     }
 
 
@@ -4586,6 +4983,15 @@ def annotate_candidate_for_scheme_d(candidate: dict, exclude_reason: str = "") -
     enriched = dict(candidate)
     enriched.update(score_news_candidate(enriched))
     enriched["exclude_reason"] = exclude_reason
+    enriched["final_exclude_reason"] = exclude_reason or enriched.get("preliminary_reject_reason", "")
+    enriched["candidate_id"] = enriched.get("candidate_id") or enriched.get("id", "")
+    enriched["search_family"] = enriched.get("search_family") or _search_family_from_query(enriched.get("query", ""))
+    enriched["search_query"] = enriched.get("search_query") or enriched.get("query", "")
+    enriched["search_language"] = enriched.get("search_language") or _search_language_from_query(enriched.get("query", ""))
+    enriched["source_domain_normalized"] = enriched.get("source_domain_normalized") or _normalize_source_domain(enriched.get("source_domain", ""))
+    enriched["event_fingerprint"] = build_event_fingerprint(enriched)
+    enriched["duplicate_of"] = enriched.get("duplicate_of", "")
+    enriched["selection_stage"] = enriched.get("selection_stage", "excluded" if exclude_reason else "candidate_pool")
     return enriched
 
 
@@ -4593,25 +4999,47 @@ def build_candidate_card(candidate: dict) -> dict:
     source_url = _effective_source_url(candidate)
     return {
         "id": candidate.get("id", ""),
+        "candidate_id": candidate.get("candidate_id", candidate.get("id", "")),
         "date": candidate.get("date", ""),
         "title": candidate.get("title", ""),
+        "search_family": candidate.get("search_family", ""),
+        "search_query": candidate.get("search_query", candidate.get("query", "")),
+        "search_language": candidate.get("search_language", ""),
         "source_display": candidate.get("source_display", candidate.get("source", "")),
+        "source_domain_raw": candidate.get("source_domain_raw", ""),
+        "source_domain_normalized": candidate.get("source_domain_normalized", candidate.get("source_domain", "")),
         "source_domain": candidate.get("source_domain") or _domain_from_url(source_url),
         "source_tier": candidate.get("source_tier", ""),
         "source_type": candidate.get("source_type", ""),
         "source_verb": candidate.get("source_verb", ""),
         "region": candidate.get("region", "未判定"),
+        "page_type": candidate.get("page_type", ""),
+        "page_type_reason": candidate.get("page_type_reason", ""),
+        "date_validation": candidate.get("date_validation", ""),
+        "urban_rail_gate": candidate.get("urban_rail_gate", ""),
+        "canonical_tags": candidate.get("canonical_tags", []),
+        "category_gates": candidate.get("category_gates", {}),
+        "category_gate_reasons": candidate.get("category_gate_reasons", {}),
+        "primary_category": candidate.get("primary_category", ""),
+        "alternative_category_flags": candidate.get("alternative_category_flags", []),
+        "accident_severity_score": candidate.get("accident_severity_score", 0),
+        "technical_triplet_status": candidate.get("technical_triplet_status", ""),
+        "candidate_level": candidate.get("candidate_level", ""),
         "preliminary_type": candidate.get("preliminary_type", infer_preliminary_type(candidate)),
         "short_snippet": candidate.get("short_snippet", _shorten(candidate.get("snippet", ""), CANDIDATE_SNIPPET_CHARS)),
         "url": source_url,
         "python_score": candidate.get("python_score", 0),
         "score_reason": candidate.get("score_reason", ""),
         "candidate_flags": candidate.get("candidate_flags", []),
+        "event_fingerprint": candidate.get("event_fingerprint", {}),
+        "duplicate_of": candidate.get("duplicate_of", ""),
+        "selection_stage": candidate.get("selection_stage", ""),
+        "final_exclude_reason": candidate.get("final_exclude_reason", ""),
     }
 
 
 def _is_low_value_policy_candidate(candidate: dict) -> bool:
-    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')}"
+    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')}"
     has_low = _contains_any_term(text, LOW_VALUE_POLICY_TERMS)
     has_high = _passes_high_value_policy_gate(candidate)
     return has_low and not has_high
@@ -4659,13 +5087,18 @@ def _selection_target_range(days: int) -> tuple[int, int]:
 
 
 def _selection_classification(candidate: dict) -> str:
+    if candidate.get("classification") == "excluded" or candidate.get("primary_category") == "excluded":
+        return "excluded"
+    primary_category = candidate.get("primary_category")
+    if primary_category in ADVANCED_TYPES:
+        return primary_category
     inferred_type = infer_preliminary_type(candidate)
     if inferred_type in ADVANCED_TYPES:
         return inferred_type
     preliminary_type = candidate.get("preliminary_type")
     if preliminary_type in ADVANCED_TYPES:
         return preliminary_type
-    return "技術新知"
+    return "excluded"
 
 
 def _has_source_reference(candidate: dict) -> bool:
@@ -4692,7 +5125,7 @@ def _candidate_month_key(candidate: dict) -> str:
 
 
 def _candidate_system_theme(candidate: dict) -> str:
-    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')}"
+    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')}"
     theme_terms = [
         ("號誌與列車控制", ["cbtc", "signalling", "signaling", "signal", "train control", "line modernization", "line modernisation", "metro modernization", "metro modernisation", "modernization", "modernisation", "號誌", "信號"]),
         ("自動化與無人駕駛", ["driverless", "automation", "automated", "unattended train", "自動", "無人"]),
@@ -4787,6 +5220,40 @@ def _candidate_incident_type(candidate: dict) -> str:
         if _contains_any_term(text, terms):
             return label
     return _candidate_system_theme(candidate)
+
+
+def _candidate_action_key(candidate: dict) -> str:
+    text = _candidate_selection_text(candidate)
+    action_terms = [
+        ("accident", ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS),
+        ("strike_or_dispute", DISPUTE_SIGNAL_TERMS),
+        ("order", ["order", "ordered", "procurement", "採購", "訂購"]),
+        ("enter_service", ["enter service", "entered service", "go into service", "投入營運"]),
+        ("upgrade", ["upgrade", "modernization", "modernisation", "renewal", "replacement", "升級", "更新", "汰換", "現代化"]),
+        ("testing", ["test", "testing", "trial", "commissioning", "測試", "試運轉"]),
+        ("maintenance", ["maintenance", "overhaul", "life-cycle", "asset management", "維修", "翻修", "資產管理"]),
+        ("opening_or_policy", HIGH_VALUE_POLICY_GATE_TERMS),
+    ]
+    for label, terms in action_terms:
+        if _contains_any_term(text, terms):
+            return label
+    return "event"
+
+
+def build_event_fingerprint(candidate: dict) -> dict:
+    date_obj = _candidate_date_obj(candidate.get("date", ""))
+    date_bucket = ""
+    if date_obj:
+        bucket_start = date_obj - datetime.timedelta(days=date_obj.toordinal() % 7)
+        date_bucket = bucket_start.isoformat()
+    return {
+        "operator_key": _candidate_operator_key(candidate),
+        "geo_key": _candidate_specific_event_location(candidate) or _candidate_event_location(candidate) or candidate.get("region", ""),
+        "asset_key": _candidate_system_theme(candidate),
+        "action_key": _candidate_action_key(candidate),
+        "category_key": candidate.get("classification") or candidate.get("primary_category") or candidate.get("preliminary_type", ""),
+        "date_bucket": date_bucket,
+    }
 
 
 EVENT_LOCATION_TERMS = [
@@ -5049,7 +5516,7 @@ def _python_candidate_allowed_for_scope(candidate: dict) -> bool:
     region = _canonical_candidate_region(candidate)
     if region in active_regions:
         return True
-    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('query', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
+    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
     looks_like_standard = candidate.get("classification") == "規範更新" or _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True)
     if region in {"國際", "國際研究", "未判定"} and _is_allowed_international_candidate(candidate, text, looks_like_standard):
         candidate["region"] = "國際"
@@ -5064,6 +5531,8 @@ def _is_low_value_python_selection_candidate(candidate: dict) -> bool:
     has_technical_detail = _has_explicit_technical_system_detail(candidate)
     text = _candidate_selection_text(candidate)
     classification = _selection_classification(candidate)
+    if classification == "excluded":
+        return True
     if _is_financial_market_candidate(candidate):
         return True
     if candidate.get("source_tier") == "D_proxy_low_value":
@@ -5111,6 +5580,8 @@ def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict 
         pool.remove(candidate)
         duplicate_of = next((item for item in selected if _is_same_report_event(candidate, item)), None)
         if duplicate_of:
+            candidate["duplicate_of"] = duplicate_of.get("id", "")
+            candidate["selection_stage"] = "duplicate_suppressed"
             try:
                 LAST_PYTHON_SELECTION_DEBUG.setdefault("duplicate_event_records", []).append({
                     "candidate_id": candidate.get("id", ""),
@@ -5124,6 +5595,8 @@ def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict 
                     "duplicate_of_date": duplicate_of.get("date", ""),
                     "candidate_theme": _candidate_system_theme(candidate),
                     "duplicate_of_theme": _candidate_system_theme(duplicate_of),
+                    "candidate_fingerprint": build_event_fingerprint(candidate),
+                    "duplicate_of_fingerprint": build_event_fingerprint(duplicate_of),
                 })
             except Exception:
                 pass
@@ -5144,6 +5617,7 @@ def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict 
                     "candidate_theme": _candidate_system_theme(candidate),
                     "duplicate_of_theme": "",
                     "candidate_incident_type": _candidate_incident_type(candidate),
+                    "candidate_fingerprint": build_event_fingerprint(candidate),
                 })
             except Exception:
                 pass
@@ -5164,6 +5638,8 @@ def _is_hard_excluded_for_borderline(candidate: dict) -> bool:
     if candidate.get("source_tier") == "D_proxy_low_value":
         return True
     classification = _selection_classification(candidate)
+    if classification == "excluded":
+        return True
     if classification == "技術新知" and not _passes_technical_triad(dict(candidate, classification="技術新知")):
         return True
     if classification == "重大事故" and not _passes_major_accident_gate(dict(candidate, classification="重大事故")):
@@ -5235,6 +5711,13 @@ def _is_borderline_report_candidate(candidate: dict) -> tuple[bool, str]:
         return False, "日期不明"
     if not _has_source_reference(candidate):
         return False, "來源/URL 不明"
+    score = int(candidate.get("python_score", 0) or 0)
+    if classification == "重大事故" and score < 62:
+        return False, "重大事故候補分數低於 62"
+    if classification != "重大事故" and score < 58:
+        return False, "B級候補分數低於 58"
+    if candidate.get("source_tier") == "C_media" and score < 70:
+        return False, "一般媒體候補需較完整內容與較高分數"
     if classification == "技術新知":
         if _is_strict_technical_candidate(candidate):
             return True, "A級技術新知"
@@ -5263,6 +5746,18 @@ def _is_borderline_report_candidate(candidate: dict) -> tuple[bool, str]:
 def _selection_lower_bound(days: int) -> int:
     lower, _ = _selection_target_range(days)
     return lower
+
+
+def _borderline_cap(days: int) -> int:
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 7
+    if days >= 365:
+        return 4
+    if days >= 30:
+        return 3
+    return 2
 
 
 def _selection_debug_reset() -> dict:
@@ -5314,6 +5809,7 @@ def _backfill_borderline_candidates(
 ) -> list[dict]:
     selected_ids = {int(item.get("id", 0) or 0) for item in selected}
     shortfall_before = max(0, min_items - len(selected))
+    borderline_cap = _borderline_cap(lookback_int)
     debug["shortfall_before_backfill"] = shortfall_before
     if shortfall_before <= 0:
         debug["shortfall_after_backfill"] = 0
@@ -5337,14 +5833,20 @@ def _backfill_borderline_candidates(
         )
         candidate["include_in_report"] = True
         candidate["borderline_reason"] = reason
+        candidate["selection_stage"] = "B_backfill_candidate"
+        candidate["candidate_level"] = "B"
         borderline_pool.append(candidate)
 
     borderline_pool = sorted(borderline_pool, key=_python_selection_sort_key)
     while borderline_pool and len(selected) < min_items and len(selected) < max_items:
+        if len(debug["borderline_candidates"]) >= borderline_cap:
+            debug["backfill_reason"] = f"B級候補已達本期上限 {borderline_cap} 則。"
+            break
         candidate = _take_next_python_candidate(borderline_pool, selected)
         if not candidate:
             break
         selected.append(candidate)
+        candidate["selection_stage"] = "B_backfilled_selected"
         selected_ids.add(int(candidate.get("id", 0) or 0))
         if len(debug["borderline_candidates"]) < 20:
             debug["borderline_candidates"].append(build_candidate_card(candidate) | {"borderline_reason": candidate.get("borderline_reason", "")})
@@ -5381,6 +5883,8 @@ def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
             f"tier={candidate.get('source_tier', '')}；flags={','.join(candidate.get('candidate_flags', []) or [])}"
         )
         candidate["include_in_report"] = True
+        candidate["selection_stage"] = "A_strict_selected"
+        candidate["candidate_level"] = "A"
         grouped.setdefault(classification, []).append(candidate)
 
     for category in grouped:
@@ -5390,6 +5894,8 @@ def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
     LAST_PYTHON_SELECTION_DEBUG["strict_selected_count"] = len(selected)
     selected = _backfill_borderline_candidates(selected, model_candidates or [], min_items, max_items, LAST_PYTHON_SELECTION_DEBUG)
     LAST_PYTHON_SELECTION_DEBUG["final_selected_count"] = len(selected)
+    LAST_PYTHON_SELECTION_DEBUG["incident_selected_count"] = sum(1 for item in selected if item.get("classification") == "重大事故")
+    LAST_PYTHON_SELECTION_DEBUG["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("borderline_added_count", 0)
     return rebalance_selected_candidates(selected)
 
 
@@ -5604,7 +6110,7 @@ def build_ai_unselected_stats(model_candidates: list[dict], selected_candidates:
         candidate_id = int(candidate.get("id", 0) or 0)
         if candidate_id in selected_ids:
             continue
-        text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')}"
+        text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')}"
         quality = candidate.get("source_quality", "B")
         if quality == "C":
             reason = "C級來源降權或未被第一階段選題納入"
@@ -8648,6 +9154,28 @@ if generate_btn:
             )
             prompt_chars = len(report_prompt)
             raw_chars = len(rss_results) + len(ddg_results)
+            pipeline_debug_stats = candidate_pool.get("pipeline_debug_stats", {})
+            incident_selected_count = sum(1 for item in selected_candidates if item.get("classification") == "重大事故")
+            incident_coverage_warning = bool(
+                is_global_scope
+                and lookback_int >= 365
+                and "重大事故" in selected_types
+                and incident_selected_count == 0
+            )
+            if incident_coverage_warning:
+                if pipeline_debug_stats.get("incident_search_raw_count", 0) == 0:
+                    incident_coverage_reason = "全球年報事故查詢未抓到事故候選。"
+                elif pipeline_debug_stats.get("incident_gate_pass_count", 0) == 0:
+                    incident_coverage_reason = "事故候選有召回，但未通過重大事故 gate。"
+                else:
+                    incident_coverage_reason = "已有重大事故 gate pass 候選，但排序或多樣性規則未入選。"
+            else:
+                incident_coverage_reason = ""
+            LAST_PYTHON_SELECTION_DEBUG["incident_search_raw_count"] = pipeline_debug_stats.get("incident_search_raw_count", 0)
+            LAST_PYTHON_SELECTION_DEBUG["incident_gate_pass_count"] = pipeline_debug_stats.get("incident_gate_pass_count", 0)
+            LAST_PYTHON_SELECTION_DEBUG["incident_selected_count"] = incident_selected_count
+            LAST_PYTHON_SELECTION_DEBUG["incident_coverage_warning"] = incident_coverage_warning
+            LAST_PYTHON_SELECTION_DEBUG["incident_coverage_reason"] = incident_coverage_reason
 
             os.makedirs("reports", exist_ok=True)
             with open("reports/latest.md", "w", encoding="utf-8") as f:
@@ -8686,9 +9214,27 @@ if generate_btn:
                 "dropped_selected_reasons": dropped_selected_reasons,
                 "strict_selected_count": LAST_PYTHON_SELECTION_DEBUG.get("strict_selected_count", 0),
                 "borderline_added_count": LAST_PYTHON_SELECTION_DEBUG.get("borderline_added_count", 0),
+                "B_added_count": LAST_PYTHON_SELECTION_DEBUG.get("B_added_count", 0),
                 "shortfall_before_backfill": LAST_PYTHON_SELECTION_DEBUG.get("shortfall_before_backfill", 0),
                 "shortfall_after_backfill": LAST_PYTHON_SELECTION_DEBUG.get("shortfall_after_backfill", 0),
                 "backfill_reason": LAST_PYTHON_SELECTION_DEBUG.get("backfill_reason", ""),
+                "page_type_exclusion_counts": pipeline_debug_stats.get("page_type_exclusion_counts", {}),
+                "no_category_gate_count": pipeline_debug_stats.get("no_category_gate_count", 0),
+                "category_gate_pass_counts": pipeline_debug_stats.get("category_gate_pass_counts", {}),
+                "A_candidate_count": pipeline_debug_stats.get("A_candidate_count", 0),
+                "B_candidate_count": pipeline_debug_stats.get("B_candidate_count", 0),
+                "C_candidate_count": pipeline_debug_stats.get("C_candidate_count", 0),
+                "source_tier_counts": pipeline_debug_stats.get("source_tier_counts", {}),
+                "multilingual_candidate_counts": pipeline_debug_stats.get("multilingual_candidate_counts", {}),
+                "normalized_domain_change_count": pipeline_debug_stats.get("normalized_domain_change_count", 0),
+                "incident_search_raw_count": pipeline_debug_stats.get("incident_search_raw_count", 0),
+                "incident_gate_pass_count": pipeline_debug_stats.get("incident_gate_pass_count", 0),
+                "incident_selected_count": incident_selected_count,
+                "incident_coverage_warning": incident_coverage_warning,
+                "incident_coverage_reason": incident_coverage_reason,
+                "python_evaluated_candidate_count": len(model_candidates),
+                "filtered_candidates_entered_python_selection": len(model_candidates) == candidate_pool["filtered_count"],
+                "candidate_card_limit_applied_to_python_selection": False,
                 "journal_target_count": get_journal_target_count(research_supplement_lookback_days)[0] if include_research_supplement else 0,
                 "journal_selected_count": len(journal_candidates),
                 "journal_exclusion_stats": _journal_exclusion_stats(journal_excluded_candidates),
@@ -8734,6 +9280,7 @@ if generate_btn:
                 "journal_shortfall_reason": _journal_shortfall_reason(len(journal_candidates), get_journal_target_count(research_supplement_lookback_days)[0], journal_excluded_candidates) if include_research_supplement else "",
                 "journal_summary_conclusion_chars": count_journal_summary_conclusion_chars(report_text),
                 "selection_debug": LAST_PYTHON_SELECTION_DEBUG,
+                "pipeline_debug_stats": pipeline_debug_stats,
                 "borderline_candidates": LAST_PYTHON_SELECTION_DEBUG.get("borderline_candidates", []),
                 "duplicate_event_records": LAST_PYTHON_SELECTION_DEBUG.get("duplicate_event_records", []),
                 "selection_prompt": selection_prompt,
@@ -8866,19 +9413,41 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
     for item in items or []:
         rows.append({
             "id": item.get("id", ""),
+            "candidate_id": item.get("candidate_id", item.get("id", "")),
             "date": item.get("date", ""),
             "title": item.get("title", ""),
+            "search_family": item.get("search_family", ""),
+            "search_query": item.get("search_query", item.get("query", "")),
+            "search_language": item.get("search_language", ""),
             "source": item.get("source", ""),
             "source_display": item.get("source_display", ""),
+            "source_domain_raw": item.get("source_domain_raw", ""),
+            "source_domain_normalized": item.get("source_domain_normalized", item.get("source_domain", "")),
             "quality": item.get("source_quality", ""),
             "source_tier": item.get("source_tier", ""),
             "region": item.get("region", ""),
             "type": item.get("source_type", ""),
+            "page_type": item.get("page_type", ""),
+            "page_type_reason": item.get("page_type_reason", ""),
+            "date_validation": item.get("date_validation", ""),
+            "urban_rail_gate": item.get("urban_rail_gate", ""),
+            "canonical_tags": item.get("canonical_tags", []),
+            "category_gates": item.get("category_gates", {}),
+            "category_gate_reasons": item.get("category_gate_reasons", {}),
+            "primary_category": item.get("primary_category", ""),
+            "alternative_category_flags": item.get("alternative_category_flags", []),
+            "accident_severity_score": item.get("accident_severity_score", 0),
+            "technical_triplet_status": item.get("technical_triplet_status", ""),
+            "candidate_level": item.get("candidate_level", ""),
             "preliminary_type": item.get("preliminary_type", ""),
             "python_score": item.get("python_score", ""),
             "score_reason": item.get("score_reason", ""),
             "candidate_flags": ", ".join(item.get("candidate_flags", []) or []),
             "exclude_reason": item.get("exclude_reason", ""),
+            "final_exclude_reason": item.get("final_exclude_reason", ""),
+            "event_fingerprint": item.get("event_fingerprint", {}),
+            "duplicate_of": item.get("duplicate_of", ""),
+            "selection_stage": item.get("selection_stage", ""),
             "url": item.get("url", ""),
             "classification": item.get("classification", ""),
             "reason": item.get("selected_reason", ""),
@@ -8967,9 +9536,27 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "dropped_selected_reasons": latest_stats.get("dropped_selected_reasons", debug_info.get("dropped_selected_reasons", [])),
             "strict_selected_count": latest_stats.get("strict_selected_count", debug_info.get("selection_debug", {}).get("strict_selected_count", 0)),
             "borderline_added_count": latest_stats.get("borderline_added_count", debug_info.get("selection_debug", {}).get("borderline_added_count", 0)),
+            "B_added_count": latest_stats.get("B_added_count", debug_info.get("selection_debug", {}).get("B_added_count", 0)),
             "shortfall_before_backfill": latest_stats.get("shortfall_before_backfill", debug_info.get("selection_debug", {}).get("shortfall_before_backfill", 0)),
             "shortfall_after_backfill": latest_stats.get("shortfall_after_backfill", debug_info.get("selection_debug", {}).get("shortfall_after_backfill", 0)),
             "backfill_reason": latest_stats.get("backfill_reason", debug_info.get("selection_debug", {}).get("backfill_reason", "")),
+            "page_type_exclusion_counts": latest_stats.get("page_type_exclusion_counts", debug_info.get("pipeline_debug_stats", {}).get("page_type_exclusion_counts", {})),
+            "no_category_gate_count": latest_stats.get("no_category_gate_count", debug_info.get("pipeline_debug_stats", {}).get("no_category_gate_count", 0)),
+            "category_gate_pass_counts": latest_stats.get("category_gate_pass_counts", debug_info.get("pipeline_debug_stats", {}).get("category_gate_pass_counts", {})),
+            "A_candidate_count": latest_stats.get("A_candidate_count", debug_info.get("pipeline_debug_stats", {}).get("A_candidate_count", 0)),
+            "B_candidate_count": latest_stats.get("B_candidate_count", debug_info.get("pipeline_debug_stats", {}).get("B_candidate_count", 0)),
+            "C_candidate_count": latest_stats.get("C_candidate_count", debug_info.get("pipeline_debug_stats", {}).get("C_candidate_count", 0)),
+            "source_tier_counts": latest_stats.get("source_tier_counts", debug_info.get("pipeline_debug_stats", {}).get("source_tier_counts", {})),
+            "multilingual_candidate_counts": latest_stats.get("multilingual_candidate_counts", debug_info.get("pipeline_debug_stats", {}).get("multilingual_candidate_counts", {})),
+            "normalized_domain_change_count": latest_stats.get("normalized_domain_change_count", debug_info.get("pipeline_debug_stats", {}).get("normalized_domain_change_count", 0)),
+            "incident_search_raw_count": latest_stats.get("incident_search_raw_count", debug_info.get("selection_debug", {}).get("incident_search_raw_count", 0)),
+            "incident_gate_pass_count": latest_stats.get("incident_gate_pass_count", debug_info.get("selection_debug", {}).get("incident_gate_pass_count", 0)),
+            "incident_selected_count": latest_stats.get("incident_selected_count", debug_info.get("selection_debug", {}).get("incident_selected_count", 0)),
+            "incident_coverage_warning": latest_stats.get("incident_coverage_warning", debug_info.get("selection_debug", {}).get("incident_coverage_warning", False)),
+            "incident_coverage_reason": latest_stats.get("incident_coverage_reason", debug_info.get("selection_debug", {}).get("incident_coverage_reason", "")),
+            "python_evaluated_candidate_count": latest_stats.get("python_evaluated_candidate_count", latest_stats.get("model_candidate_count", 0)),
+            "filtered_candidates_entered_python_selection": latest_stats.get("filtered_candidates_entered_python_selection", True),
+            "candidate_card_limit_applied_to_python_selection": latest_stats.get("candidate_card_limit_applied_to_python_selection", False),
             "journal_target_count": latest_stats.get("journal_target_count", debug_info.get("journal_target_count", 0)),
             "journal_selected_count": latest_stats.get("journal_selected_count", debug_info.get("journal_selected_count", 0)),
             "journal_shortfall_reason": latest_stats.get("journal_shortfall_reason", debug_info.get("journal_shortfall_reason", "")),
@@ -8994,6 +9581,7 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
         "dropped_selected_titles": latest_stats.get("dropped_selected_titles", debug_info.get("dropped_selected_titles", [])),
         "dropped_selected_reasons": latest_stats.get("dropped_selected_reasons", debug_info.get("dropped_selected_reasons", [])),
         "selection_debug": debug_info.get("selection_debug", {}) if debug_info else {},
+        "pipeline_debug_stats": debug_info.get("pipeline_debug_stats", {}) if debug_info else {},
         "borderline_candidates": debug_info.get("borderline_candidates", []) if debug_info else [],
         "duplicate_event_records": debug_info.get("duplicate_event_records", []) if debug_info else [],
         "enriched_selected_candidates": debug_info.get("enriched_selected_candidates", debug_info.get("selected_candidates", [])) if debug_info else [],
