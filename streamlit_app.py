@@ -439,6 +439,15 @@ EMPTY_TEXT_BY_TYPE = {
 MIN_REPORT_ITEMS = 3
 MAX_ITEMS_PER_SOURCE = 25
 DDGS_MAX_RESULTS = 25
+DDGS_RESULTS_PER_QUERY = 8
+DDGS_QUERY_CHAR_LIMIT = 180
+PREFETCH_TIMEOUT_SECONDS = 4
+PREFETCH_MAX_CHARS = 6000
+PREFETCH_LIMIT_BY_PERIOD = {
+    "weekly": 8,
+    "monthly": 15,
+    "annual": 25,
+}
 RESEARCH_SUPPLEMENT_LOOKBACK_DAYS = 90
 NORMAL_LOOKBACK_OPTIONS = [7, 14, 30]
 ADVANCED_LOOKBACK_OPTIONS = [90, 180, 365]
@@ -717,6 +726,51 @@ OFFICIAL_INVESTIGATION_SITE_QUERIES = [
     'site:bea-tt.developpement-durable.gouv.fr (métro OR tramway OR funiculaire) (déraillement OR collision OR incendie OR enquête)',
     'site:gov.uk/raib (tram OR metro OR light rail OR funicular) (derailment OR collision OR fire OR investigation)',
 ]
+
+LAST_DDGS_QUERY_METADATA: dict[str, dict] = {}
+LAST_DDGS_QUERY_STATUSES: list[dict] = []
+
+SEARCH_QUERY_SPECS = [
+    {"family": "technology", "lang": "en", "query": "metro subway MRT LRT tram CBTC signalling upgrade commissioning"},
+    {"family": "technology", "lang": "en", "query": "metro subway LRT tram rolling stock new trains ordered delivered"},
+    {"family": "technology", "lang": "en", "query": "metro subway tram contactless payment AFC fare gates rollout"},
+    {"family": "technology", "lang": "de", "query": "U-Bahn Stadtbahn Strassenbahn Signaltechnik Fahrzeuge Modernisierung"},
+    {"family": "technology", "lang": "fr", "query": "metro tramway signalisation materiel roulant modernisation"},
+    {"family": "technology", "lang": "es", "query": "metro tranvia tren ligero senalizacion material rodante modernizacion"},
+    {"family": "technology", "lang": "it", "query": "metropolitana tram segnalamento materiale rotabile modernizzazione Milano"},
+    {"family": "technology", "lang": "pt", "query": "metro eletrico material circulante sinalizacao modernizacao Lisboa"},
+    {"family": "technology", "lang": "ru", "query": "метро трамвай сигнализация вагоны модернизация"},
+    {"family": "major_accident", "lang": "en", "query": "metro subway LRT tram derailment collision fire evacuation investigation"},
+    {"family": "major_accident", "lang": "en", "query": "funicular tram metro fatal injured shutdown safety investigation"},
+    {"family": "major_accident", "lang": "pt", "query": "metro eletrico funicular descarrilamento colisao incendio investigacao Lisboa"},
+    {"family": "major_accident", "lang": "it", "query": "metropolitana tram funicolare deragliamento collisione incendio indagine Milano"},
+    {"family": "major_accident", "lang": "ru", "query": "метро трамвай фуникулер сход с рельсов столкновение пожар расследование"},
+    {"family": "major_accident", "lang": "fr", "query": "metro tramway funiculaire deraillement collision incendie enquete"},
+    {"family": "major_accident", "lang": "es", "query": "metro tranvia funicular descarrilamiento colision incendio investigacion"},
+    {"family": "policy", "lang": "en", "query": "metro subway tram line opening fare reform operating hours service change"},
+    {"family": "policy", "lang": "en", "query": "metro subway LRT line extension capacity increase closure works"},
+    {"family": "policy", "lang": "de", "query": "U-Bahn Stadtbahn Fahrplan Betriebszeiten Tarife Eroeffnung"},
+    {"family": "policy", "lang": "fr", "query": "metro tramway ouverture ligne tarif horaires travaux"},
+    {"family": "policy", "lang": "it", "query": "metropolitana tram apertura linea tariffe orari lavori Milano"},
+    {"family": "policy", "lang": "pt", "query": "metro Lisboa eletrico abertura linha tarifas horarios obras"},
+    {"family": "dispute", "lang": "en", "query": "metro subway tram strike union lawsuit procurement dispute delay cost overrun"},
+    {"family": "dispute", "lang": "en", "query": "light rail metro contract dispute arbitration protest service disruption"},
+    {"family": "dispute", "lang": "it", "query": "metropolitana tram sciopero contenzioso appalto ritardo Milano"},
+    {"family": "dispute", "lang": "pt", "query": "metro Lisboa eletrico greve disputa contrato atraso"},
+    {"family": "dispute", "lang": "ru", "query": "метро трамвай забастовка спор контракт задержка"},
+    {"family": "official_investigation", "lang": "en", "query": "site:ntsb.gov subway metro light rail streetcar derailment collision fire investigation", "use_news": False},
+    {"family": "official_investigation", "lang": "en", "query": "site:tsb.gc.ca metro subway light rail streetcar derailment collision investigation", "use_news": False},
+    {"family": "official_investigation", "lang": "en", "query": "site:atsb.gov.au metro tram light rail derailment collision fire investigation", "use_news": False},
+    {"family": "official_investigation", "lang": "fr", "query": "site:bea-tt.developpement-durable.gouv.fr metro tramway funiculaire deraillement enquete", "use_news": False},
+    {"family": "official_investigation", "lang": "en", "query": "site:gov.uk/raib tram metro light rail funicular derailment collision fire investigation", "use_news": False},
+]
+
+QUERY_FAMILY_BY_TYPE_INDEX = {
+    0: "technology",
+    1: "major_accident",
+    2: "policy",
+    3: "dispute",
+}
 
 SEARCH_LANGUAGE_MARKERS = [
     ("ja", ["地下鉄", "メトロ", "脱線", "運休", "新幹線"]),
@@ -2115,6 +2169,8 @@ def hard_low_value_candidate_reason(candidate: dict) -> str:
     has_high_value = _candidate_has_high_value_operational_detail(candidate, text)
     if has_high_value:
         return ""
+    if "_candidate_prefetch_signal" in globals() and _candidate_prefetch_signal(candidate):
+        return ""
 
     if any(term.casefold() in text_lower for term in HARD_LOW_VALUE_CANDIDATE_TERMS):
         return "硬性低價值頁面"
@@ -2676,6 +2732,10 @@ def fetch_rss_feeds(
 #  精簡化 DDGS 關鍵字搜尋 (加速優化版)
 # ═══════════════════════════════════════════════════════
 def _fast_query_bucket(query: str) -> str:
+    metadata = LAST_DDGS_QUERY_METADATA.get(query or "")
+    if metadata:
+        query_hash = hashlib.sha1((query or "").encode("utf-8")).hexdigest()[:8]
+        return f"{metadata.get('family', 'general')}:{metadata.get('lang', 'en')}:{query_hash}"
     q = (query or "").casefold()
     if any(standard.casefold() in q for standards in STANDARDS_WATCHLIST.values() for standard in standards):
         return "standards"
@@ -2691,8 +2751,17 @@ def _fast_query_bucket(query: str) -> str:
 
 
 def _search_language_from_query(query: str) -> str:
+    metadata = LAST_DDGS_QUERY_METADATA.get(query or "")
+    if metadata.get("lang"):
+        return metadata["lang"]
     q = query or ""
     q_lower = q.casefold()
+    if any(marker in q for marker in ("метро", "трамвай", "фуникулер", "забастовка")):
+        return "ru"
+    if any(marker in q_lower for marker in ("lisboa", "eletrico", "greve", "investigacao", "sinalizacao")):
+        return "pt"
+    if any(marker in q_lower for marker in ("milano", "metropolitana", "sciopero", "funicolare", "segnalamento")):
+        return "it"
     for language, markers in SEARCH_LANGUAGE_MARKERS:
         if any(marker.casefold() in q_lower for marker in markers):
             return language
@@ -2700,7 +2769,16 @@ def _search_language_from_query(query: str) -> str:
 
 
 def _search_family_from_query(query: str) -> str:
+    metadata = LAST_DDGS_QUERY_METADATA.get(query or "")
+    if metadata.get("family"):
+        return metadata["family"]
     q = (query or "").casefold()
+    if any(term in q for term in ("deragliamento", "descarrilamento", "colisao", "incendio", "расследование", "сход с рельсов", "столкновение")):
+        return "major_accident"
+    if any(term in q for term in ("sciopero", "greve", "забастовка", "procurement dispute", "contract dispute", "cost overrun", "arbitration")):
+        return "dispute"
+    if any(term in q for term in ("apertura linea", "abertura linha", "fare reform", "operating hours", "capacity increase", "service change")):
+        return "policy"
     if any(standard.casefold() in q for standards in STANDARDS_WATCHLIST.values() for standard in standards):
         return "standards_update"
     if any(domain in q for domain in ("ntsb.gov", "tsb.gc.ca", "atsb.gov.au", "bea-tt.developpement-durable.gouv.fr", "gov.uk/raib")):
@@ -2712,9 +2790,9 @@ def _search_family_from_query(query: str) -> str:
     )):
         return "major_accident"
     if any(term in q for term in ("strike", "union dispute", "lawsuit", "procurement dispute", "contract dispute", "cost overrun", "arbitration", "罷工")):
-        return "operational_dispute"
+        return "dispute"
     if any(term in q for term in ("line opening", "service restructuring", "fare reform", "operating hours", "capacity increase", "system renewal")):
-        return "operational_policy"
+        return "policy"
     if any(term in q for term in (
         "contactless payment", "rolling stock", "signalling", "signaling", "cbtc",
         "life-cycle management", "fire protection", "track renewal", "biometric",
@@ -2726,15 +2804,54 @@ def _search_family_from_query(query: str) -> str:
     return "general"
 
 
+def _compact_query(query: str, limit: int = DDGS_QUERY_CHAR_LIMIT) -> str:
+    q = re.sub(r"\s+", " ", (query or "").strip())
+    if len(q) <= limit:
+        return q
+    words = q.split(" ")
+    kept: list[str] = []
+    for word in words:
+        candidate = " ".join(kept + [word])
+        if len(candidate) > limit:
+            break
+        kept.append(word)
+    return " ".join(kept).strip() or q[:limit].rstrip()
+
+
 def _query_with_period(query: str) -> str:
     q = query.strip()
     if lookback_int <= 31:
-        return f"{q} {today:%B %Y}"
-    return f"{q} {today:%Y}"
+        return _compact_query(f"{q} {today:%B %Y}")
+    return _compact_query(f"{q} {today:%Y}")
+
+
+def _active_query_specs(family: str) -> list[dict]:
+    return [spec for spec in SEARCH_QUERY_SPECS if spec.get("family") == family]
+
+
+def _selected_query_families() -> list[str]:
+    families: list[str] = []
+    for type_index, family in QUERY_FAMILY_BY_TYPE_INDEX.items():
+        if type_index < len(ADVANCED_TYPES) and ADVANCED_TYPES[type_index] in selected_types:
+            families.append(family)
+    if "major_accident" in families:
+        families.append("official_investigation")
+    return families
+
+
+def _query_metadata_for(query: str) -> dict:
+    metadata = LAST_DDGS_QUERY_METADATA.get(query or "")
+    if metadata:
+        return metadata
+    return {
+        "family": _search_family_from_query(query),
+        "lang": _search_language_from_query(query),
+        "use_news": True,
+    }
 
 
 def limit_fast_search_queries(queries: list[str], news_query_indices: set[int]) -> tuple[list[str], set[int]]:
-    max_queries = 12 if not is_global_scope else (24 if lookback_int in ADVANCED_LOOKBACK_OPTIONS else 18)
+    max_queries = 14 if not is_global_scope else (34 if lookback_int in ADVANCED_LOOKBACK_OPTIONS else 28)
     selected_pairs: list[tuple[int, str]] = []
     seen_buckets: set[str] = set()
 
@@ -2764,10 +2881,60 @@ def limit_fast_search_queries(queries: list[str], news_query_indices: set[int]) 
         for new_idx, (old_idx, _) in enumerate(selected_pairs, 1)
         if old_idx in news_query_indices
     }
+    global LAST_DDGS_QUERY_METADATA
+    LAST_DDGS_QUERY_METADATA = {
+        query: LAST_DDGS_QUERY_METADATA.get(query, _query_metadata_for(query))
+        for query in limited_queries
+    }
     return limited_queries, remapped_news_indices
 
 
 def build_search_queries() -> tuple[list[str], set[int]]:
+    global LAST_DDGS_QUERY_METADATA
+    LAST_DDGS_QUERY_METADATA = {}
+    queries: list[str] = []
+    news_indices: set[int] = set()
+
+    def _add(query: str, family: str, lang: str = "en", use_news: bool = True) -> None:
+        final_query = _query_with_period(query)
+        queries.append(final_query)
+        LAST_DDGS_QUERY_METADATA[final_query] = {
+            "family": family,
+            "lang": lang,
+            "timelimit": "",
+            "requested": DDGS_RESULTS_PER_QUERY,
+            "use_news": use_news,
+        }
+        if use_news:
+            news_indices.add(len(queries))
+
+    prefixes = [""] if is_global_scope else [REGION_SEARCH_TERMS.get(region, region) for region in active_regions]
+    for family in _selected_query_families():
+        for prefix in prefixes:
+            for spec in _active_query_specs(family):
+                query = f"{prefix} {spec['query']}".strip()
+                _add(
+                    query,
+                    family=spec.get("family", family),
+                    lang=spec.get("lang", "en"),
+                    use_news=bool(spec.get("use_news", True)),
+                )
+
+    if len(ADVANCED_TYPES) > 4 and ADVANCED_TYPES[4] in selected_types:
+        update_terms = " ".join(STANDARD_UPDATE_TERMS[:4])
+        for category, standards in STANDARDS_WATCHLIST.items():
+            for standard in standards:
+                _add(
+                    f'"{standard}" {update_terms} metro rail standard update',
+                    family="standards_update",
+                    lang="en",
+                    use_news=True,
+                )
+
+    if fast_mode_enabled:
+        return limit_fast_search_queries(queries, news_indices)
+    return queries, news_indices
+
     """依據勾選類型建立精準查詢族群；指定國家模式只加使用者勾選國家。"""
     queries = []
     news_indices = set()
@@ -2821,7 +2988,7 @@ def build_search_queries() -> tuple[list[str], set[int]]:
     return queries, news_indices
 
 
-def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -> tuple[int, str, str, list[dict], str]:
+def _legacy_run_single_query_v190(i: int, query: str, use_news: bool, news_timelimit: str) -> tuple[int, str, str, list[dict], str]:
     """執行單一查詢（純運算/網路請求，不觸碰 Streamlit API，可安全在背景執行緒執行）"""
     # 隨機抖動起跑時間，避免多執行緒同時擊中 DDGS 造成瞬間流量觸發限流
     time.sleep(random.uniform(0.1, 0.6))
@@ -2905,7 +3072,117 @@ def _format_ddg_block(i: int, backend: str, query: str, items: list[dict], statu
     return "\n".join(lines)
 
 
+def _search_result_date_hint(date_text: str, fallback_text: str = "") -> str:
+    if _candidate_date_obj(date_text):
+        return date_text
+    match = re.search(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", fallback_text or "")
+    if match:
+        return match.group(0)
+    match = re.search(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+20\d{2}\b", fallback_text or "", flags=re.IGNORECASE)
+    if match:
+        return match.group(0)
+    match = re.search(r"\b20\d{2}\b", fallback_text or "")
+    return match.group(0) if match else date_text
+
+
+def _ddgs_query_status_template(query: str, news_timelimit: str) -> dict:
+    metadata = _query_metadata_for(query)
+    return {
+        "family": metadata.get("family", "general"),
+        "query": query,
+        "lang": metadata.get("lang", "en"),
+        "timelimit": news_timelimit,
+        "requested": DDGS_RESULTS_PER_QUERY,
+        "returned_count": 0,
+        "valid_url_count": 0,
+        "date_valid_count": 0,
+        "added_to_raw_count": 0,
+        "error_message": "",
+        "elapsed_seconds": 0.0,
+    }
+
+
+def ddgs_zero_result_queries(statuses: list[dict]) -> list[dict]:
+    return [
+        row for row in statuses or []
+        if int(row.get("returned_count", 0) or 0) == 0 or int(row.get("added_to_raw_count", 0) or 0) == 0
+    ]
+
+
+def ddgs_general_only_queries(statuses: list[dict]) -> list[dict]:
+    return [
+        row for row in statuses or []
+        if (row.get("family") or "general") == "general"
+    ]
+
+
+def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -> tuple[int, str, str, list[dict], str, dict]:
+    started = time.perf_counter()
+    status_row = _ddgs_query_status_template(query, news_timelimit)
+    time.sleep(random.uniform(0.1, 0.4))
+    result_items: list[dict] = []
+    final_backend = ""
+    final_status = "not_run"
+    last_error = ""
+
+    for backend in ["auto", "bing"]:
+        for attempt in range(1, 3):
+            try:
+                with DDGS() as ddgs:
+                    if use_news:
+                        results = ddgs.news(query, max_results=DDGS_RESULTS_PER_QUERY, timelimit=news_timelimit, backend=backend)
+                    else:
+                        results = ddgs.text(query, max_results=DDGS_RESULTS_PER_QUERY, timelimit=news_timelimit, backend=backend)
+                result_list = list(results or [])
+                status_row["returned_count"] = max(status_row["returned_count"], len(result_list))
+                final_backend = backend
+                for r in result_list:
+                    body = (r.get("body") or r.get("excerpt") or r.get("description") or "")[:350]
+                    href = r.get("href") or r.get("url") or ""
+                    title = (r.get("title") or "").strip()
+                    if not title:
+                        continue
+                    item_date = _search_result_date_hint(r.get("date") or r.get("published") or "", f"{title} {body}")
+                    candidate_text = f"{title} {body} {href} {item_date}"
+
+                    is_valid, reason = _is_valid_news_url(href)
+                    if not is_valid:
+                        continue
+                    status_row["valid_url_count"] += 1
+                    if _candidate_date_obj(item_date):
+                        status_row["date_valid_count"] += 1
+                    if _contains_taiwan_reference(candidate_text):
+                        continue
+                    if _is_standard_update_query(query) and not _is_standard_update_candidate(candidate_text):
+                        continue
+                    result_items.append({
+                        "title": title,
+                        "summary": body,
+                        "link": href,
+                        "date": item_date or "?交??芰",
+                    })
+                final_status = "ok" if result_items else "no_usable_results"
+                break
+            except Exception as exc:
+                last_error = str(exc)[:300]
+                wait = attempt * 0.8 + random.uniform(0.2, 0.9)
+                time.sleep(wait)
+                if not any(k in str(exc) for k in ("Ratelimit", "429", "403")):
+                    break
+
+        if result_items:
+            break
+
+    if last_error and not result_items:
+        final_status = "error"
+    status_row["error_message"] = last_error
+    status_row["elapsed_seconds"] = round(time.perf_counter() - started, 2)
+    return i, query, final_backend or "auto", result_items, final_status, status_row
+
+
 def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
+    global LAST_DDGS_QUERY_STATUSES
+    LAST_DDGS_QUERY_STATUSES = []
     """執行 DDGS 多後端搜尋（平行化版本：查詢數變多但改為併發執行，速度不會被拖慢）"""
     if not selected_types:
         return "未勾選任何新聞類型，略過搜尋。"
@@ -2913,7 +3190,6 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
         return "ddgs 套件未安裝，略過 ddgs 搜尋；請確認 requirements.txt 已包含 ddgs。"
 
     search_queries, news_query_indices = build_search_queries()
-    news_query_indices = set(range(1, len(search_queries) + 1))
     total = len(search_queries)
     days = int(lookback_days)
     news_timelimit = "w" if days <= 7 else "m" if days <= 31 else "y"
@@ -2931,7 +3207,16 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
             for i, query in enumerate(search_queries, 1)
         }
         for future in concurrent.futures.as_completed(futures):
-            i, query, backend, items, status = future.result()
+            try:
+                i, query, backend, items, status, query_status = future.result()
+            except Exception as exc:
+                i = futures[future]
+                query = search_queries[i - 1] if 0 < i <= len(search_queries) else ""
+                backend = "auto"
+                items = []
+                status = "error"
+                query_status = _ddgs_query_status_template(query, news_timelimit)
+                query_status["error_message"] = str(exc)[:300]
             deduped_items: list[dict] = []
             for item in items:
                 title_key = _normalize_title(item["title"])
@@ -2941,6 +3226,8 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
                 seen_titles.add(title_key)
                 seen_urls.add(url_key)
                 deduped_items.append(item)
+            query_status["added_to_raw_count"] = len(deduped_items)
+            LAST_DDGS_QUERY_STATUSES.append(query_status)
             results_map[i] = _format_ddg_block(i, backend, query, deduped_items, status)
             done_count += 1
             if status_text:
@@ -2948,6 +3235,10 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
             if progress_bar:
                 progress_bar.progress(done_count / total)
 
+    LAST_DDGS_QUERY_STATUSES = sorted(
+        LAST_DDGS_QUERY_STATUSES,
+        key=lambda row: (str(row.get("family", "")), str(row.get("lang", "")), str(row.get("query", ""))),
+    )
     return "\n\n".join(results_map[i] for i in sorted(results_map))
 
 
@@ -3198,8 +3489,9 @@ def _make_news_candidate(
     region_value = region if region and region != "未判定" else guess_region_from_text(
         f"{title} {snippet} {source} {query} {url} {source_href}"
     )
-    search_family = _search_family_from_query(query or source)
-    search_language = _search_language_from_query(query or source)
+    query_metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {})
+    search_family = query_metadata.get("family") or _search_family_from_query(query or source)
+    search_language = query_metadata.get("lang") or _search_language_from_query(query or source)
     return {
         "title": _clean_text(title),
         "date": _clean_text(date) or "日期未知",
@@ -3469,6 +3761,150 @@ def _candidate_page_type(candidate: dict) -> tuple[str, str]:
     return "news_article", "具備候選新聞頁基本結構"
 
 
+def _prefetch_limit_for_period(days: int) -> int:
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 7
+    if days >= 365:
+        return PREFETCH_LIMIT_BY_PERIOD["annual"]
+    if days >= 30:
+        return PREFETCH_LIMIT_BY_PERIOD["monthly"]
+    return PREFETCH_LIMIT_BY_PERIOD["weekly"]
+
+
+def _candidate_prefetch_signal(candidate: dict) -> bool:
+    if candidate.get("source_tier") not in {"A_official", "B_professional"}:
+        return False
+    title = candidate.get("title", "")
+    if not title or _wordish_count(title) < 4:
+        return False
+    source = candidate.get("source", "")
+    title_text = f"{title} {source} {candidate.get('source_domain', '')}"
+    if not _has_clear_urban_rail_context(title_text, source):
+        return False
+    has_system_or_institution = (
+        _contains_any_term(title_text, TECH_NEWS_REQUIRED_TERMS)
+        or _contains_any_term(title_text, globals().get("HIGH_VALUE_POLICY_TERMS", []))
+        or _contains_any_term(title_text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS)
+        or _contains_any_term(title_text, DISPUTE_SIGNAL_TERMS + DISPUTE_ACTOR_TERMS)
+    )
+    has_action = _contains_any_term(
+        title_text,
+        TITLE_TECHNICAL_ACTION_TERMS + [
+            "investigation", "investigate", "inquiry", "review", "suspend", "suspended",
+            "resume", "opened", "opening", "approve", "approved", "announce", "announced",
+            "award", "awarded", "strike", "lawsuit", "protest", "delay", "delayed",
+        ],
+    )
+    return has_system_or_institution and has_action
+
+
+def _prefetch_url_for_candidate(candidate: dict) -> str:
+    for raw_url in (candidate.get("source_href", ""), candidate.get("url", ""), _effective_source_url(candidate)):
+        url = _clean_candidate_url(raw_url)
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        if "news.google.com" in parsed.netloc.casefold():
+            continue
+        if parsed.path in {"", "/"} and raw_url != candidate.get("url", ""):
+            continue
+        return url
+    return ""
+
+
+def _extract_prefetch_text(html: str) -> str:
+    html = (html or "")[: PREFETCH_MAX_CHARS * 4]
+    pieces: list[str] = []
+    for pattern in (
+        r'<meta[^>]+(?:name|property)=["\'](?:description|og:description|twitter:description)["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:name|property)=["\'](?:description|og:description|twitter:description)["\']',
+        r"<title[^>]*>(.*?)</title>",
+    ):
+        pieces.extend(re.findall(pattern, html, flags=re.IGNORECASE | re.DOTALL))
+    cleaned_html = re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", html)
+    paragraphs = re.findall(r"(?is)<p[^>]*>(.*?)</p>", cleaned_html)
+    pieces.extend(paragraphs[:10])
+    text = " ".join(_clean_text(unescape(piece)) for piece in pieces)
+    return _shorten(text, PREFETCH_MAX_CHARS)
+
+
+def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> dict:
+    started = time.perf_counter()
+    url = _prefetch_url_for_candidate(candidate)
+    if not url:
+        return {"status": "skipped_no_direct_url", "chars": 0, "elapsed_seconds": 0.0, "reason": "no_direct_article_url"}
+    try:
+        response = session.get(
+            url,
+            timeout=PREFETCH_TIMEOUT_SECONDS,
+            headers={"Accept": "text/html,application/xhtml+xml,text/plain,*/*"},
+        )
+        content_type = response.headers.get("Content-Type", "").casefold()
+        if response.status_code >= 400:
+            return {"status": "failed_http", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": f"http_{response.status_code}"}
+        if content_type and not any(kind in content_type for kind in ("html", "text", "xml")):
+            return {"status": "skipped_content_type", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": content_type[:80]}
+        article_text = _extract_prefetch_text(response.text)
+        if len(article_text) < 120:
+            return {"status": "failed_too_short", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "too_short"}
+        candidate["prefetched_text_snippet"] = _shorten(article_text, REPORT_SNIPPET_CHARS)
+        candidate["snippet"] = _shorten(f"{candidate.get('snippet', '')} {article_text}", REPORT_SNIPPET_CHARS)
+        candidate.pop("_selection_text_cache", None)
+        candidate.pop("_selection_text_fingerprint", None)
+        candidate.pop("_score_cache", None)
+        candidate.pop("_score_cache_fingerprint", None)
+        return {"status": "success", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": ""}
+    except Exception as exc:
+        return {"status": "failed_exception", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": str(exc)[:160]}
+
+
+def prefetch_candidates_before_filter(candidates: list[dict]) -> dict:
+    limit = _prefetch_limit_for_period(lookback_days)
+    stats = {
+        "limit": limit,
+        "eligible_count": 0,
+        "attempted_count": 0,
+        "success_count": 0,
+        "failed_count": 0,
+        "skipped_limit_count": 0,
+        "elapsed_seconds": 0.0,
+    }
+    started = time.perf_counter()
+    eligible = [candidate for candidate in candidates or [] if _candidate_prefetch_signal(candidate)]
+    stats["eligible_count"] = len(eligible)
+    if not eligible or limit <= 0:
+        stats["elapsed_seconds"] = round(time.perf_counter() - started, 2)
+        return stats
+    session = create_requests_session()
+    for candidate in sorted(
+        eligible,
+        key=lambda item: (
+            _source_tier_rank(item.get("source_tier", "C_media")),
+            _quality_rank(item.get("source_quality", "B")),
+            -_date_sort_key(item),
+        ),
+    ):
+        if stats["attempted_count"] >= limit:
+            candidate["prefetch_status"] = "skipped_limit"
+            stats["skipped_limit_count"] += 1
+            continue
+        stats["attempted_count"] += 1
+        candidate["prefetch_attempted"] = True
+        result = _prefetch_candidate_article(candidate, session)
+        candidate["prefetch_status"] = result.get("status", "")
+        candidate["prefetch_reason"] = result.get("reason", "")
+        candidate["prefetch_chars"] = result.get("chars", 0)
+        candidate["prefetch_elapsed_seconds"] = result.get("elapsed_seconds", 0.0)
+        if result.get("status") == "success":
+            stats["success_count"] += 1
+        else:
+            stats["failed_count"] += 1
+    stats["elapsed_seconds"] = round(time.perf_counter() - started, 2)
+    return stats
+
+
 def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
     url = candidate.get("url", "")
     source_href = candidate.get("source_href", "")
@@ -3595,10 +4031,63 @@ def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
     return _keep()
 
 
+def _excluded_candidate_value_reasons(candidate: dict) -> list[str]:
+    reasons: list[str] = []
+    tier = candidate.get("source_tier", "")
+    if tier in {"A_official", "B_professional"}:
+        reasons.append(f"source_tier={tier}")
+    score = int(candidate.get("python_score", 0) or 0)
+    if score >= 55:
+        reasons.append(f"python_score={score}")
+    family = candidate.get("search_family", "")
+    if family in {"technology", "major_accident", "policy", "dispute", "official_investigation"}:
+        reasons.append(f"search_family={family}")
+    flags = candidate.get("candidate_flags", []) or []
+    useful_flags = [
+        flag for flag in flags
+        if flag in {"technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "trusted_title_technical_signal", "operational_dispute_gate"}
+    ]
+    if useful_flags:
+        reasons.append("flags=" + ",".join(useful_flags[:3]))
+    if candidate.get("prefetch_status") == "success":
+        reasons.append("prefetch=success")
+    return reasons
+
+
+def build_top_excluded_valuable_candidates(excluded_candidates: list[dict], limit: int = 20) -> list[dict]:
+    rows: list[dict] = []
+    for candidate in excluded_candidates or []:
+        reasons = _excluded_candidate_value_reasons(candidate)
+        if not reasons:
+            continue
+        score = int(candidate.get("python_score", 0) or 0)
+        tier_bonus = 20 if candidate.get("source_tier") == "A_official" else 12 if candidate.get("source_tier") == "B_professional" else 0
+        family_bonus = 10 if candidate.get("search_family") in {"major_accident", "official_investigation", "technology"} else 0
+        rows.append({
+            "title": candidate.get("title", ""),
+            "source": candidate.get("source_display") or candidate.get("source", ""),
+            "source_tier": candidate.get("source_tier", ""),
+            "search_family": candidate.get("search_family", ""),
+            "search_language": candidate.get("search_language", ""),
+            "python_score": score,
+            "value_reason": "; ".join(reasons),
+            "excluded_reason": candidate.get("final_exclude_reason") or candidate.get("preliminary_reject_reason") or candidate.get("exclude_reason", ""),
+            "prefetch_status": candidate.get("prefetch_status", ""),
+            "url": _effective_source_url(candidate),
+            "_rank": score + tier_bonus + family_bonus,
+        })
+    rows.sort(key=lambda row: (-int(row.get("_rank", 0)), -int(row.get("python_score", 0)), row.get("title", "")))
+    for row in rows:
+        row.pop("_rank", None)
+    return rows[:limit]
+
+
 def build_pipeline_debug_stats(
     raw_candidates: list[dict],
+    deduped_candidates: list[dict],
     filtered_candidates: list[dict],
     excluded_candidates: list[dict],
+    prefetch_stats: dict | None = None,
 ) -> dict:
     def _count_by(items: list[dict], key: str) -> dict:
         counts: dict[str, int] = {}
@@ -3617,7 +4106,19 @@ def build_pipeline_debug_stats(
         for gate, enabled in (item.get("category_gates") or {}).items():
             if enabled:
                 category_gate_pass_counts[gate] = category_gate_pass_counts.get(gate, 0) + 1
+    gate_pass_count = sum(1 for item in filtered_candidates or [] if any((item.get("category_gates") or {}).values()))
     return {
+        "pipeline_counts": {
+            "raw": len(raw_candidates or []),
+            "dedup": len(deduped_candidates or []),
+            "filtered": len(filtered_candidates or []),
+            "gate_pass": gate_pass_count,
+            "A": sum(1 for item in filtered_candidates or [] if item.get("candidate_level") == "A"),
+            "B": sum(1 for item in filtered_candidates or [] if item.get("candidate_level") == "B"),
+            "selected": 0,
+        },
+        "prefetch_stats": prefetch_stats or {},
+        "top_excluded_valuable_candidates": build_top_excluded_valuable_candidates(excluded_candidates, 20),
         "page_type_exclusion_counts": _count_by(excluded_candidates, "page_type"),
         "no_category_gate_count": sum(1 for item in excluded_candidates or [] if item.get("final_exclude_reason") == "no_category_gate" or item.get("exclude_reason") == "no_category_gate"),
         "category_gate_pass_counts": category_gate_pass_counts,
@@ -3661,6 +4162,7 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
             raw_candidates.append(annotate_candidate_for_scheme_d(candidate))
 
     deduped_candidates, dedupe_stats = dedupe_candidates(raw_candidates)
+    prefetch_stats = prefetch_candidates_before_filter(deduped_candidates)
     filtered_candidates: list[dict] = []
     excluded_candidates: list[dict] = hard_excluded_candidates.copy()
     exclusion_stats: dict[str, int] = hard_exclusion_stats.copy()
@@ -3686,7 +4188,7 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
     candidate_limit = min(get_selection_candidate_limit(lookback_int, fast_mode=fast_mode_enabled), MAX_SELECTION_CANDIDATES)
     model_candidates = [dict(item, id=idx, candidate_id=idx) for idx, item in enumerate(filtered_candidates, 1)]
     model_candidates = [annotate_candidate_for_scheme_d(item) for item in model_candidates]
-    pipeline_debug_stats = build_pipeline_debug_stats(raw_candidates, model_candidates, excluded_candidates)
+    pipeline_debug_stats = build_pipeline_debug_stats(raw_candidates, deduped_candidates, model_candidates, excluded_candidates, prefetch_stats)
     candidate_cards = [build_candidate_card(candidate) for candidate in model_candidates[:candidate_limit]]
     return {
         "raw_candidates": raw_candidates,
@@ -3697,6 +4199,7 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
         "candidate_cards": candidate_cards,
         "candidate_card_limit": candidate_limit,
         "dedupe_stats": dedupe_stats,
+        "prefetch_stats": prefetch_stats,
         "exclusion_stats": exclusion_stats,
         "pipeline_debug_stats": pipeline_debug_stats,
         "raw_count": len(raw_candidates),
@@ -4200,6 +4703,11 @@ REPORT_SELECTION_DEBUG_DEFAULT = {
     "shortfall_before_backfill": 0,
     "shortfall_after_backfill": 0,
     "backfill_reason": "",
+    "B_backfill_triggered": False,
+    "B_backfill_cap": 0,
+    "B_backfill_considered_count": 0,
+    "B_backfill_appended_ids": [],
+    "B_backfill_append_stage": "",
     "duplicate_event_records": [],
 }
 
@@ -4390,6 +4898,15 @@ def _canonical_tags_from_text(text: str) -> list[str]:
 
 
 def _candidate_selection_text(candidate: dict) -> str:
+    fingerprint = (
+        candidate.get("title", ""),
+        candidate.get("snippet", ""),
+        candidate.get("source", ""),
+        candidate.get("url", ""),
+        candidate.get("source_href", ""),
+    )
+    if candidate.get("_selection_text_fingerprint") == fingerprint and candidate.get("_selection_text_cache"):
+        return candidate["_selection_text_cache"]
     paths = " ".join(
         urlparse(candidate.get(key, "") or "").path.replace("/", " ")
         for key in ("url", "source_href")
@@ -4400,7 +4917,10 @@ def _candidate_selection_text(candidate: dict) -> str:
         f"{candidate.get('url', '')} {candidate.get('source_href', '')} {paths}"
     )
     canonical_tags = " ".join(_canonical_tags_from_text(base_text))
-    return f"{base_text} {canonical_tags}".strip()
+    text = f"{base_text} {canonical_tags}".strip()
+    candidate["_selection_text_fingerprint"] = fingerprint
+    candidate["_selection_text_cache"] = text
+    return text
 
 
 def _technical_system_gate(candidate: dict) -> bool:
@@ -4979,9 +5499,34 @@ def score_news_candidate(candidate: dict) -> dict:
     }
 
 
+def _candidate_score_fingerprint(candidate: dict) -> tuple:
+    return (
+        candidate.get("title", ""),
+        candidate.get("snippet", ""),
+        candidate.get("date", ""),
+        candidate.get("source", ""),
+        candidate.get("url", ""),
+        candidate.get("source_href", ""),
+        candidate.get("source_tier", ""),
+        candidate.get("source_quality", ""),
+    )
+
+
 def annotate_candidate_for_scheme_d(candidate: dict, exclude_reason: str = "") -> dict:
     enriched = dict(candidate)
-    enriched.update(score_news_candidate(enriched))
+    score_fingerprint = _candidate_score_fingerprint(enriched)
+    cached_score = (
+        enriched.get("_score_cache")
+        if enriched.get("_score_cache_fingerprint") == score_fingerprint
+        else None
+    )
+    if cached_score:
+        score_payload = dict(cached_score)
+    else:
+        score_payload = score_news_candidate(enriched)
+        enriched["_score_cache"] = dict(score_payload)
+        enriched["_score_cache_fingerprint"] = score_fingerprint
+    enriched.update(score_payload)
     enriched["exclude_reason"] = exclude_reason
     enriched["final_exclude_reason"] = exclude_reason or enriched.get("preliminary_reject_reason", "")
     enriched["candidate_id"] = enriched.get("candidate_id") or enriched.get("id", "")
@@ -5764,6 +6309,7 @@ def _selection_debug_reset() -> dict:
     debug = dict(REPORT_SELECTION_DEBUG_DEFAULT)
     debug["duplicate_event_records"] = []
     debug["borderline_candidates"] = []
+    debug["B_backfill_appended_ids"] = []
     debug["backfill_reason"] = ""
     return debug
 
@@ -5811,6 +6357,11 @@ def _backfill_borderline_candidates(
     shortfall_before = max(0, min_items - len(selected))
     borderline_cap = _borderline_cap(lookback_int)
     debug["shortfall_before_backfill"] = shortfall_before
+    debug["B_backfill_triggered"] = shortfall_before > 0
+    debug["B_backfill_cap"] = borderline_cap
+    debug["B_backfill_append_stage"] = "after_strict_selection_before_rebalance"
+    debug["B_backfill_considered_count"] = 0
+    debug["B_backfill_appended_ids"] = []
     if shortfall_before <= 0:
         debug["shortfall_after_backfill"] = 0
         debug["backfill_reason"] = "嚴格入選已達目標下限，無需候補。"
@@ -5838,6 +6389,7 @@ def _backfill_borderline_candidates(
         borderline_pool.append(candidate)
 
     borderline_pool = sorted(borderline_pool, key=_python_selection_sort_key)
+    debug["B_backfill_considered_count"] = len(borderline_pool)
     while borderline_pool and len(selected) < min_items and len(selected) < max_items:
         if len(debug["borderline_candidates"]) >= borderline_cap:
             debug["backfill_reason"] = f"B級候補已達本期上限 {borderline_cap} 則。"
@@ -5848,10 +6400,12 @@ def _backfill_borderline_candidates(
         selected.append(candidate)
         candidate["selection_stage"] = "B_backfilled_selected"
         selected_ids.add(int(candidate.get("id", 0) or 0))
+        debug["B_backfill_appended_ids"].append(int(candidate.get("id", 0) or 0))
         if len(debug["borderline_candidates"]) < 20:
             debug["borderline_candidates"].append(build_candidate_card(candidate) | {"borderline_reason": candidate.get("borderline_reason", "")})
 
-    debug["borderline_added_count"] = len(debug["borderline_candidates"])
+    debug["borderline_added_count"] = len(debug["B_backfill_appended_ids"])
+    debug["B_added_count"] = debug["borderline_added_count"]
     debug["shortfall_after_backfill"] = max(0, min_items - len(selected))
     if debug["borderline_added_count"]:
         debug["backfill_reason"] = f"嚴格入選不足 {shortfall_before} 則，已補入合格候補 {debug['borderline_added_count']} 則。"
@@ -9155,6 +9709,11 @@ if generate_btn:
             prompt_chars = len(report_prompt)
             raw_chars = len(rss_results) + len(ddg_results)
             pipeline_debug_stats = candidate_pool.get("pipeline_debug_stats", {})
+            pipeline_counts = pipeline_debug_stats.setdefault("pipeline_counts", {})
+            pipeline_counts["selected"] = len(selected_candidates)
+            pipeline_debug_stats["selected_count"] = len(selected_candidates)
+            pipeline_debug_stats["strict_selected_count"] = LAST_PYTHON_SELECTION_DEBUG.get("strict_selected_count", 0)
+            pipeline_debug_stats["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("B_added_count", 0)
             incident_selected_count = sum(1 for item in selected_candidates if item.get("classification") == "重大事故")
             incident_coverage_warning = bool(
                 is_global_scope
@@ -9197,6 +9756,8 @@ if generate_btn:
                 "model_candidate_count": len(model_candidates),
                 "source_count": len(combined_sources),
                 "ddgs_query_count": search_count,
+                "ddgs_zero_result_query_count": len(ddgs_zero_result_queries(LAST_DDGS_QUERY_STATUSES)),
+                "ddgs_general_only_query_count": len(ddgs_general_only_queries(LAST_DDGS_QUERY_STATUSES)),
                 "candidate_card_limit": candidate_pool.get("candidate_card_limit", len(candidate_pool["candidate_cards"])),
                 "candidate_card_count": len(candidate_pool["candidate_cards"]),
                 "elapsed_seconds_total": timings["elapsed_seconds_total"],
@@ -9209,12 +9770,22 @@ if generate_btn:
                 "elapsed_seconds_report": timings["elapsed_seconds_report"],
                 "elapsed_seconds_pdf": timings["elapsed_seconds_pdf"],
                 "source_health_summary": source_health_summary,
+                "pipeline_counts": pipeline_debug_stats.get("pipeline_counts", {}),
+                "prefetch_stats": candidate_pool.get("prefetch_stats", {}),
+                "prefetch_attempted_count": candidate_pool.get("prefetch_stats", {}).get("attempted_count", 0),
+                "prefetch_success_count": candidate_pool.get("prefetch_stats", {}).get("success_count", 0),
+                "top_excluded_valuable_count": len(pipeline_debug_stats.get("top_excluded_valuable_candidates", [])),
                 "dropped_selected_ids": dropped_selected_ids,
                 "dropped_selected_titles": dropped_selected_titles,
                 "dropped_selected_reasons": dropped_selected_reasons,
                 "strict_selected_count": LAST_PYTHON_SELECTION_DEBUG.get("strict_selected_count", 0),
                 "borderline_added_count": LAST_PYTHON_SELECTION_DEBUG.get("borderline_added_count", 0),
                 "B_added_count": LAST_PYTHON_SELECTION_DEBUG.get("B_added_count", 0),
+                "B_backfill_triggered": LAST_PYTHON_SELECTION_DEBUG.get("B_backfill_triggered", False),
+                "B_backfill_cap": LAST_PYTHON_SELECTION_DEBUG.get("B_backfill_cap", 0),
+                "B_backfill_considered_count": LAST_PYTHON_SELECTION_DEBUG.get("B_backfill_considered_count", 0),
+                "B_backfill_appended_ids": LAST_PYTHON_SELECTION_DEBUG.get("B_backfill_appended_ids", []),
+                "B_backfill_append_stage": LAST_PYTHON_SELECTION_DEBUG.get("B_backfill_append_stage", ""),
                 "shortfall_before_backfill": LAST_PYTHON_SELECTION_DEBUG.get("shortfall_before_backfill", 0),
                 "shortfall_after_backfill": LAST_PYTHON_SELECTION_DEBUG.get("shortfall_after_backfill", 0),
                 "backfill_reason": LAST_PYTHON_SELECTION_DEBUG.get("backfill_reason", ""),
@@ -9281,6 +9852,11 @@ if generate_btn:
                 "journal_summary_conclusion_chars": count_journal_summary_conclusion_chars(report_text),
                 "selection_debug": LAST_PYTHON_SELECTION_DEBUG,
                 "pipeline_debug_stats": pipeline_debug_stats,
+                "ddgs_query_statuses": LAST_DDGS_QUERY_STATUSES,
+                "ddgs_zero_result_queries": ddgs_zero_result_queries(LAST_DDGS_QUERY_STATUSES),
+                "ddgs_general_only_queries": ddgs_general_only_queries(LAST_DDGS_QUERY_STATUSES),
+                "prefetch_stats": candidate_pool.get("prefetch_stats", {}),
+                "top_excluded_valuable_candidates": pipeline_debug_stats.get("top_excluded_valuable_candidates", []),
                 "borderline_candidates": LAST_PYTHON_SELECTION_DEBUG.get("borderline_candidates", []),
                 "duplicate_event_records": LAST_PYTHON_SELECTION_DEBUG.get("duplicate_event_records", []),
                 "selection_prompt": selection_prompt,
@@ -9467,6 +10043,18 @@ def _json_safe(value):
     return str(value)
 
 
+def _debug_strip_internal_fields(value):
+    if isinstance(value, dict):
+        return {
+            key: _debug_strip_internal_fields(val)
+            for key, val in value.items()
+            if not str(key).startswith("_")
+        }
+    if isinstance(value, list):
+        return [_debug_strip_internal_fields(item) for item in value]
+    return value
+
+
 def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_statuses: list[dict]) -> dict:
     latest_stats = debug_info.get("report_stats", report_stats or {}) if debug_info else (report_stats or {})
     run_config = (
@@ -9519,6 +10107,8 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "journal_count": latest_stats.get("journal_count", 0),
             "source_count": latest_stats.get("source_count", 0),
             "ddgs_query_count": latest_stats.get("ddgs_query_count", 0),
+            "ddgs_zero_result_query_count": latest_stats.get("ddgs_zero_result_query_count", len(debug_info.get("ddgs_zero_result_queries", []))),
+            "ddgs_general_only_query_count": latest_stats.get("ddgs_general_only_query_count", len(debug_info.get("ddgs_general_only_queries", []))),
             "candidate_card_limit": latest_stats.get("candidate_card_limit", 0),
             "candidate_card_count": latest_stats.get("candidate_card_count", 0),
             "elapsed_seconds_total": latest_stats.get("elapsed_seconds_total", 0),
@@ -9531,12 +10121,22 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "elapsed_seconds_report": latest_stats.get("elapsed_seconds_report", 0),
             "elapsed_seconds_pdf": latest_stats.get("elapsed_seconds_pdf", 0),
             "source_health_summary": source_health_summary,
+            "pipeline_counts": latest_stats.get("pipeline_counts", debug_info.get("pipeline_debug_stats", {}).get("pipeline_counts", {})),
+            "prefetch_stats": latest_stats.get("prefetch_stats", debug_info.get("prefetch_stats", debug_info.get("pipeline_debug_stats", {}).get("prefetch_stats", {}))),
+            "prefetch_attempted_count": latest_stats.get("prefetch_attempted_count", 0),
+            "prefetch_success_count": latest_stats.get("prefetch_success_count", 0),
+            "top_excluded_valuable_count": latest_stats.get("top_excluded_valuable_count", len(debug_info.get("top_excluded_valuable_candidates", []))),
             "dropped_selected_ids": latest_stats.get("dropped_selected_ids", debug_info.get("dropped_selected_ids", [])),
             "dropped_selected_titles": latest_stats.get("dropped_selected_titles", debug_info.get("dropped_selected_titles", [])),
             "dropped_selected_reasons": latest_stats.get("dropped_selected_reasons", debug_info.get("dropped_selected_reasons", [])),
             "strict_selected_count": latest_stats.get("strict_selected_count", debug_info.get("selection_debug", {}).get("strict_selected_count", 0)),
             "borderline_added_count": latest_stats.get("borderline_added_count", debug_info.get("selection_debug", {}).get("borderline_added_count", 0)),
             "B_added_count": latest_stats.get("B_added_count", debug_info.get("selection_debug", {}).get("B_added_count", 0)),
+            "B_backfill_triggered": latest_stats.get("B_backfill_triggered", debug_info.get("selection_debug", {}).get("B_backfill_triggered", False)),
+            "B_backfill_cap": latest_stats.get("B_backfill_cap", debug_info.get("selection_debug", {}).get("B_backfill_cap", 0)),
+            "B_backfill_considered_count": latest_stats.get("B_backfill_considered_count", debug_info.get("selection_debug", {}).get("B_backfill_considered_count", 0)),
+            "B_backfill_appended_ids": latest_stats.get("B_backfill_appended_ids", debug_info.get("selection_debug", {}).get("B_backfill_appended_ids", [])),
+            "B_backfill_append_stage": latest_stats.get("B_backfill_append_stage", debug_info.get("selection_debug", {}).get("B_backfill_append_stage", "")),
             "shortfall_before_backfill": latest_stats.get("shortfall_before_backfill", debug_info.get("selection_debug", {}).get("shortfall_before_backfill", 0)),
             "shortfall_after_backfill": latest_stats.get("shortfall_after_backfill", debug_info.get("selection_debug", {}).get("shortfall_after_backfill", 0)),
             "backfill_reason": latest_stats.get("backfill_reason", debug_info.get("selection_debug", {}).get("backfill_reason", "")),
@@ -9571,21 +10171,26 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
         "selection_method": latest_stats.get("selection_method", debug_info.get("selection_method", "")),
         "source_health_summary": source_health_summary,
         "source_health": source_health,
-        "raw_candidates": debug_info.get("raw_candidates", []) if debug_info else [],
-        "deduped_candidates": debug_info.get("deduped_candidates", []) if debug_info else [],
-        "filtered_candidates": debug_info.get("filtered_candidates", []) if debug_info else [],
-        "candidate_cards": debug_info.get("candidate_cards", []) if debug_info else [],
-        "selected_candidates": debug_info.get("selected_candidates", []) if debug_info else [],
+        "raw_candidates": _debug_strip_internal_fields(debug_info.get("raw_candidates", [])) if debug_info else [],
+        "deduped_candidates": _debug_strip_internal_fields(debug_info.get("deduped_candidates", [])) if debug_info else [],
+        "filtered_candidates": _debug_strip_internal_fields(debug_info.get("filtered_candidates", [])) if debug_info else [],
+        "candidate_cards": _debug_strip_internal_fields(debug_info.get("candidate_cards", [])) if debug_info else [],
+        "selected_candidates": _debug_strip_internal_fields(debug_info.get("selected_candidates", [])) if debug_info else [],
         "selected_ids": debug_info.get("selected_ids", []) if debug_info else [],
         "dropped_selected_ids": latest_stats.get("dropped_selected_ids", debug_info.get("dropped_selected_ids", [])),
         "dropped_selected_titles": latest_stats.get("dropped_selected_titles", debug_info.get("dropped_selected_titles", [])),
         "dropped_selected_reasons": latest_stats.get("dropped_selected_reasons", debug_info.get("dropped_selected_reasons", [])),
         "selection_debug": debug_info.get("selection_debug", {}) if debug_info else {},
         "pipeline_debug_stats": debug_info.get("pipeline_debug_stats", {}) if debug_info else {},
+        "ddgs_query_statuses": debug_info.get("ddgs_query_statuses", []) if debug_info else [],
+        "ddgs_zero_result_queries": debug_info.get("ddgs_zero_result_queries", []) if debug_info else [],
+        "ddgs_general_only_queries": debug_info.get("ddgs_general_only_queries", []) if debug_info else [],
+        "prefetch_stats": debug_info.get("prefetch_stats", debug_info.get("pipeline_debug_stats", {}).get("prefetch_stats", {})) if debug_info else {},
+        "top_excluded_valuable_candidates": debug_info.get("top_excluded_valuable_candidates", debug_info.get("pipeline_debug_stats", {}).get("top_excluded_valuable_candidates", [])) if debug_info else [],
         "borderline_candidates": debug_info.get("borderline_candidates", []) if debug_info else [],
         "duplicate_event_records": debug_info.get("duplicate_event_records", []) if debug_info else [],
-        "enriched_selected_candidates": debug_info.get("enriched_selected_candidates", debug_info.get("selected_candidates", [])) if debug_info else [],
-        "excluded_candidates": debug_info.get("excluded_candidates", []) if debug_info else [],
+        "enriched_selected_candidates": _debug_strip_internal_fields(debug_info.get("enriched_selected_candidates", debug_info.get("selected_candidates", []))) if debug_info else [],
+        "excluded_candidates": _debug_strip_internal_fields(debug_info.get("excluded_candidates", [])) if debug_info else [],
         "exclusion_stats": debug_info.get("exclusion_stats", {}) if debug_info else {},
         "dedupe_stats": debug_info.get("dedupe_stats", {}) if debug_info else {},
         "ai_unselected_stats": debug_info.get("ai_unselected_stats", {}) if debug_info else {},
