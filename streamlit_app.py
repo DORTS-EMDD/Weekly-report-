@@ -532,6 +532,13 @@ LOW_VALUE_EXCLUDED_HOSTS = {
     "art.tfl.gov.uk",
 }
 
+PORTAL_REPOST_DOMAINS = {"msn.com", "yahoo.com", "aol.com", "patch.com"}
+
+PORTAL_SOCIAL_LOW_VALUE_DOMAINS = {
+    "facebook.com", "instagram.com", "x.com", "twitter.com",
+    "youtube.com", "youtu.be", "reddit.com",
+}
+
 ALLOWED_NEWS_DOMAINS: set[str] = set()
 
 DOMESTIC_EXCLUDED_DOMAINS = {
@@ -586,6 +593,15 @@ CIVIC_METRO_NAME_ONLY_TERMS = [
     "metro vancouver", "metro council", "metro mayor", "metro government",
     "metro area", "metro region", "metropolitan council", "metropolitan government",
     "metropolitan planning organization",
+    "metro atlanta", "metro nashville", "metro police", "metro fire",
+    "metro housing", "metropolitan area",
+]
+
+METRO_RAIL_CONTEXT_TERMS = [
+    "rail", "train", "station", "line", "fare", "fleet", "signalling", "signaling",
+    "rolling stock", "subway", "transit system", "platform", "depot",
+    "metro operator", "metro rail", "metro network", "metro line", "metro station",
+    "ticketing", "fare gate", "track", "tram", "light rail",
 ]
 
 SOURCE_NAME_NOISE_TERMS = [
@@ -1857,9 +1873,22 @@ def _original_source_domain(source: str = "", url: str = "", source_href: str = 
     return _domain_hint_from_source_label(f"{source} {query}")
 
 
+def _strict_source_domain(url: str = "", source_href: str = "", query: str = "") -> str:
+    """Return only URL, source_href or explicit site: domains; never infer from display labels."""
+    for value in (source_href, url):
+        host = _domain_from_url(value)
+        if host and host != "news.google.com":
+            return host
+    for value in (url, source_href, query):
+        domain = _extract_site_domain_from_google_news(value)
+        if domain and domain != "news.google.com":
+            return domain
+    return ""
+
+
 def _has_high_value_operational_detail(text: str) -> bool:
     return (
-        _contains_any_term(text, HIGH_VALUE_POLICY_TERMS)
+        _contains_any_term(text, globals().get("STRICT_HIGH_VALUE_POLICY_TEXT_TERMS", []))
         or _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS)
         or _contains_any_term(text, ACCIDENT_SIGNAL_TERMS)
         or _is_standard_update_candidate(text, require_url=True)
@@ -1868,9 +1897,14 @@ def _has_high_value_operational_detail(text: str) -> bool:
 
 def _has_clear_urban_rail_context(text: str, source_name: str = "") -> bool:
     topic_text = _strip_source_name_noise(f"{source_name} {text}")
+    has_metro_with_rail_context = (
+        _contains_any_term(topic_text, ["metro"])
+        and _contains_any_term(topic_text, METRO_RAIL_CONTEXT_TERMS)
+    )
     return (
         _contains_any_term(topic_text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS)
         or _contains_any_term(topic_text, URBAN_RAIL_OPERATOR_TERMS)
+        or has_metro_with_rail_context
     )
 
 
@@ -2135,13 +2169,14 @@ def _is_urban_rail_candidate(text: str, source_name: str = "") -> bool:
         return True
 
     topic_text = _strip_source_name_noise(text)
-    has_mode = _contains_any_term(topic_text, URBAN_RAIL_MODE_TERMS)
+    has_metro_word = _contains_any_term(topic_text, ["metro"])
+    has_metro_with_rail_context = has_metro_word and _contains_any_term(topic_text, METRO_RAIL_CONTEXT_TERMS)
     has_unambiguous_mode = _contains_any_term(topic_text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS)
     has_operator = _contains_any_term(f"{source_name} {topic_text}", URBAN_RAIL_OPERATOR_TERMS)
     has_non_urban = _contains_any_term(topic_text, NON_URBAN_TRANSPORT_TERMS)
     has_hard_non_urban = _contains_any_term(topic_text, NON_URBAN_HARD_EXCLUDE_TERMS)
     has_civic_metro_name_only = _contains_any_term(topic_text, CIVIC_METRO_NAME_ONLY_TERMS)
-    has_clear_urban_context = has_unambiguous_mode or has_operator
+    has_clear_urban_context = has_unambiguous_mode or has_operator or has_metro_with_rail_context
 
     if has_civic_metro_name_only and not (has_unambiguous_mode or has_operator):
         return False
@@ -2149,9 +2184,9 @@ def _is_urban_rail_candidate(text: str, source_name: str = "") -> bool:
         return False
     if has_hard_non_urban and not has_clear_urban_context:
         return False
-    if has_non_urban and not (has_mode or has_operator):
+    if has_non_urban and not has_clear_urban_context:
         return False
-    return has_mode or has_operator
+    return has_clear_urban_context
 
 
 def _is_tech_news_only_mode() -> bool:
@@ -2568,6 +2603,7 @@ def build_search_queries() -> tuple[list[str], set[int]]:
         queries.extend([
             f"metro subway MRT LRRT LRT light rail automated guideway transit signalling rolling stock power depot technology {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
             f"metro subway CBTC GoA4 driverless platform screen doors communications power supply depot maintenance {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+            f"metro subway MRT LRT tram AFC contactless payment fare gate ticketing system validator payment system integration {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
             f"地下鉄 メトロ 新交通システム 都市鉄道 自動運転 信号 車両 ホームドア 電力 通信 保守 {today:%Y} -新幹線 -JR -在来線 -高速バス"
         ])
     if "重大事故" in selected_types:
@@ -2592,6 +2628,7 @@ def build_search_queries() -> tuple[list[str], set[int]]:
                 f"urban rail metro subway light rail rolling stock signalling power supply CBTC automation depot {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
                 f"metro subway MRT platform screen doors CBTC communications cybersecurity upgrade {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
                 f"tram LRT LRRT automated depot maintenance system integration {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
+                f"metro subway MRT LRT tram AFC contactless payment fare gate ticketing system handheld inspection device rollout flaw system interface problem ticketing outage {today:%Y} {NON_URBAN_QUERY_EXCLUSIONS}",
             ])
         if "重大事故" in selected_types:
             queries.extend([
@@ -2622,6 +2659,7 @@ def build_search_queries() -> tuple[list[str], set[int]]:
         term = REGION_SEARCH_TERMS.get(region, region)
         if "技術新知" in selected_types:
             queries.append(f"{term} metro subway MRT LRRT LRT light rail tram CBTC driverless signalling rolling stock power depot maintenance system integration {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}")
+            queries.append(f"{term} metro subway MRT LRT tram AFC contactless payment fare gate ticketing system validator compatibility {today:%B %Y} {NON_URBAN_QUERY_EXCLUSIONS}")
 
         # 將事故、政策、爭議合併為一個查詢字串，精簡發送數量
         if any(t in selected_types for t in ["重大事故", "營運政策", "營運爭議"]):
@@ -2820,13 +2858,15 @@ def _source_tier_rank(tier: str) -> int:
 
 
 def classify_source_quality(source: str, url: str, source_href: str = "") -> tuple[str, str]:
-    host = _original_source_domain(source, url, source_href)
+    strict_host = _strict_source_domain(url, source_href)
+    label_host = _domain_hint_from_source_label(source)
+    host = strict_host or label_host
     text = f"{source} {url} {source_href}".casefold()
 
-    if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_A_DOMAINS):
+    if host and any(_host_matches(host, domain) for domain in PORTAL_REPOST_DOMAINS | PORTAL_SOCIAL_LOW_VALUE_DOMAINS):
+        return "C", "入口、轉載或社群平台"
+    if strict_host and any(_host_matches(strict_host, domain) for domain in SOURCE_QUALITY_A_DOMAINS):
         return "A", "官方/營運機構/政府交通機關/專業鐵道媒體"
-    if any(term.casefold() in text for term in ("official", "government", "transport authority", "metro operator")):
-        return "A", "官方或交通機關線索"
     if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_C_DOMAINS):
         return "C", "轉載、旅遊或低信度網站"
     if any(term.casefold() in text for term in LOW_QUALITY_CONTENT_TERMS):
@@ -2835,20 +2875,24 @@ def classify_source_quality(source: str, url: str, source_href: str = "") -> tup
 
 
 def classify_source_tier(source: str, url: str, source_href: str = "") -> tuple[str, str]:
-    host = _original_source_domain(source, url, source_href)
+    strict_host = _strict_source_domain(url, source_href)
+    label_host = _domain_hint_from_source_label(source)
+    host = strict_host or label_host
     text = f"{source} {url} {source_href}".casefold()
     path_lower = urlparse(url or "").path.casefold()
 
     if host and any(_host_matches(host, domain) for domain in LOW_VALUE_EXCLUDED_HOSTS):
         return "D_proxy_low_value", "低價值來源或子網域"
+    if host and any(_host_matches(host, domain) for domain in PORTAL_SOCIAL_LOW_VALUE_DOMAINS):
+        return "D_proxy_low_value", "入口、轉載或社群平台"
     if any(marker in path_lower for marker in LOW_INFORMATION_PATH_MARKERS):
         return "D_proxy_low_value", "入口頁、查詢頁、路線頁、PDF 或低資訊頁"
     if any(term.casefold() in text for term in LOW_INFORMATION_PAGE_TERMS):
         return "D_proxy_low_value", "入口頁、分類頁或低資訊內容"
-    if host and any(_host_matches(host, domain) for domain in SOURCE_TIER_OFFICIAL_DOMAINS):
+    if host and any(_host_matches(host, domain) for domain in PORTAL_REPOST_DOMAINS):
+        return "C_media", "一般入口或轉載媒體"
+    if strict_host and any(_host_matches(strict_host, domain) for domain in SOURCE_TIER_OFFICIAL_DOMAINS):
         return "A_official", "官方公告、政府交通主管機關或營運機構"
-    if any(term in text for term in ("官方", "政府", "transport authority", "metro operator", "official")):
-        return "A_official", "官方或交通機關線索"
     if host and any(_host_matches(host, domain) for domain in SOURCE_TIER_PROFESSIONAL_DOMAINS):
         return "B_professional", "專業鐵道或大眾運輸媒體"
     if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_C_DOMAINS):
@@ -2859,23 +2903,29 @@ def classify_source_tier(source: str, url: str, source_href: str = "") -> tuple[
 
 
 def source_label_for_report(source: str, url: str, source_href: str = "", tier: str = "") -> str:
-    host = _original_source_domain(source, url, source_href)
+    strict_host = _strict_source_domain(url, source_href)
+    label_host = _domain_hint_from_source_label(source)
+    display_host = strict_host or (
+        label_host
+        if label_host and any(_host_matches(label_host, domain) for domain in SOURCE_TIER_PROFESSIONAL_DOMAINS)
+        else ""
+    )
     for domain, label in SOURCE_DISPLAY_BY_DOMAIN.items():
-        if host and _host_matches(host, domain):
+        if display_host and _host_matches(display_host, domain):
             return label
 
     source_clean = clean_source_name_for_ui(source)
     if _is_query_proxy_source_label(source):
-        if host and host != "news.google.com":
-            return host
+        if display_host and display_host != "news.google.com":
+            return display_host
         return "資料來源未明確辨識"
 
     if source_clean and source_clean not in {"RSS", "ddgs", "Google News"}:
         if tier == "A_official" and "官方" not in source_clean:
             return f"{source_clean} 官方公告"
         return source_clean
-    if host and host != "news.google.com":
-        return host
+    if display_host and display_host != "news.google.com":
+        return display_host
     if "news.google.com" in _domain_from_url(url):
         return "資料來源未明確辨識"
     return "資料來源未明確辨識"
@@ -3355,8 +3405,8 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
         ),
     )
     candidate_limit = min(get_selection_candidate_limit(lookback_int, fast_mode=fast_mode_enabled), MAX_SELECTION_CANDIDATES)
-    model_candidates = [dict(item, id=idx) for idx, item in enumerate(filtered_candidates[:candidate_limit], 1)]
-    candidate_cards = [build_candidate_card(candidate) for candidate in model_candidates]
+    model_candidates = [dict(item, id=idx) for idx, item in enumerate(filtered_candidates, 1)]
+    candidate_cards = [build_candidate_card(candidate) for candidate in model_candidates[:candidate_limit]]
     return {
         "raw_candidates": raw_candidates,
         "deduped_candidates": deduped_candidates,
@@ -3876,6 +3926,154 @@ WORK_ZONE_TECH_DETAIL_TERMS = [
     "監測設備", "自動化監測", "後端平台", "通訊", "網路",
 ]
 
+URBAN_RAIL_MODE_TERMS.extend(["metros"])
+URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS.extend(["metros"])
+SOURCE_QUALITY_C_DOMAINS.update(PORTAL_REPOST_DOMAINS | PORTAL_SOCIAL_LOW_VALUE_DOMAINS)
+
+TECH_NEWS_REQUIRED_TERMS.extend([
+    "ato", "atp", "ats", "metro rail", "light rail vehicle", "train cars",
+    "fleet renewal", "fleet replacement", "overhaul", "energy storage",
+    "regenerative braking", "power system", "energy management",
+    "automatic fare collection", "contactless payment", "tap to pay",
+    "scan to pay", "tap or scan to pay", "open-loop payment", "open loop payment",
+    "qr payment", "biometric fare payment", "validator", "ticketing system",
+    "handheld inspection device", "payment system integration", "compatibility",
+    "passenger information system", "platform screen door", "accessibility upgrade",
+    "made accessible", "fire protection", "fire safety", "station systems",
+    "ventilation", "fleet life-cycle management", "life-cycle management services",
+    "maintenance services", "track renewal", "lubricator replacement",
+    "track lubrication", "operations and maintenance centre", "operations and maintenance center",
+    "omc", "wheel lathe", "life cycle management", "life cycle management services",
+])
+
+TITLE_TECHNICAL_ACTION_TERMS.extend([
+    "implement", "implemented", "implementation", "activated", "activate",
+    "go into service", "expanded", "expansion", "upgraded", "upgrades",
+    "modernise", "modernize", "modernisation", "modernization", "procure",
+    "procurement", "design services", "life-cycle management services",
+    "life cycle management services", "overhaul",
+    "made accessible", "tap or scan to pay", "unveils", "unveiled",
+    "confirms", "boost capacity", "boosts capacity",
+])
+
+CORE_METRO_TECHNICAL_TERMS.extend([
+    "ato", "atp", "ats", "light rail vehicle", "train cars", "new train",
+    "two-car sets", "two car sets", "car sets", "automated metro", "automated metros",
+    "line modernization", "line modernisation", "metro modernization", "metro modernisation",
+    "modernization", "modernisation", "life cycle management", "life cycle management services",
+    "fleet renewal", "fleet replacement", "overhaul", "power system",
+    "energy storage", "regenerative braking", "energy management",
+    "automatic fare collection", "contactless payment", "tap to pay",
+    "scan to pay", "tap or scan to pay", "open-loop payment", "open loop payment",
+    "qr payment", "biometric fare payment", "validator", "ticketing system",
+    "handheld inspection device", "payment system integration", "system interface problem",
+    "ticketing outage", "rollout flaw", "passenger information system",
+    "accessibility upgrade", "made accessible", "fire protection", "fire safety",
+    "station systems", "ventilation", "fleet life-cycle management",
+    "life-cycle management services", "maintenance services", "track renewal",
+    "lubricator replacement", "track lubrication", "operations and maintenance centre",
+    "operations and maintenance center", "omc", "wheel lathe",
+])
+
+TECHNICAL_IMPLEMENTATION_TERMS.extend([
+    "implement", "implemented", "implementation", "activate", "activated",
+    "go into service", "rollout", "expanded", "expansion", "upgraded",
+    "upgrades", "procure", "procurement", "order", "ordered", "design services",
+    "life-cycle management services", "life cycle management services", "overhaul",
+    "made accessible", "tap or scan to pay",
+    "unveils", "unveiled", "confirms", "boost capacity", "boosts capacity",
+])
+
+STRONG_TECHNICAL_DETAIL_TERMS.extend([
+    "automatic fare collection", "contactless payment", "tap to pay",
+    "scan to pay", "tap or scan to pay", "biometric fare payment",
+    "validator", "ticketing system", "fare gate", "handheld inspection device",
+    "payment system integration", "passenger information system",
+    "light rail vehicle", "train cars", "two-car sets", "two car sets",
+    "automated metros", "line modernization", "line modernisation",
+    "modernization", "modernisation", "fleet renewal", "fleet replacement",
+    "life-cycle management services", "life cycle management services", "fire protection", "fire safety",
+    "track renewal", "operations and maintenance centre", "operations and maintenance center",
+    "omc", "wheel lathe",
+])
+
+MEDIUM_TECHNICAL_DETAIL_TERMS.extend([
+    "contactless payment", "tap to pay", "scan to pay", "tap or scan to pay",
+    "open-loop payment", "qr payment", "biometric fare payment", "validator",
+    "ticketing system", "fare gate", "accessibility upgrade", "made accessible",
+    "fire protection", "fire safety", "track renewal", "wheel lathe",
+])
+
+STRICT_HIGH_VALUE_POLICY_TEXT_TERMS = [
+    "fare reform", "payment policy", "service restructure", "service restructuring",
+    "headway", "service frequency", "operating hours", "capacity", "trial operation",
+    "system conversion", "line closure", "full line closure", "major closure",
+    "maintenance closure", "long closure", "seven week closure", "seven-week closure",
+    "accessibility plan", "fleet deployment", "budget approval", "governance decision",
+    "replacement bus service", "alternative transport", "major engineering works",
+    "票務制度", "支付政策", "班距", "營運時間", "容量", "試營運", "系統轉換",
+    "全線封閉", "多站封閉", "無障礙改善計畫", "預算核准", "治理決策",
+]
+
+MAJOR_ACCIDENT_SEVERITY_TERMS = [
+    "fatal", "death", "died", "killed", "serious injury", "serious injuries",
+    "multiple injuries", "multiple injured", "hospitalized", "hospitalised",
+    "derailment", "derailed", "train-to-train collision", "trains collided",
+    "major fire", "smoke filled", "evacuated", "evacuation", "mass evacuation",
+    "service suspended", "service suspension", "long suspension", "major disruption",
+    "power outage", "signal failure", "signalling failure", "communications failure",
+    "formal investigation", "safety investigation", "investigation launched",
+    "safety review", "systemic failure", "repeated incident",
+    "死亡", "多人重傷", "多人受傷", "多人送醫", "重傷", "送醫", "出軌", "脫軌",
+    "列車碰撞", "列車相撞", "重大火災", "大量疏散", "長時間停駛", "大範圍停駛",
+    "正式調查", "事故調查", "安全調查", "制度檢討", "系統性故障", "反覆發生",
+]
+
+LOW_IMPACT_ROAD_INTERFACE_TERMS = [
+    "one injured", "minor injury", "minor injuries", "slight injury", "slightly injured",
+    "short delay", "brief delay", "no derailment", "no major damage",
+    "一人受傷", "一人輕傷", "輕傷", "短暫延誤", "未出軌", "無重大損壞",
+]
+
+ROAD_INTERFACE_ACCIDENT_TERMS = [
+    "car", "truck", "vehicle", "motorist", "driver", "pedestrian", "cyclist",
+    "intersection", "road", "roadway", "level crossing",
+    "汽車", "卡車", "車輛", "駕駛", "行人", "自行車", "路口", "道路", "平交道",
+]
+
+DISPUTE_SIGNAL_TERMS = [
+    "strike", "industrial action", "union dispute", "labor dispute", "labour dispute",
+    "lawsuit", "court order", "judicial order", "contract dispute", "procurement dispute",
+    "tender dispute", "budget dispute", "cost overrun", "project delay",
+    "organized protest", "organised protest", "service disruption",
+    "罷工", "工業行動", "工會爭議", "勞資爭議", "訴訟", "司法命令",
+    "合約爭議", "採購爭議", "招標爭議", "預算爭議", "成本超支",
+    "工程延誤", "組織性抗議", "服務中斷",
+]
+
+DISPUTE_ACTOR_TERMS = [
+    "union", "workers", "employees", "contractor", "supplier", "procurement authority",
+    "government", "operator", "court", "regulator", "auditor", "council",
+    "protesters", "advocacy group", "工會", "勞工", "員工", "承包商", "供應商",
+    "採購機關", "政府", "營運機構", "法院", "監管機關", "稽核機關", "議會",
+    "抗議團體", "權益團體",
+]
+
+DISPUTE_IMPACT_TERMS = [
+    "service", "delay", "delayed", "disruption", "suspended", "cost", "budget",
+    "contract", "procurement", "project", "construction", "schedule", "governance",
+    "服務", "延誤", "延宕", "中斷", "停駛", "成本", "預算", "合約", "採購",
+    "專案", "工程", "工期", "治理",
+]
+
+HIGH_VALUE_POLICY_GATE_TERMS = STRICT_HIGH_VALUE_POLICY_TEXT_TERMS + [
+    "new line opening", "new system opening", "service begins", "fleet replacement plan",
+    "fleet renewal plan", "station group", "system upgrade", "signal upgrade",
+    "track upgrade", "route restructuring", "major service change",
+    "新線通車", "新系統通車", "服務重整", "重大服務調整", "車隊汰換計畫",
+    "車隊更新計畫", "路線重整", "系統升級", "號誌升級", "軌道升級",
+]
+
 
 def _candidate_selection_text(candidate: dict) -> str:
     paths = " ".join(
@@ -3887,6 +4085,101 @@ def _candidate_selection_text(candidate: dict) -> str:
         f"{candidate.get('source', '')} "
         f"{candidate.get('url', '')} {candidate.get('source_href', '')} {paths}"
     )
+
+
+def _technical_system_gate(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    return _contains_any_term(
+        text,
+        CORE_METRO_TECHNICAL_TERMS
+        + TECH_NEWS_REQUIRED_TERMS
+        + STRONG_TECHNICAL_DETAIL_TERMS
+        + MEDIUM_TECHNICAL_DETAIL_TERMS,
+    )
+
+
+def _technical_action_gate(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    title = candidate.get("title", "")
+    if _contains_any_term(text, TECHNICAL_IMPLEMENTATION_TERMS + TITLE_TECHNICAL_ACTION_TERMS):
+        return True
+    return _trusted_source_title_technical_signal(candidate) or _contains_any_term(
+        title,
+        TECHNICAL_IMPLEMENTATION_TERMS + TITLE_TECHNICAL_ACTION_TERMS,
+    )
+
+
+def _passes_technical_triad(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    if _is_financial_market_candidate(candidate):
+        return False
+    if _is_security_or_crime_candidate(candidate):
+        return False
+    if _is_airport_people_mover_only_text(text, candidate.get("source", "")):
+        return False
+    if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS) and not _contains_any_term(
+        text,
+        CORE_METRO_TECHNICAL_TERMS + STRONG_TECHNICAL_DETAIL_TERMS + TECHNICAL_IMPLEMENTATION_TERMS,
+    ):
+        return False
+    if not _is_urban_rail_candidate(text, candidate.get("source", "")):
+        return False
+    return _technical_system_gate(candidate) and _technical_action_gate(candidate)
+
+
+def _passes_major_accident_gate(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    if not _is_urban_rail_candidate(text, candidate.get("source", "")):
+        return False
+    if _contains_any_term(text, NON_ACCIDENT_CONTEXT_TERMS):
+        return False
+    if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
+        return False
+    has_accident_context = (
+        _contains_any_term(text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS + EQUIPMENT_FAILURE_TERMS)
+        or _contains_any_term(text, ["accident", "incident", "failure", "fault", "事故", "故障", "異常"])
+    )
+    if not has_accident_context:
+        return False
+    has_severity = (
+        _contains_any_term(text, MAJOR_ACCIDENT_SEVERITY_TERMS)
+        or (_contains_any_term(text, EQUIPMENT_FAILURE_TERMS) and _contains_any_term(text, HIGH_IMPACT_ACCIDENT_TERMS))
+    )
+    road_interface = _contains_any_term(text, ROAD_INTERFACE_ACCIDENT_TERMS)
+    low_impact = _contains_any_term(text, LOW_IMPACT_ACCIDENT_TERMS + LOW_IMPACT_ROAD_INTERFACE_TERMS)
+    if low_impact and not has_severity:
+        return False
+    if road_interface and not has_severity:
+        return False
+    return has_severity
+
+
+def _passes_operational_dispute_gate(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    if not _is_urban_rail_candidate(text, candidate.get("source", "")):
+        return False
+    if _contains_any_term(text, LOW_REPORT_VALUE_TERMS + LOW_QUALITY_CONTENT_TERMS):
+        return False
+    return (
+        _contains_any_term(text, DISPUTE_SIGNAL_TERMS)
+        and _contains_any_term(text, DISPUTE_ACTOR_TERMS)
+        and _contains_any_term(text, DISPUTE_IMPACT_TERMS)
+    )
+
+
+def _passes_high_value_policy_gate(candidate: dict) -> bool:
+    text = _candidate_selection_text(candidate)
+    if not _is_urban_rail_candidate(text, candidate.get("source", "")):
+        return False
+    if _passes_technical_triad(candidate) or _passes_major_accident_gate(candidate) or _passes_operational_dispute_gate(candidate):
+        return False
+    if _contains_any_term(text, LOW_REPORT_VALUE_TERMS + LOW_QUALITY_CONTENT_TERMS):
+        return False
+    if _contains_any_term(text, ["fare table", "fare difference table", "ticket price list", "票價表", "車費差額", "票價查詢"]):
+        return False
+    if _contains_any_term(text, ["bus riders", "bus, train", "bus and train", "公車", "巴士"]) and not _contains_any_term(text, ["metro", "subway", "mrt", "lrt", "tram", "light rail"]):
+        return False
+    return _contains_any_term(text, HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS)
 
 
 def _is_accident_signal_text(text: str) -> bool:
@@ -3926,10 +4219,11 @@ def _has_good_report_signal(candidate: dict) -> bool:
         return True
     text = _candidate_selection_text(candidate)
     return (
-        _has_strong_technical_detail_text(text)
+        _passes_technical_triad(candidate)
         or _trusted_source_title_technical_signal(candidate)
-        or _is_accident_signal_text(text)
-        or _contains_any_term(text, HIGH_VALUE_POLICY_TERMS)
+        or _passes_major_accident_gate(candidate)
+        or _passes_high_value_policy_gate(candidate)
+        or _passes_operational_dispute_gate(candidate)
     )
 
 
@@ -3957,34 +4251,15 @@ def _has_major_security_rail_impact(candidate: dict) -> bool:
 
 def _has_core_metro_technical_content(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
-    if _is_financial_market_candidate(candidate):
+    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS) and not _contains_any_term(text, ["rollout flaw", "system interface problem", "ticketing outage"]):
         return False
-    if _is_security_or_crime_candidate(candidate):
+    if _contains_any_term(text, PROPERTY_OR_CAMPUS_DEVELOPMENT_TERMS) and not _technical_system_gate(candidate):
         return False
-    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS):
+    if _contains_any_term(text, ENGINEERING_MILESTONE_ONLY_TERMS) and not _technical_system_gate(candidate):
         return False
-    if _contains_any_term(text, PROPERTY_OR_CAMPUS_DEVELOPMENT_TERMS) and not _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS):
+    if _contains_any_term(text, GENERIC_TEST_WITHOUT_TECH_TERMS) and not _technical_system_gate(candidate):
         return False
-    if _contains_any_term(text, ENGINEERING_MILESTONE_ONLY_TERMS) and not _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS):
-        return False
-    if _contains_any_term(text, GENERIC_TEST_WITHOUT_TECH_TERMS) and not _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS):
-        return False
-
-    has_core_system = _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS)
-    has_implementation = _contains_any_term(text, TECHNICAL_IMPLEMENTATION_TERMS + TITLE_TECHNICAL_ACTION_TERMS)
-    has_ai_or_data = _contains_any_term(text, ["ai", "artificial intelligence", "data analytics", "machine learning", "影像辨識", "資料分析", "人工智慧"])
-    has_ai_application_context = _contains_any_term(
-        text,
-        [
-            "maintenance", "monitoring", "condition monitoring", "fault diagnosis",
-            "predictive maintenance", "operations control", "safety", "equipment",
-            "signal", "power", "platform door", "維修", "監測", "故障診斷",
-            "預測性維護", "行控", "營運安全", "設備", "號誌", "供電", "月臺門", "月台門",
-        ],
-    )
-    if not has_core_system:
-        return False
-    return has_implementation or (has_ai_or_data and has_ai_application_context)
+    return _passes_technical_triad(candidate)
 
 
 def _has_general_rail_exclusion(candidate: dict) -> bool:
@@ -4027,7 +4302,7 @@ def _is_low_value_long_term_candidate(candidate: dict) -> bool:
         return True
     if _contains_any_term(text, CIVIC_METRO_NAME_ONLY_TERMS) and not _contains_any_term(text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS):
         return True
-    if lookback_value in ADVANCED_LOOKBACK_OPTIONS and classification == "重大事故" and not _is_accident_signal_text(text):
+    if lookback_value in ADVANCED_LOOKBACK_OPTIONS and classification == "重大事故" and not _passes_major_accident_gate(candidate):
         return True
     return False
 
@@ -4042,11 +4317,11 @@ def _is_technical_news_selection_candidate(candidate: dict) -> bool:
         return False
     if _is_accident_signal_text(text):
         return False
-    if not _has_core_metro_technical_content(candidate):
-        return False
-    if not _has_explicit_technical_system_detail(candidate):
+    if not _passes_technical_triad(candidate):
         return False
     if _has_low_value_official_notice(candidate):
+        return False
+    if candidate.get("source_tier") == "D_proxy_low_value":
         return False
     return True
 
@@ -4077,39 +4352,39 @@ def get_selection_output_range(days: int) -> str:
     except (TypeError, ValueError):
         days = 7
     if days >= 365:
-        return "12～20"
+        return "9～12"
     if days >= 180:
-        return "12～18"
+        return "9～12"
     if days >= 90:
-        return "10～15"
+        return "9～12"
     if days >= 30:
-        return "10～15"
+        return "6～9"
     if days >= 14:
-        return "10～14"
-    return "8～12"
+        return "6～9"
+    return "3～6"
 
 
 def infer_preliminary_type(candidate: dict) -> str:
     text = _candidate_selection_text(candidate)
     if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
         return "規範更新"
-    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS):
-        if _contains_any_term(text, HIGH_IMPACT_ACCIDENT_TERMS + ["service suspension", "service suspended", "major disruption", "營運中斷", "停駛", "重大中斷"]):
-            return "重大事故"
-        return "營運政策"
-    if _contains_any_term(text, ENGINEERING_MILESTONE_ONLY_TERMS) and not _has_core_metro_technical_content(candidate):
+    if _passes_major_accident_gate(candidate):
+        return "重大事故"
+    if _passes_technical_triad(candidate):
+        return "技術新知"
+    if _passes_operational_dispute_gate(candidate):
+        return "營運爭議"
+    if _passes_high_value_policy_gate(candidate):
         return "營運政策"
     if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
         return "營運政策"
-    if _is_accident_signal_text(text):
-        return "重大事故"
-    if _contains_any_term(text, ["strike", "contract dispute", "lawsuit", "fare dispute", "budget overrun", "罷工", "合約糾紛", "票價爭議", "預算超支", "民怨"]):
-        return "營運爭議"
+    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS):
+        return "營運政策"
     if _contains_any_term(text, WORK_ZONE_MONITORING_TERMS) and not _contains_any_term(text, WORK_ZONE_TECH_DETAIL_TERMS):
         return "營運政策"
     if _contains_any_term(text, LOW_VALUE_OFFICIAL_NOTICE_TERMS):
         return "營運政策"
-    if _contains_any_term(text, HIGH_VALUE_POLICY_TERMS + LOW_VALUE_POLICY_TERMS):
+    if _contains_any_term(text, LOW_VALUE_POLICY_TERMS):
         return "營運政策"
     return "技術新知"
 
@@ -4140,16 +4415,18 @@ def build_candidate_flags(candidate: dict) -> list[str]:
 
     if _is_urban_rail_candidate(text, candidate.get("source", "")):
         flags.append("urban_rail")
-    if _has_strong_technical_detail_text(text):
+    if _technical_system_gate(candidate):
         flags.append("technical_or_system_detail")
     if _trusted_source_title_technical_signal(candidate):
         flags.append("trusted_title_technical_signal")
-    if _has_core_metro_technical_content(candidate):
+    if _passes_technical_triad(candidate):
         flags.append("core_metro_technical_content")
-    if _is_accident_signal_text(text):
+    if _passes_major_accident_gate(candidate):
         flags.append("incident_or_safety_signal")
-    if _contains_any_term(text, HIGH_VALUE_POLICY_TERMS):
+    if _passes_high_value_policy_gate(candidate):
         flags.append("high_value_policy")
+    if _passes_operational_dispute_gate(candidate):
+        flags.append("operational_dispute_gate")
     if _contains_any_term(text, LOW_VALUE_POLICY_TERMS) or information_issue in {"日常服務推播", "低價值路線公告"}:
         flags.append("low_value_service_notice")
     if _has_low_value_official_notice(candidate):
@@ -4228,18 +4505,24 @@ def score_news_candidate(candidate: dict) -> dict:
         score -= 30
         reasons.append("都市軌道關聯不足 -30")
 
-    if _has_strong_technical_detail_text(text):
+    if _technical_system_gate(candidate):
         score += 15
         reasons.append("機電/系統技術訊號 +15")
-    if _trusted_source_title_technical_signal(candidate):
+    if _passes_technical_triad(candidate):
         score += 10
-        reasons.append("可信來源標題具系統與技術行為 +10")
-    if _is_accident_signal_text(text):
-        score += 10
-        reasons.append("事故/安全訊號 +10")
-    if _contains_any_term(text, HIGH_VALUE_POLICY_TERMS):
+        reasons.append("都市軌道+系統設備+技術行為三聯條件 +10")
+    elif _trusted_source_title_technical_signal(candidate):
         score += 8
-        reasons.append("高價值營運政策訊號 +8")
+        reasons.append("可信來源標題具系統與技術行為 +8")
+    if _passes_major_accident_gate(candidate):
+        score += 10
+        reasons.append("重大事故嚴重度門檻 +10")
+    if _passes_high_value_policy_gate(candidate):
+        score += 8
+        reasons.append("高價值營運政策門檻 +8")
+    if _passes_operational_dispute_gate(candidate):
+        score += 8
+        reasons.append("營運爭議衝突與影響門檻 +8")
     if _contains_any_term(text, LOW_VALUE_POLICY_TERMS):
         score -= 12
         reasons.append("低價值服務提醒 -12")
@@ -4277,7 +4560,7 @@ def score_news_candidate(candidate: dict) -> dict:
         reasons.append("摘要資訊不足 -18")
 
     flags = build_candidate_flags(candidate)
-    good_flags = {"technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "trusted_title_technical_signal"}
+    good_flags = {"technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "trusted_title_technical_signal", "operational_dispute_gate"}
     has_good_flag = bool(set(flags).intersection(good_flags))
     if not has_good_flag:
         score_cap = 55 if "short_snippet" in flags else 65
@@ -4330,7 +4613,7 @@ def build_candidate_card(candidate: dict) -> dict:
 def _is_low_value_policy_candidate(candidate: dict) -> bool:
     text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')}"
     has_low = _contains_any_term(text, LOW_VALUE_POLICY_TERMS)
-    has_high = _contains_any_term(text, HIGH_VALUE_POLICY_TERMS)
+    has_high = _passes_high_value_policy_gate(candidate)
     return has_low and not has_high
 
 
@@ -4363,23 +4646,26 @@ def _selection_target_range(days: int) -> tuple[int, int]:
     except (TypeError, ValueError):
         days = 7
     if days >= 365:
-        return 12, 20
+        return 9, 12
     if days >= 180:
-        return 12, 18
+        return 9, 12
     if days >= 90:
-        return 10, 15
+        return 9, 12
     if days >= 30:
-        return 10, 15
+        return 6, 9
     if days >= 14:
-        return 10, 14
-    return 8, 12
+        return 6, 9
+    return 3, 6
 
 
 def _selection_classification(candidate: dict) -> str:
+    inferred_type = infer_preliminary_type(candidate)
+    if inferred_type in ADVANCED_TYPES:
+        return inferred_type
     preliminary_type = candidate.get("preliminary_type")
     if preliminary_type in ADVANCED_TYPES:
         return preliminary_type
-    return infer_preliminary_type(candidate)
+    return "技術新知"
 
 
 def _has_source_reference(candidate: dict) -> bool:
@@ -4389,7 +4675,7 @@ def _has_source_reference(candidate: dict) -> bool:
 
 def _selection_good_flag_count(candidate: dict) -> int:
     flags = set(candidate.get("candidate_flags", []) or [])
-    return sum(1 for flag in ("technical_or_system_detail", "incident_or_safety_signal", "high_value_policy") if flag in flags)
+    return sum(1 for flag in ("technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "core_metro_technical_content", "operational_dispute_gate") if flag in flags)
 
 
 def _selection_bad_flag_count(candidate: dict) -> int:
@@ -4408,13 +4694,14 @@ def _candidate_month_key(candidate: dict) -> str:
 def _candidate_system_theme(candidate: dict) -> str:
     text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('query', '')}"
     theme_terms = [
-        ("號誌與列車控制", ["cbtc", "signalling", "signaling", "signal", "train control", "號誌", "信號"]),
+        ("號誌與列車控制", ["cbtc", "signalling", "signaling", "signal", "train control", "line modernization", "line modernisation", "metro modernization", "metro modernisation", "modernization", "modernisation", "號誌", "信號"]),
         ("自動化與無人駕駛", ["driverless", "automation", "automated", "unattended train", "自動", "無人"]),
-        ("車輛與車隊更新", ["rolling stock", "fleet", "trainset", "new train", "車輛", "列車"]),
+        ("車輛與車隊更新", ["rolling stock", "fleet", "trainset", "new train", "train cars", "two-car sets", "two car sets", "automated metros", "metro trains", "8000 series trains", "車輛", "列車"]),
         ("月臺門與車站設備", ["platform screen door", "platform doors", "psd", "elevator", "escalator", "月臺門", "月台門", "電梯", "電扶梯"]),
         ("供電與能源管理", ["power supply", "traction power", "substation", "third rail", "energy", "供電", "牽引", "變電", "能源"]),
         ("通訊、資安與資料治理", ["communications", "telecom", "radio", "5g", "lte", "cyber", "data", "通訊", "資安", "資料"]),
-        ("維修監測與影像分析", ["maintenance", "monitoring", "condition monitoring", "video", "camera", "ai", "維修", "監測", "影像", "AI"]),
+        ("維修監測與影像分析", ["maintenance", "monitoring", "condition monitoring", "video", "camera", "ai", "omc", "overhaul", "life cycle management", "life-cycle management", "維修", "監測", "影像", "AI"]),
+        ("軌道與機廠設備", ["track renewal", "track lubrication", "lubricator", "wheel lathe", "depot", "operations and maintenance centre", "operations and maintenance center", "軌道更新", "機廠"]),
         ("AFC 與票務系統", ["afc", "ticketing", "fare gate", "fare", "票務", "票閘", "票價"]),
     ]
     for label, terms in theme_terms:
@@ -4776,17 +5063,22 @@ def _is_low_value_python_selection_candidate(candidate: dict) -> bool:
     has_good_signal = _has_good_report_signal(candidate)
     has_technical_detail = _has_explicit_technical_system_detail(candidate)
     text = _candidate_selection_text(candidate)
+    classification = _selection_classification(candidate)
     if _is_financial_market_candidate(candidate):
         return True
-    if (
-        _selection_classification(candidate) == "技術新知"
-        and not _has_core_metro_technical_content(dict(candidate, classification="技術新知"))
-        and not _trusted_source_title_technical_signal(candidate)
-    ):
+    if candidate.get("source_tier") == "D_proxy_low_value":
+        return True
+    if classification == "技術新知" and not _passes_technical_triad(dict(candidate, classification="技術新知")):
+        return True
+    if classification == "重大事故" and not _passes_major_accident_gate(dict(candidate, classification="重大事故")):
+        return True
+    if classification == "營運政策" and not _passes_high_value_policy_gate(dict(candidate, classification="營運政策")):
+        return True
+    if classification == "營運爭議" and not _passes_operational_dispute_gate(dict(candidate, classification="營運爭議")):
         return True
     if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
         return True
-    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS) and _selection_classification(candidate) == "技術新知":
+    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS) and classification == "技術新知":
         return True
     if _is_low_value_long_term_candidate(candidate):
         return True
@@ -4869,11 +5161,16 @@ def _is_hard_excluded_for_borderline(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
     if _is_financial_market_candidate(candidate):
         return True
-    if (
-        _selection_classification(candidate) == "技術新知"
-        and not _has_core_metro_technical_content(dict(candidate, classification="技術新知"))
-        and not _trusted_source_title_technical_signal(candidate)
-    ):
+    if candidate.get("source_tier") == "D_proxy_low_value":
+        return True
+    classification = _selection_classification(candidate)
+    if classification == "技術新知" and not _passes_technical_triad(dict(candidate, classification="技術新知")):
+        return True
+    if classification == "重大事故" and not _passes_major_accident_gate(dict(candidate, classification="重大事故")):
+        return True
+    if classification == "營運政策" and not _passes_high_value_policy_gate(dict(candidate, classification="營運政策")):
+        return True
+    if classification == "營運爭議" and not _passes_operational_dispute_gate(dict(candidate, classification="營運爭議")):
         return True
     if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
         return True
@@ -4916,7 +5213,9 @@ def _is_b_level_technical_candidate(candidate: dict) -> bool:
         return False
     if not _is_urban_rail_candidate(text, candidate.get("source", "")):
         return False
-    if _trusted_source_title_technical_signal(candidate):
+    if not _passes_technical_triad(candidate):
+        return False
+    if candidate.get("source_tier") in {"A_official", "B_professional"}:
         return True
     return _contains_any_term(text, MEDIUM_TECHNICAL_DETAIL_TERMS + WEEKLY_BACKFILL_ALLOWED_TERMS)
 
@@ -4943,21 +5242,17 @@ def _is_borderline_report_candidate(candidate: dict) -> tuple[bool, str]:
             return True, "B級技術新知候補"
         return False, "技術門檻不足"
     if classification == "重大事故":
-        if _is_accident_signal_text(text) and not _contains_any_term(text, LOW_IMPACT_ACCIDENT_TERMS):
-            return True, "事故/安全訊號明確"
-        if _contains_any_term(text, LOW_IMPACT_ACCIDENT_TERMS) and _contains_any_term(text, HIGH_IMPACT_ACCIDENT_TERMS):
-            return True, "低影響事故但涉及系統安全議題"
+        if _passes_major_accident_gate(candidate):
+            return True, "重大事故嚴重度門檻明確"
         return False, "事故價值不足"
     if classification == "營運政策":
-        if "high_value_policy" in flags or _contains_any_term(text, SUBSTANTIVE_POLICY_DETAIL_TERMS + HIGH_VALUE_POLICY_TERMS + WEEKLY_BACKFILL_ALLOWED_TERMS):
-            return True, "具營運管理或系統規劃價值"
+        if _passes_high_value_policy_gate(candidate):
+            return True, "具捷運專屬性與系統/路線層級影響"
         return False, "營運政策價值不足"
     if classification == "營運爭議":
-        if _contains_any_term(text, GENERAL_RAIL_EXCLUDE_TERMS):
-            return False, "一般鐵路/通勤鐵路爭議"
-        if _contains_any_term(text, URBAN_RAIL_MODE_TERMS):
-            return True, "都市軌道營運爭議"
-        return False, "都市軌道爭議關聯不足"
+        if _passes_operational_dispute_gate(candidate):
+            return True, "具明確衝突主體與營運影響"
+        return False, "營運爭議衝突或影響不足"
     if classification == "規範更新":
         if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
             return True, "規範更新條件完整"
