@@ -2231,24 +2231,42 @@ def _region_from_domain_hints(candidate: dict) -> str:
 
 
 def _region_guess_from_candidate(candidate: dict) -> str:
+    title = str(candidate.get("title", "") or "")
+    snippet = str(candidate.get("snippet", "") or "")
+    explicit_event_guess = _explicit_event_region_hint(f"{title} {snippet}")
+    if explicit_event_guess:
+        return explicit_event_guess
+
+    query_region = str(candidate.get("query_region", "") or "").strip()
+    if query_region and query_region not in {"global", "unplanned", "未判定", "國際", "國際研究"}:
+        return query_region
+    query_guess = guess_region_from_text(candidate.get("query", ""))
+    if query_guess != "未判定":
+        return query_guess
+
+    title_guess = guess_region_from_text(title)
+    if title_guess != "未判定":
+        return title_guess
+    snippet_guess = guess_region_from_text(snippet)
+    if snippet_guess != "未判定":
+        return snippet_guess
+
+    source_guess = guess_region_from_text(candidate.get("source", ""))
+    if source_guess != "未判定":
+        return source_guess
+    domain_guess = _region_from_domain_hints(candidate)
+    if domain_guess:
+        return domain_guess
+
     path_text = " ".join(
         urlparse(candidate.get(key, "") or "").path.replace("/", " ")
         for key in ("url", "source_href")
     )
-    event_text = " ".join(str(candidate.get(key, "") or "") for key in (
-        "title", "snippet"
-    ))
-    priority_guess = _event_region_hint_from_text(f"{event_text} {path_text}")
-    if priority_guess:
-        return priority_guess
-    primary_guess = guess_region_from_text(f"{event_text} {path_text}")
-    if primary_guess != "未判定":
-        return primary_guess
-    domain_guess = _region_from_domain_hints(candidate)
-    if domain_guess:
-        return domain_guess
-    query_guess = guess_region_from_text(candidate.get("query", ""))
-    return query_guess if query_guess != "未判定" else "未判定"
+    path_guess = guess_region_from_text(path_text)
+    if path_guess != "未判定":
+        return path_guess
+    existing = str(candidate.get("region", "") or "").strip()
+    return existing if existing not in {"", "未判定", "國際研究"} else "未判定"
 
 
 def _canonical_candidate_region(candidate: dict) -> str:
@@ -2963,11 +2981,22 @@ def _ddgs_query_status_template(query: str, news_timelimit: str) -> dict:
     }
 
 
-def ddgs_zero_result_queries(statuses: list[dict]) -> list[dict]:
-    return [
-        row for row in statuses or []
-        if int(row.get("returned_count", 0) or 0) == 0 or int(row.get("added_to_raw_count", 0) or 0) == 0
-    ]
+DDGS_ERROR_STATUSES = {"http_403", "rate_limited_429", "timeout", "other_exception"}
+
+
+def ddgs_queries_by_outcome(statuses: list[dict], outcome: str) -> list[dict]:
+    rows = statuses or []
+    if outcome == "no_backend_result":
+        return [row for row in rows if row.get("execution_status") == "zero_results"]
+    if outcome == "all_results_basic_excluded":
+        return [row for row in rows if row.get("execution_status") == "all_results_basic_excluded"]
+    if outcome == "query_error":
+        return [row for row in rows if row.get("execution_status") in DDGS_ERROR_STATUSES]
+    if outcome == "added_zero":
+        return [row for row in rows if int(row.get("added_to_raw_count", 0) or 0) == 0]
+    if outcome == "success_with_raw":
+        return [row for row in rows if int(row.get("added_to_raw_count", 0) or 0) > 0]
+    return []
 
 
 def ddgs_general_only_queries(statuses: list[dict]) -> list[dict]:
@@ -3030,17 +3059,26 @@ def build_ddgs_search_summary(statuses: list[dict], planned_query_count: int | N
             counts[str(value)] = counts.get(str(value), 0) + 1
         return counts
 
-    error_statuses = {"http_403", "rate_limited_429", "timeout", "other_exception"}
     return {
         "planned_query_count": int(planned_query_count if planned_query_count is not None else len(rows)),
         "executed_query_count": sum(1 for row in rows if row.get("execution_status") not in {"not_executed", "not_executed_dependency_missing"}),
         "query_count_by_region": _count_by("query_region"),
         "query_count_by_family": _count_by("search_family", "family"),
         "query_count_by_language": _count_by("search_language", "lang"),
-        "zero_result_query_count": sum(1 for row in rows if row.get("execution_status") == "zero_results"),
-        "error_query_count": sum(1 for row in rows if row.get("execution_status") in error_statuses),
+        "no_backend_result_count": len(ddgs_queries_by_outcome(rows, "no_backend_result")),
+        "all_results_basic_excluded_count": len(ddgs_queries_by_outcome(rows, "all_results_basic_excluded")),
+        "query_error_count": len(ddgs_queries_by_outcome(rows, "query_error")),
+        "added_zero_count": len(ddgs_queries_by_outcome(rows, "added_zero")),
+        "success_with_raw_count": len(ddgs_queries_by_outcome(rows, "success_with_raw")),
         "rate_limited_query_count": sum(1 for row in rows if row.get("execution_status") in {"http_403", "rate_limited_429"}),
         "DDGS_added_to_raw_count": sum(int(row.get("added_to_raw_count", 0) or 0) for row in rows),
+        "outcome_definitions": {
+            "no_backend_result_count": "execution_status=zero_results",
+            "all_results_basic_excluded_count": "backend returned results but every result failed basic exclusions",
+            "query_error_count": "403, 429, timeout, or other exception",
+            "added_zero_count": "added_to_raw_count=0 across all planned queries",
+            "success_with_raw_count": "added_to_raw_count>0",
+        },
     }
 
 
@@ -3213,21 +3251,31 @@ def _shorten(text: str, max_chars: int = CANDIDATE_SNIPPET_CHARS) -> str:
     return text[: max_chars - 1].rstrip() + "…"
 
 
+def _is_article_level_url(value: str, allow_google_news: bool = False) -> bool:
+    url = _clean_candidate_url(value)
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    if "news.google.com" in parsed.netloc.casefold():
+        return allow_google_news and parsed.path not in {"", "/"}
+    return parsed.path not in {"", "/"}
+
+
 def _effective_source_url(candidate: dict) -> str:
+    resolved_url = candidate.get("resolved_article_url") or ""
     source_href = candidate.get("source_href") or ""
     url = candidate.get("url") or ""
-    source_domain = (candidate.get("source_domain") or "").strip().lower()
-    raw_url = source_href or url
-    if "news.google.com" in _domain_from_url(raw_url):
-        domain = source_domain or _original_source_domain(
-            candidate.get("source", ""),
-            url,
-            source_href,
-            candidate.get("query", ""),
-        )
-        if domain and domain != "news.google.com":
-            return f"https://{domain}"
-    return _clean_candidate_url(raw_url)
+    if _is_article_level_url(resolved_url):
+        return _clean_candidate_url(resolved_url)
+    if _is_article_level_url(source_href):
+        return _clean_candidate_url(source_href)
+    if _is_article_level_url(url, allow_google_news=True):
+        return _clean_candidate_url(url)
+    # A Google News article URL is a valid fallback. Never replace it with a
+    # synthesized publisher home page, which is not a source article.
+    if "news.google.com" in _domain_from_url(url):
+        return _clean_candidate_url(url)
+    return _clean_candidate_url(source_href or url)
 
 
 def _clean_candidate_url(value: str) -> str:
@@ -3338,17 +3386,42 @@ def source_verb_for_report(tier: str, label: str) -> str:
 
 EVENT_REGION_PRIORITY_HINTS: list[tuple[str, list[str]]] = [
     ("瑞士", ["basel", "basel tram", "bvb", "zürich", "zurich", "lausanne", "瑞士", "巴塞爾", "蘇黎世", "洛桑"]),
-    ("美國", ["houston", "metrorail", "houston metrorail", "metro rail houston", "休士頓", "休斯頓"]),
-    ("加拿大", ["vancouver", "broadway subway", "toronto", "finch west", "finch west lrt", "metrolinx", "ttc", "skytrain", "溫哥華", "多倫多"]),
+    ("美國", ["austin transit partnership", "austin light rail", "houston", "metrorail", "houston metrorail", "metro rail houston", "wmata", "washington metro", "mta", "nyct", "new york subway", "休士頓", "休斯頓"]),
+    ("加拿大", ["vancouver", "translink vancouver", "vancouver translink", "broadway subway", "toronto", "toronto subway", "finch west", "finch west lrt", "metrolinx", "ttc", "skytrain", "溫哥華", "多倫多"]),
     ("英國", ["northern ireland", "belfast", "translink ni", "translink northern ireland", "北愛爾蘭", "貝爾法斯特"]),
-    ("德國", ["berlin", "adlershof", "leipzig", "munich", "hamburg", "u-bahn", "柏林", "萊比錫", "慕尼黑", "漢堡"]),
+    ("德國", ["bvg", "berlin", "adlershof", "leipzig", "munich", "hamburg", "u-bahn", "柏林", "萊比錫", "慕尼黑", "漢堡"]),
 ]
+
+
+def _region_term_matches(text_lower: str, term: str) -> bool:
+    term_lower = (term or "").casefold()
+    if not term_lower:
+        return False
+    if re.fullmatch(r"[a-z0-9.\-]+", term_lower) and len(term_lower.replace(".", "").replace("-", "")) <= 4:
+        return bool(re.search(rf"(?<![a-z0-9]){re.escape(term_lower)}(?![a-z0-9])", text_lower))
+    return term_lower in text_lower
+
+
+def _explicit_event_region_hint(text: str) -> str:
+    text_lower = (text or "").casefold()
+    # Ambiguous operator names are paired with an event city before generic
+    # query or publisher hints are considered.
+    explicit_hints = [
+        ("英國", ["translink northern ireland", "translink ni", "belfast", "northern ireland"]),
+        ("美國", ["austin transit partnership", "austin light rail", "wmata", "washington metro", "new york subway", "nyct", "mta"]),
+        ("加拿大", ["ttc", "toronto subway", "toronto", "translink vancouver", "vancouver translink", "vancouver", "skytrain"]),
+        ("德國", ["bvg", "berlin", "berlin tram"]),
+    ]
+    for region, terms in explicit_hints:
+        if any(_region_term_matches(text_lower, term) for term in terms):
+            return region
+    return ""
 
 
 def _event_region_hint_from_text(text: str) -> str:
     text_lower = (text or "").casefold()
     for region, terms in EVENT_REGION_PRIORITY_HINTS:
-        if any(term.casefold() in text_lower for term in terms):
+        if any(_region_term_matches(text_lower, term) for term in terms):
             return region
     return ""
 
@@ -3373,7 +3446,7 @@ def guess_region_from_text(text: str) -> str:
             "wmata", "cta", "mta.info", "soundtransit.org", "美國", "美国",
         ],
         "加拿大": [
-            "canada", "toronto", "vancouver", "translink", "yaletown-roundhouse",
+            "canada", "toronto", "vancouver", "yaletown-roundhouse",
             "yaletown–roundhouse", "ttc", "skytrain", "加拿大",
         ],
         "西班牙": ["spain", "madrid", "barcelona", "西班牙"],
@@ -3388,7 +3461,7 @@ def guess_region_from_text(text: str) -> str:
         "挪威": ["norway", "oslo", "挪威"],
     }
     for region, terms in aliases.items():
-        if any(term.casefold() in text_lower for term in terms):
+        if any(_region_term_matches(text_lower, term) for term in terms):
             return region
     return "未判定"
 
@@ -3443,20 +3516,17 @@ def _make_news_candidate(
     source_tier, source_tier_reason = classify_source_tier(source, url, source_href)
     source_display = source_label_for_report(source, url, source_href, source_tier)
     source_verb = source_verb_for_report(source_tier, source_display)
-    region_value = region if region and region != "未判定" else guess_region_from_text(
-        f"{title} {snippet} {source} {query} {url} {source_href}"
-    )
     query_metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {}
     search_family = query_metadata.get("family") or _search_family_from_query(query or source)
     search_language = query_metadata.get("lang") or _search_language_from_query(query or source)
-    return {
+    candidate = {
         "title": _clean_text(title),
         "date": _clean_text(date) or "日期未知",
         "source": _clean_text(source) or (_domain_from_url(source_href or url) or "未判定來源"),
         "url": (url or "").strip(),
         "snippet": _shorten(snippet, REPORT_SNIPPET_CHARS),
         "query": _clean_text(query),
-        "region": region_value,
+        "region": region if region and region != "未判定" else "未判定",
         "source_type": source_type,
         "source_href": (source_href or "").strip(),
         "source_quality": quality,
@@ -3471,7 +3541,10 @@ def _make_news_candidate(
         "search_family": search_family,
         "search_query": _clean_text(query),
         "search_language": search_language,
+        "query_region": query_metadata.get("query_region", ""),
     }
+    candidate["region"] = _region_guess_from_candidate(candidate)
+    return candidate
 
 
 def parse_rss_candidates(raw_rss: str) -> list[dict]:
@@ -3677,7 +3750,7 @@ def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], dict[str, int
     return deduped, stats
 
 
-def _candidate_page_type(candidate: dict) -> tuple[str, str]:
+def _compute_candidate_page_type(candidate: dict) -> tuple[str, str]:
     url = candidate.get("url", "")
     source_href = candidate.get("source_href", "")
     parsed = urlparse(url or "")
@@ -3716,6 +3789,16 @@ def _candidate_page_type(candidate: dict) -> tuple[str, str]:
     if source_href and "news.google.com" not in _domain_from_url(source_href):
         return "news_article", "Google News 代理已提供原始來源"
     return "news_article", "具備候選新聞頁基本結構"
+
+
+def _candidate_page_type(candidate: dict) -> tuple[str, str]:
+    cache = _candidate_analysis_cache(candidate)
+    cached = cache.get("page_type")
+    if isinstance(cached, tuple) and len(cached) == 2:
+        return cached
+    result = _compute_candidate_page_type(candidate)
+    cache["page_type"] = result
+    return result
 
 
 def _prefetch_limit_for_period(days: int) -> int:
@@ -3757,15 +3840,70 @@ def _candidate_prefetch_signal(candidate: dict) -> bool:
     return has_system_or_institution and has_action
 
 
-def _prefetch_url_for_candidate(candidate: dict) -> str:
-    for raw_url in (candidate.get("source_href", ""), candidate.get("url", ""), _effective_source_url(candidate)):
+def _canonical_url_from_html(html: str, base_url: str) -> str:
+    for pattern in (
+        r'<link[^>]+rel=["\'][^"\']*canonical[^"\']*["\'][^>]+href=["\']([^"\']+)',
+        r'<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\'][^"\']*canonical[^"\']*["\']',
+        r'<meta[^>]+property=["\']og:url["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:url["\']',
+    ):
+        match = re.search(pattern, html or "", flags=re.IGNORECASE)
+        if match:
+            return urllib.parse.urljoin(base_url, unescape(match.group(1)).strip())
+    return ""
+
+
+def _resolve_google_news_article_url(candidate: dict, session: requests.Session) -> str:
+    original_url = _clean_candidate_url(candidate.get("url", ""))
+    if "news.google.com" not in _domain_from_url(original_url):
+        return original_url if _is_article_level_url(original_url) else ""
+    existing = _clean_candidate_url(candidate.get("resolved_article_url", ""))
+    if _is_article_level_url(existing):
+        return existing
+    started = time.perf_counter()
+    candidate["google_news_original_url"] = original_url
+    try:
+        response = session.get(
+            original_url,
+            timeout=PREFETCH_TIMEOUT_SECONDS,
+            headers={"Accept": "text/html,application/xhtml+xml,*/*"},
+            allow_redirects=True,
+        )
+        candidates = [getattr(response, "url", "")]
+        for hop in getattr(response, "history", []) or []:
+            candidates.append(getattr(hop, "headers", {}).get("Location", ""))
+            candidates.append(getattr(hop, "url", ""))
+        candidates.append(_canonical_url_from_html(getattr(response, "text", ""), getattr(response, "url", original_url)))
+        for value in candidates:
+            resolved = _clean_candidate_url(value)
+            if _is_article_level_url(resolved) and "news.google.com" not in _domain_from_url(resolved):
+                candidate["resolved_article_url"] = resolved
+                candidate["google_news_resolution_status"] = "resolved"
+                candidate["google_news_resolution_error"] = ""
+                candidate["google_news_resolution_elapsed_seconds"] = round(time.perf_counter() - started, 3)
+                candidate["_resolved_article_html"] = getattr(response, "text", "")
+                candidate["_resolved_article_content_type"] = getattr(response, "headers", {}).get("Content-Type", "")
+                return resolved
+        candidate["google_news_resolution_status"] = "unresolved_keep_google_news_url"
+        candidate["google_news_resolution_error"] = "no_article_level_redirect_or_canonical"
+    except Exception as exc:
+        candidate["google_news_resolution_status"] = "unresolved_keep_google_news_url"
+        candidate["google_news_resolution_error"] = str(exc)[:180]
+    candidate["google_news_resolution_elapsed_seconds"] = round(time.perf_counter() - started, 3)
+    return ""
+
+
+def _prefetch_url_for_candidate(candidate: dict, session: requests.Session | None = None) -> str:
+    if session is not None and "news.google.com" in _domain_from_url(candidate.get("url", "")):
+        _resolve_google_news_article_url(candidate, session)
+    for raw_url in (candidate.get("resolved_article_url", ""), candidate.get("source_href", ""), candidate.get("url", "")):
         url = _clean_candidate_url(raw_url)
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             continue
         if "news.google.com" in parsed.netloc.casefold():
             continue
-        if parsed.path in {"", "/"} and raw_url != candidate.get("url", ""):
+        if parsed.path in {"", "/"}:
             continue
         return url
     return ""
@@ -3789,10 +3927,26 @@ def _extract_prefetch_text(html: str) -> str:
 
 def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> dict:
     started = time.perf_counter()
-    url = _prefetch_url_for_candidate(candidate)
+    url = _prefetch_url_for_candidate(candidate, session)
     if not url:
         return {"status": "skipped_no_direct_url", "chars": 0, "elapsed_seconds": 0.0, "reason": "no_direct_article_url"}
     try:
+        resolved_html = candidate.pop("_resolved_article_html", "")
+        resolved_content_type = candidate.pop("_resolved_article_content_type", "").casefold()
+        if resolved_html:
+            article_text = _extract_prefetch_text(resolved_html)
+            if len(article_text) >= 120:
+                candidate["prefetched_text_snippet"] = _shorten(article_text, REPORT_SNIPPET_CHARS)
+                candidate["snippet"] = _shorten(f"{candidate.get('snippet', '')} {article_text}", REPORT_SNIPPET_CHARS)
+                candidate.pop("_selection_text_cache", None)
+                candidate.pop("_selection_text_fingerprint", None)
+                candidate.pop("_score_cache", None)
+                candidate.pop("_score_cache_fingerprint", None)
+                candidate.pop("_analysis_cache", None)
+                candidate.pop("_analysis_cache_fingerprint", None)
+                return {"status": "success", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "resolved_google_news_redirect"}
+            if resolved_content_type and not any(kind in resolved_content_type for kind in ("html", "text", "xml")):
+                return {"status": "skipped_content_type", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": resolved_content_type[:80]}
         response = session.get(
             url,
             timeout=PREFETCH_TIMEOUT_SECONDS,
@@ -3812,6 +3966,8 @@ def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> d
         candidate.pop("_selection_text_fingerprint", None)
         candidate.pop("_score_cache", None)
         candidate.pop("_score_cache_fingerprint", None)
+        candidate.pop("_analysis_cache", None)
+        candidate.pop("_analysis_cache_fingerprint", None)
         return {"status": "success", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": ""}
     except Exception as exc:
         return {"status": "failed_exception", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": str(exc)[:160]}
@@ -4105,31 +4261,77 @@ def build_pipeline_debug_stats(
     }
 
 
-def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
-    parsed_candidates = parse_rss_candidates(raw_rss) + parse_ddg_candidates(raw_ddg)
+def _profile_timing_add(timings: dict | None, key: str, elapsed: float) -> None:
+    if timings is not None:
+        timings[key] = float(timings.get(key, 0.0) or 0.0) + max(0.0, elapsed)
+
+
+def _profile_call(timings: dict, key: str, function, *args):
+    started = time.perf_counter()
+    try:
+        return function(*args)
+    finally:
+        _profile_timing_add(timings, key, time.perf_counter() - started)
+
+
+def _prepare_candidate_objects(parsed_candidates: list[dict], parsing_seconds: float = 0.0) -> dict:
+    pool_started = time.perf_counter()
+    candidate_pool_timings = {
+        "unit": "seconds",
+        "parsing": parsing_seconds,
+        "region_detection": 0.0,
+        "text_normalization": 0.0,
+        "page_type": 0.0,
+        "category_gates": 0.0,
+        "scoring": 0.0,
+        "event_fingerprint": 0.0,
+        "dedupe": 0.0,
+        "preliminary_filter": 0.0,
+        "prefetch": 0.0,
+        "total": 0.0,
+        "candidate_count": len(parsed_candidates or []),
+    }
     raw_candidates: list[dict] = []
     hard_excluded_candidates: list[dict] = []
     hard_exclusion_stats: dict[str, int] = {}
-    for candidate in parsed_candidates:
-        hard_reason = hard_low_value_candidate_reason(candidate)
+    for candidate in parsed_candidates or []:
+        _profile_call(candidate_pool_timings, "region_detection", _canonical_candidate_region, candidate)
+        _profile_call(candidate_pool_timings, "text_normalization", _candidate_selection_text, candidate)
+        page_type, page_type_reason = _profile_call(candidate_pool_timings, "page_type", _candidate_page_type, candidate)
+        candidate["page_type"] = page_type
+        candidate["page_type_reason"] = page_type_reason
+        candidate.update(_profile_call(candidate_pool_timings, "category_gates", evaluate_category_gates, candidate))
+        hard_reason = _profile_call(candidate_pool_timings, "preliminary_filter", hard_low_value_candidate_reason, candidate)
         if hard_reason:
-            hard_excluded_candidates.append(annotate_candidate_for_scheme_d(candidate, hard_reason))
+            hard_excluded_candidates.append(annotate_candidate_for_scheme_d(candidate, hard_reason, candidate_pool_timings))
             hard_exclusion_stats[hard_reason] = hard_exclusion_stats.get(hard_reason, 0) + 1
         else:
-            raw_candidates.append(annotate_candidate_for_scheme_d(candidate))
+            raw_candidates.append(annotate_candidate_for_scheme_d(candidate, profile_timings=candidate_pool_timings))
 
-    deduped_candidates, dedupe_stats = dedupe_candidates(raw_candidates)
+    deduped_candidates, dedupe_stats = _profile_call(candidate_pool_timings, "dedupe", dedupe_candidates, raw_candidates)
+    prefetch_started = time.perf_counter()
     prefetch_stats = prefetch_candidates_before_filter(deduped_candidates)
+    _profile_timing_add(candidate_pool_timings, "prefetch", time.perf_counter() - prefetch_started)
     filtered_candidates: list[dict] = []
     excluded_candidates: list[dict] = hard_excluded_candidates.copy()
     exclusion_stats: dict[str, int] = hard_exclusion_stats.copy()
 
     for candidate in deduped_candidates:
-        keep, reason = preliminary_filter_candidate(candidate)
+        if candidate.get("prefetch_status") == "success":
+            refreshed = annotate_candidate_for_scheme_d(candidate, profile_timings=candidate_pool_timings)
+            candidate.clear()
+            candidate.update(refreshed)
+        keep, reason = _profile_call(candidate_pool_timings, "preliminary_filter", preliminary_filter_candidate, candidate)
         if keep:
-            filtered_candidates.append(annotate_candidate_for_scheme_d(candidate))
+            candidate["exclude_reason"] = ""
+            candidate["final_exclude_reason"] = ""
+            candidate["selection_stage"] = "candidate_pool"
+            filtered_candidates.append(candidate)
         else:
-            excluded_candidates.append(annotate_candidate_for_scheme_d(candidate, reason))
+            candidate["exclude_reason"] = reason
+            candidate["final_exclude_reason"] = reason
+            candidate["selection_stage"] = "excluded"
+            excluded_candidates.append(candidate)
             exclusion_stats[reason] = exclusion_stats.get(reason, 0) + 1
 
     filtered_candidates = sorted(
@@ -4144,8 +4346,12 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
     )
     candidate_limit = min(get_selection_candidate_limit(lookback_int, fast_mode=fast_mode_enabled), MAX_SELECTION_CANDIDATES)
     model_candidates = [dict(item, id=idx, candidate_id=idx) for idx, item in enumerate(filtered_candidates, 1)]
-    model_candidates = [annotate_candidate_for_scheme_d(item) for item in model_candidates]
     pipeline_debug_stats = build_pipeline_debug_stats(raw_candidates, deduped_candidates, model_candidates, excluded_candidates, prefetch_stats)
+    candidate_pool_timings["total"] = time.perf_counter() - pool_started + parsing_seconds
+    for key, value in list(candidate_pool_timings.items()):
+        if isinstance(value, float):
+            candidate_pool_timings[key] = round(value, 4)
+    pipeline_debug_stats["candidate_pool_timings"] = candidate_pool_timings
     candidate_cards = [build_candidate_card(candidate) for candidate in model_candidates[:candidate_limit]]
     return {
         "raw_candidates": raw_candidates,
@@ -4159,10 +4365,18 @@ def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
         "prefetch_stats": prefetch_stats,
         "exclusion_stats": exclusion_stats,
         "pipeline_debug_stats": pipeline_debug_stats,
+        "candidate_pool_timings": candidate_pool_timings,
         "raw_count": len(raw_candidates),
         "deduped_count": len(deduped_candidates),
         "filtered_count": len(model_candidates),
     }
+
+
+def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
+    parsing_started = time.perf_counter()
+    parsed_candidates = parse_rss_candidates(raw_rss) + parse_ddg_candidates(raw_ddg)
+    parsing_seconds = time.perf_counter() - parsing_started
+    return _prepare_candidate_objects(parsed_candidates, parsing_seconds)
 
 
 def build_long_term_coverage_warning(candidates: list[dict]) -> dict:
@@ -4696,7 +4910,7 @@ TECH_NEWS_REQUIRED_TERMS.extend([
     "ventilation", "fleet life-cycle management", "life-cycle management services",
     "maintenance services", "track renewal", "lubricator replacement",
     "track lubrication", "operations and maintenance centre", "operations and maintenance center",
-    "omc", "wheel lathe", "life cycle management", "life cycle management services",
+    "omc", "wheel lathe", "axle counter", "axle counters", "life cycle management", "life cycle management services",
 ])
 
 TITLE_TECHNICAL_ACTION_TERMS.extend([
@@ -4725,7 +4939,7 @@ CORE_METRO_TECHNICAL_TERMS.extend([
     "station systems", "ventilation", "fleet life-cycle management",
     "life-cycle management services", "maintenance services", "track renewal",
     "lubricator replacement", "track lubrication", "operations and maintenance centre",
-    "operations and maintenance center", "omc", "wheel lathe",
+    "operations and maintenance center", "omc", "wheel lathe", "axle counter", "axle counters",
 ])
 
 TECHNICAL_IMPLEMENTATION_TERMS.extend([
@@ -4747,7 +4961,7 @@ STRONG_TECHNICAL_DETAIL_TERMS.extend([
     "modernization", "modernisation", "fleet renewal", "fleet replacement",
     "life-cycle management services", "life cycle management services", "fire protection", "fire safety",
     "track renewal", "operations and maintenance centre", "operations and maintenance center",
-    "omc", "wheel lathe",
+    "omc", "wheel lathe", "axle counter", "axle counters",
 ])
 
 MEDIUM_TECHNICAL_DETAIL_TERMS.extend([
@@ -4838,7 +5052,9 @@ CANONICAL_TAG_PATTERNS: list[tuple[str, list[str]]] = [
     ("investigation", ["investigation", "inquiry", "untersuchung", "enquête", "investigación", "расследование", "調査", "조사", "調查", "调查"]),
     ("order", ["ordered", "order", "bestellen", "commande", "pedido", "заказ", "採購", "訂購"]),
     ("enter service", ["enter service", "entered service", "go into service", "inbetriebnahme", "mise en service", "puesta en servicio", "ввод", "投入營運", "投入运营"]),
-    ("modernization", ["modernization", "modernisation", "modernisierung", "modernización", "modernização", "modernizzazione", "модернизация", "現代化"]),
+    ("modernization", ["modernization", "modernisation", "modernize", "modernise", "modernized", "modernised", "modernizing", "modernising", "modernisierung", "modernización", "modernização", "modernizzazione", "модернизация", "現代化"]),
+    ("upgrade", ["upgrade", "upgraded", "upgrades", "renewal", "replacement", "升級", "更新", "汰換"]),
+    ("deployment", ["deploy", "deployed", "deployment", "rollout", "roll out", "導入", "部署"]),
     ("fire protection", ["fire protection", "fire safety", "brandschutz", "protection incendie", "protezione antincendio", "消防"]),
     ("contactless payment", ["contactless payment", "tap to pay", "scan to pay", "kontaktloses bezahlen", "paiement sans contact", "pago sin contacto", "pagamento sem contacto", "非接触決済", "非接觸支付"]),
     ("biometric payment", ["biometric payment", "biometric fare", "biometrische zahlung", "биометрическая оплата", "生物辨識支付"]),
@@ -4880,20 +5096,74 @@ def _candidate_selection_text(candidate: dict) -> str:
     return text
 
 
-def _technical_system_gate(candidate: dict) -> bool:
+def _candidate_analysis_fingerprint(candidate: dict) -> tuple:
+    return (
+        candidate.get("title", ""),
+        candidate.get("snippet", ""),
+        candidate.get("date", ""),
+        candidate.get("source", ""),
+        candidate.get("url", ""),
+        candidate.get("source_href", ""),
+        candidate.get("resolved_article_url", ""),
+        candidate.get("source_tier", ""),
+        candidate.get("source_quality", ""),
+        candidate.get("region", ""),
+        candidate.get("classification", ""),
+    )
+
+
+def _candidate_analysis_cache(candidate: dict) -> dict:
+    fingerprint = _candidate_analysis_fingerprint(candidate)
+    if candidate.get("_analysis_cache_fingerprint") != fingerprint:
+        candidate["_analysis_cache_fingerprint"] = fingerprint
+        candidate["_analysis_cache"] = {}
+    return candidate.setdefault("_analysis_cache", {})
+
+
+def _cached_candidate_bool(candidate: dict, key: str, compute) -> bool:
+    cache = _candidate_analysis_cache(candidate)
+    if key not in cache:
+        cache[key] = bool(compute(candidate))
+    return bool(cache[key])
+
+
+def _candidate_urban_rail_gate(candidate: dict) -> bool:
+    return _cached_candidate_bool(
+        candidate,
+        "urban_rail_gate",
+        lambda item: _is_urban_rail_candidate(_candidate_selection_text(item), item.get("source", "")),
+    )
+
+
+def _compute_technical_system_gate(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
-    return _contains_any_term(
+    has_known_system = _contains_any_term(
         text,
         CORE_METRO_TECHNICAL_TERMS
         + TECH_NEWS_REQUIRED_TERMS
         + STRONG_TECHNICAL_DETAIL_TERMS
         + MEDIUM_TECHNICAL_DETAIL_TERMS,
     )
+    if has_known_system:
+        return True
+    canonical_actions = set(_canonical_tags_from_text(text)).intersection({"enter service", "modernization", "upgrade", "deployment"})
+    title = candidate.get("title", "")
+    return bool(
+        canonical_actions
+        and _contains_any_term(title, ["tram", "streetcar", "light rail vehicle"])
+        and (_contains_any_term(title, ["urbanliner", "new tram", "alstom tram"]) or re.search(r"\b[A-Z][A-Za-z0-9-]+\s+tram\b", title))
+    )
 
 
-def _technical_action_gate(candidate: dict) -> bool:
+def _technical_system_gate(candidate: dict) -> bool:
+    return _cached_candidate_bool(candidate, "technical_system_gate", _compute_technical_system_gate)
+
+
+def _compute_technical_action_gate(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
     title = candidate.get("title", "")
+    if set(_canonical_tags_from_text(text)).intersection({"enter service", "modernization", "upgrade", "deployment"}):
+        return True
     if _contains_any_term(text, TECHNICAL_IMPLEMENTATION_TERMS + TITLE_TECHNICAL_ACTION_TERMS):
         return True
     return _trusted_source_title_technical_signal(candidate) or _contains_any_term(
@@ -4902,7 +5172,11 @@ def _technical_action_gate(candidate: dict) -> bool:
     )
 
 
-def _passes_technical_triad(candidate: dict) -> bool:
+def _technical_action_gate(candidate: dict) -> bool:
+    return _cached_candidate_bool(candidate, "technical_action_gate", _compute_technical_action_gate)
+
+
+def _compute_passes_technical_triad(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
     if _is_financial_market_candidate(candidate):
         return False
@@ -4915,14 +5189,18 @@ def _passes_technical_triad(candidate: dict) -> bool:
         CORE_METRO_TECHNICAL_TERMS + STRONG_TECHNICAL_DETAIL_TERMS + TECHNICAL_IMPLEMENTATION_TERMS,
     ):
         return False
-    if not _is_urban_rail_candidate(text, candidate.get("source", "")):
+    if not _candidate_urban_rail_gate(candidate):
         return False
     return _technical_system_gate(candidate) and _technical_action_gate(candidate)
 
 
-def _passes_major_accident_gate(candidate: dict) -> bool:
+def _passes_technical_triad(candidate: dict) -> bool:
+    return _cached_candidate_bool(candidate, "passes_technical_triad", _compute_passes_technical_triad)
+
+
+def _compute_passes_major_accident_gate(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
-    if not _is_urban_rail_candidate(text, candidate.get("source", "")):
+    if not _candidate_urban_rail_gate(candidate):
         return False
     if _contains_any_term(text, NON_ACCIDENT_CONTEXT_TERMS):
         return False
@@ -4954,9 +5232,13 @@ def _passes_major_accident_gate(candidate: dict) -> bool:
     return has_severity
 
 
-def _passes_operational_dispute_gate(candidate: dict) -> bool:
+def _passes_major_accident_gate(candidate: dict) -> bool:
+    return _cached_candidate_bool(candidate, "passes_major_accident_gate", _compute_passes_major_accident_gate)
+
+
+def _compute_passes_operational_dispute_gate(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
-    if not _is_urban_rail_candidate(text, candidate.get("source", "")):
+    if not _candidate_urban_rail_gate(candidate):
         return False
     if _contains_any_term(text, LOW_REPORT_VALUE_TERMS + LOW_QUALITY_CONTENT_TERMS):
         return False
@@ -4967,9 +5249,13 @@ def _passes_operational_dispute_gate(candidate: dict) -> bool:
     )
 
 
-def _passes_high_value_policy_gate(candidate: dict) -> bool:
+def _passes_operational_dispute_gate(candidate: dict) -> bool:
+    return _cached_candidate_bool(candidate, "passes_operational_dispute_gate", _compute_passes_operational_dispute_gate)
+
+
+def _compute_passes_high_value_policy_gate(candidate: dict) -> bool:
     text = _candidate_selection_text(candidate)
-    if not _is_urban_rail_candidate(text, candidate.get("source", "")):
+    if not _candidate_urban_rail_gate(candidate):
         return False
     if _passes_technical_triad(candidate) or _passes_major_accident_gate(candidate) or _passes_operational_dispute_gate(candidate):
         return False
@@ -4982,7 +5268,15 @@ def _passes_high_value_policy_gate(candidate: dict) -> bool:
     return _contains_any_term(text, HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS)
 
 
+def _passes_high_value_policy_gate(candidate: dict) -> bool:
+    return _cached_candidate_bool(candidate, "passes_high_value_policy_gate", _compute_passes_high_value_policy_gate)
+
+
 def evaluate_category_gates(candidate: dict) -> dict:
+    analysis_cache = _candidate_analysis_cache(candidate)
+    cached = analysis_cache.get("category_gate_payload")
+    if isinstance(cached, dict):
+        return dict(cached)
     text = _candidate_selection_text(candidate)
     canonical_tags = _canonical_tags_from_text(text)
     gates = {
@@ -5030,13 +5324,15 @@ def evaluate_category_gates(candidate: dict) -> dict:
     ]
     if primary_category == "excluded":
         reasons.setdefault("no_category_gate", "未通過重大事故、技術新知、營運爭議或營運政策 gate。")
-    return {
+    result = {
         "category_gates": gates,
         "category_gate_reasons": reasons,
         "canonical_tags": canonical_tags,
         "primary_category": primary_category,
         "alternative_category_flags": alternatives,
     }
+    analysis_cache["category_gate_payload"] = dict(result)
+    return result
 
 
 def _candidate_level(candidate: dict, score: int | None = None) -> str:
@@ -5270,7 +5566,7 @@ def build_candidate_flags(candidate: dict) -> list[str]:
     if _candidate_date_obj(candidate.get("date", "")):
         flags.append("date_detected")
 
-    if _is_urban_rail_candidate(text, candidate.get("source", "")):
+    if _candidate_urban_rail_gate(candidate):
         flags.append("urban_rail")
     if _technical_system_gate(candidate):
         flags.append("technical_or_system_detail")
@@ -5357,7 +5653,7 @@ def score_news_candidate(candidate: dict) -> dict:
         score -= 10
         reasons.append("Google News proxy unresolved original source -10")
 
-    if _is_urban_rail_candidate(text, candidate.get("source", "")):
+    if _candidate_urban_rail_gate(candidate):
         score += 15
         reasons.append("都市軌道明確 +15")
     else:
@@ -5450,7 +5746,7 @@ def score_news_candidate(candidate: dict) -> dict:
         "primary_category": primary_category,
         "alternative_category_flags": gate_info.get("alternative_category_flags", []),
         "candidate_level": _candidate_level(temp_candidate, score),
-        "urban_rail_gate": _is_urban_rail_candidate(text, candidate.get("source", "")),
+        "urban_rail_gate": _candidate_urban_rail_gate(candidate),
         "technical_triplet_status": "pass" if _passes_technical_triad(candidate) else "fail",
         "accident_severity_score": 80 if _passes_major_accident_gate(candidate) else (35 if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS) else 0),
     }
@@ -5469,8 +5765,9 @@ def _candidate_score_fingerprint(candidate: dict) -> tuple:
     )
 
 
-def annotate_candidate_for_scheme_d(candidate: dict, exclude_reason: str = "") -> dict:
+def annotate_candidate_for_scheme_d(candidate: dict, exclude_reason: str = "", profile_timings: dict | None = None) -> dict:
     enriched = dict(candidate)
+    scoring_started = time.perf_counter()
     score_fingerprint = _candidate_score_fingerprint(enriched)
     cached_score = (
         enriched.get("_score_cache")
@@ -5483,6 +5780,7 @@ def annotate_candidate_for_scheme_d(candidate: dict, exclude_reason: str = "") -
         score_payload = score_news_candidate(enriched)
         enriched["_score_cache"] = dict(score_payload)
         enriched["_score_cache_fingerprint"] = score_fingerprint
+    _profile_timing_add(profile_timings, "scoring", time.perf_counter() - scoring_started)
     enriched.update(score_payload)
     enriched["exclude_reason"] = exclude_reason
     enriched["final_exclude_reason"] = exclude_reason or enriched.get("preliminary_reject_reason", "")
@@ -5491,7 +5789,9 @@ def annotate_candidate_for_scheme_d(candidate: dict, exclude_reason: str = "") -
     enriched["search_query"] = enriched.get("search_query") or enriched.get("query", "")
     enriched["search_language"] = enriched.get("search_language") or _search_language_from_query(enriched.get("query", ""))
     enriched["source_domain_normalized"] = enriched.get("source_domain_normalized") or _normalize_source_domain(enriched.get("source_domain", ""))
+    fingerprint_started = time.perf_counter()
     enriched["event_fingerprint"] = build_event_fingerprint(enriched)
+    _profile_timing_add(profile_timings, "event_fingerprint", time.perf_counter() - fingerprint_started)
     enriched["duplicate_of"] = enriched.get("duplicate_of", "")
     enriched["selection_stage"] = enriched.get("selection_stage", "excluded" if exclude_reason else "candidate_pool")
     return enriched
@@ -5507,6 +5807,7 @@ def build_candidate_card(candidate: dict) -> dict:
         "search_family": candidate.get("search_family", ""),
         "search_query": candidate.get("search_query", candidate.get("query", "")),
         "search_language": candidate.get("search_language", ""),
+        "query_region": candidate.get("query_region", ""),
         "source_display": candidate.get("source_display", candidate.get("source", "")),
         "source_domain_raw": candidate.get("source_domain_raw", ""),
         "source_domain_normalized": candidate.get("source_domain_normalized", candidate.get("source_domain", "")),
@@ -5534,6 +5835,8 @@ def build_candidate_card(candidate: dict) -> dict:
         "score_reason": candidate.get("score_reason", ""),
         "candidate_flags": candidate.get("candidate_flags", []),
         "event_fingerprint": candidate.get("event_fingerprint", {}),
+        "supplemental_sources": candidate.get("supplemental_sources", []),
+        "event_source_merge_count": candidate.get("event_source_merge_count", 0),
         "duplicate_of": candidate.get("duplicate_of", ""),
         "selection_stage": candidate.get("selection_stage", ""),
         "final_exclude_reason": candidate.get("final_exclude_reason", ""),
@@ -5682,6 +5985,7 @@ OPERATOR_TEXT_KEYS = [
     ("mta", ["mta", "nyct"]),
     ("cta", ["cta"]),
     ("bart", ["bart"]),
+    ("bvg", ["bvg", "berliner verkehrsbetriebe"]),
     ("wiener-linien", ["wiener linien"]),
     ("copenhagen-metro", ["copenhagen metro"]),
     ("metro-madrid", ["metro de madrid", "madrid metro"]),
@@ -5701,6 +6005,9 @@ def _candidate_operator_key(candidate: dict) -> str:
             if host and _host_matches(host, domain):
                 return key
     text = _candidate_selection_text(candidate)
+    text_lower = text.casefold()
+    if "toronto subway" in text_lower and re.search(r"\bline\s*2\b", text_lower):
+        return "ttc"
     for key, terms in OPERATOR_TEXT_KEYS:
         if _contains_any_term(text, terms):
             return key
@@ -5726,6 +6033,12 @@ def _candidate_incident_type(candidate: dict) -> str:
 
 def _candidate_action_key(candidate: dict) -> str:
     text = _candidate_selection_text(candidate)
+    if _contains_any_term(text, ["signalling", "signaling", "train control", "號誌", "信號"]) and _contains_any_term(text, [
+        "signalling upgrade", "signaling upgrade", "digital signalling", "digital signaling",
+        "capacity increase", "increase capacity", "boost capacity", "modernise", "modernize",
+        "modernisation", "modernization", "號誌升級", "信號升級",
+    ]):
+        return "signalling_upgrade"
     action_terms = [
         ("accident", ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS),
         ("strike_or_dispute", DISPUTE_SIGNAL_TERMS),
@@ -5742,25 +6055,57 @@ def _candidate_action_key(candidate: dict) -> str:
     return "event"
 
 
+def _canonical_event_geo(candidate: dict) -> str:
+    specific = _candidate_specific_event_location(candidate)
+    region = _canonical_candidate_region(candidate)
+    country_keys = {
+        "美國": "united-states", "加拿大": "canada", "德國": "germany", "英國": "united-kingdom",
+        "法國": "france", "義大利": "italy", "新加坡": "singapore", "日本": "japan",
+        "韓國": "south-korea", "香港": "hong-kong", "澳洲": "australia", "瑞士": "switzerland",
+    }
+    city_country = {
+        "austin": "united-states", "washington": "united-states", "new york": "united-states",
+        "toronto": "canada", "vancouver": "canada", "berlin": "germany",
+        "berlin-adlershof": "germany", "northern-ireland": "united-kingdom",
+    }
+    if not specific:
+        specific = {
+            "ttc": "toronto",
+            "wmata": "washington",
+            "mta": "new york",
+            "bvg": "berlin",
+        }.get(_candidate_operator_key(candidate), "")
+    if specific:
+        country = city_country.get(specific) or country_keys.get(region, "")
+        return f"{country}/{specific}" if country else specific
+    return country_keys.get(region, str(region or "").casefold())
+
+
 def build_event_fingerprint(candidate: dict) -> dict:
+    analysis_cache = _candidate_analysis_cache(candidate)
+    cached = analysis_cache.get("event_fingerprint")
+    if isinstance(cached, dict):
+        return dict(cached)
     date_obj = _candidate_date_obj(candidate.get("date", ""))
     date_bucket = ""
     if date_obj:
         bucket_start = date_obj - datetime.timedelta(days=date_obj.toordinal() % 7)
         date_bucket = bucket_start.isoformat()
-    return {
+    result = {
         "operator_key": _candidate_operator_key(candidate),
-        "geo_key": _candidate_specific_event_location(candidate) or _candidate_event_location(candidate) or candidate.get("region", ""),
+        "geo_key": _canonical_event_geo(candidate),
         "asset_key": _candidate_system_theme(candidate),
         "action_key": _candidate_action_key(candidate),
         "category_key": candidate.get("classification") or candidate.get("primary_category") or candidate.get("preliminary_type", ""),
         "date_bucket": date_bucket,
     }
+    analysis_cache["event_fingerprint"] = dict(result)
+    return result
 
 
 EVENT_LOCATION_TERMS = [
     "tokyo", "osaka", "seoul", "singapore", "hong kong", "sydney", "melbourne",
-    "london", "paris", "berlin", "munich", "new york", "washington", "chicago",
+    "london", "paris", "berlin", "munich", "new york", "washington", "chicago", "austin",
     "toronto", "vancouver", "houston", "madrid", "barcelona", "amsterdam", "rotterdam",
     "basel", "zurich", "leipzig", "adlershof", "milan", "rome", "stockholm",
     "vienna", "copenhagen", "oslo", "northern ireland", "belfast",
@@ -5807,6 +6152,7 @@ PROJECT_STAGE_GROUPS = {
 def _candidate_specific_event_location(candidate: dict) -> str:
     text = _candidate_selection_text(candidate).casefold()
     priority_locations = [
+        ("austin", ["austin transit partnership", "austin light rail", "austin"]),
         ("berlin-adlershof", ["adlershof"]),
         ("basel", ["basel", "巴塞爾"]),
         ("leipzig", ["leipzig", "萊比錫"]),
@@ -5876,13 +6222,42 @@ def _duplicate_event_reason(candidate: dict, selected_item: dict) -> str:
 
 
 def _is_same_report_event(candidate: dict, selected_item: dict) -> bool:
-    if candidate.get("classification") != selected_item.get("classification"):
+    candidate_fp = build_event_fingerprint(candidate)
+    selected_fp = build_event_fingerprint(selected_item)
+    candidate_operator = candidate_fp.get("operator_key", "")
+    selected_operator = selected_fp.get("operator_key", "")
+    if candidate_operator and selected_operator and candidate_operator != selected_operator:
         return False
-    if candidate.get("region") and selected_item.get("region") and candidate.get("region") != selected_item.get("region"):
+    candidate_geo = candidate_fp.get("geo_key", "")
+    selected_geo = selected_fp.get("geo_key", "")
+    if candidate_geo and selected_geo and candidate_geo != selected_geo:
         return False
+    candidate_asset = candidate_fp.get("asset_key", "")
+    selected_asset = selected_fp.get("asset_key", "")
+    if candidate_asset and selected_asset and candidate_asset != selected_asset:
+        return False
+    candidate_lines = _dedupe_route_line_tokens(candidate)
+    selected_lines = _dedupe_route_line_tokens(selected_item)
+    if candidate_lines and selected_lines and candidate_lines.isdisjoint(selected_lines):
+        return False
+
+    is_accident = "重大事故" in {
+        candidate.get("classification"), selected_item.get("classification"),
+        candidate.get("primary_category"), selected_item.get("primary_category"),
+    }
+    date_close = _event_date_close(candidate, selected_item, days=7 if is_accident else 3)
+    if (
+        date_close
+        and candidate_geo
+        and candidate_geo == selected_geo
+        and candidate_asset
+        and candidate_asset == selected_asset
+        and candidate_fp.get("action_key") == selected_fp.get("action_key")
+        and (candidate_operator == selected_operator or not candidate_operator or not selected_operator)
+    ):
+        return True
+
     if _dedupe_titles_conflict_on_entities(candidate, selected_item):
-        return False
-    if _candidate_system_theme(candidate) != _candidate_system_theme(selected_item):
         return False
     candidate_location = _candidate_event_location(candidate)
     selected_location = _candidate_event_location(selected_item)
@@ -5891,14 +6266,13 @@ def _is_same_report_event(candidate: dict, selected_item: dict) -> bool:
         _event_similarity_text(candidate),
         _event_similarity_text(selected_item),
     ).ratio()
-    date_close = _event_date_close(candidate, selected_item, days=7 if candidate.get("classification") == "重大事故" else 3)
     candidate_specific_location = _candidate_specific_event_location(candidate)
     selected_specific_location = _candidate_specific_event_location(selected_item)
     same_specific_location = bool(candidate_specific_location and selected_specific_location and candidate_specific_location == selected_specific_location)
     if candidate_specific_location and selected_specific_location and candidate_specific_location != selected_specific_location:
         return False
     if int(lookback_int) in ADVANCED_LOOKBACK_OPTIONS and same_specific_location:
-        if candidate.get("classification") == "重大事故" and (date_close or similarity >= 0.70):
+        if is_accident and (date_close or similarity >= 0.70):
             return True
         if _is_project_series_candidate(candidate) and _is_project_series_candidate(selected_item) and _same_project_stage_or_unspecified(candidate, selected_item):
             return True
@@ -6076,12 +6450,60 @@ def _is_strict_technical_candidate(candidate: dict) -> bool:
     return _is_technical_news_selection_candidate(candidate)
 
 
+def _event_source_preference_key(candidate: dict) -> tuple:
+    return (
+        _source_tier_rank(candidate.get("source_tier", "C_media")),
+        _quality_rank(candidate.get("source_quality", "B")),
+        1 if "news.google.com" in _domain_from_url(_effective_source_url(candidate)) else 0,
+        -int(candidate.get("python_score", 0) or 0),
+    )
+
+
+def _supplemental_source_record(candidate: dict) -> dict:
+    return {
+        "title": candidate.get("title", ""),
+        "source_display": candidate.get("source_display") or candidate.get("source", ""),
+        "source_tier": candidate.get("source_tier", ""),
+        "url": _effective_source_url(candidate),
+    }
+
+
+def _merge_duplicate_event_sources(selected_item: dict, candidate: dict) -> bool:
+    incoming_is_preferred = _event_source_preference_key(candidate) < _event_source_preference_key(selected_item)
+    existing_copy = dict(selected_item)
+    primary = candidate if incoming_is_preferred else selected_item
+    supplement = existing_copy if incoming_is_preferred else candidate
+    supplemental_sources = list(primary.get("supplemental_sources", []) or [])
+    supplemental_sources.extend(supplement.get("supplemental_sources", []) or [])
+    supplemental_sources.append(_supplemental_source_record(supplement))
+    unique_sources: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for source_row in supplemental_sources:
+        key = (str(source_row.get("url", "") or ""), str(source_row.get("title", "") or ""))
+        if key not in seen:
+            seen.add(key)
+            unique_sources.append(source_row)
+    if incoming_is_preferred:
+        selection_state = {
+            key: existing_copy.get(key)
+            for key in ("include_in_report", "selected_reason", "selection_stage")
+            if key in existing_copy
+        }
+        selected_item.clear()
+        selected_item.update(candidate)
+        selected_item.update(selection_state)
+    selected_item["supplemental_sources"] = unique_sources
+    selected_item["event_source_merge_count"] = len(unique_sources)
+    return incoming_is_preferred
+
+
 def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict | None:
     while pool:
         candidate = min(pool, key=lambda item: _python_selection_dynamic_key(item, selected))
         pool.remove(candidate)
         duplicate_of = next((item for item in selected if _is_same_report_event(candidate, item)), None)
         if duplicate_of:
+            source_replaced = _merge_duplicate_event_sources(duplicate_of, candidate)
             candidate["duplicate_of"] = duplicate_of.get("id", "")
             candidate["selection_stage"] = "duplicate_suppressed"
             try:
@@ -6099,6 +6521,9 @@ def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict 
                     "duplicate_of_theme": _candidate_system_theme(duplicate_of),
                     "candidate_fingerprint": build_event_fingerprint(candidate),
                     "duplicate_of_fingerprint": build_event_fingerprint(duplicate_of),
+                    "kept_primary_source": duplicate_of.get("source_display") or duplicate_of.get("source", ""),
+                    "source_replaced_by_higher_priority": source_replaced,
+                    "supplemental_source_count": len(duplicate_of.get("supplemental_sources", []) or []),
                 })
             except Exception:
                 pass
@@ -6189,7 +6614,7 @@ def _is_b_level_technical_candidate(candidate: dict) -> bool:
         return False
     if not _has_source_reference(candidate):
         return False
-    if not _is_urban_rail_candidate(text, candidate.get("source", "")):
+    if not _candidate_urban_rail_gate(candidate):
         return False
     if not _passes_technical_triad(candidate):
         return False
@@ -6659,6 +7084,7 @@ def format_report_candidate(candidate: dict) -> str:
         "url": source_url,
         "snippet": _shorten(candidate.get("snippet", ""), REPORT_SNIPPET_CHARS),
         "source_domain": candidate.get("source_domain") or _domain_from_url(source_url) or _extract_domain_hint(source_url),
+        "supplemental_sources": candidate.get("supplemental_sources", []),
     }
     return json.dumps(prompt_item, ensure_ascii=False)
 
@@ -9702,7 +10128,6 @@ if generate_btn:
                 "model_candidate_count": len(model_candidates),
                 "source_count": len(combined_sources),
                 "ddgs_query_count": search_count,
-                "ddgs_zero_result_query_count": len(ddgs_zero_result_queries(LAST_DDGS_QUERY_STATUSES)),
                 "ddgs_general_only_query_count": len(ddgs_general_only_queries(LAST_DDGS_QUERY_STATUSES)),
                 "ddgs_search_summary": LAST_DDGS_SEARCH_SUMMARY,
                 **LAST_DDGS_SEARCH_SUMMARY,
@@ -9712,6 +10137,7 @@ if generate_btn:
                 "elapsed_seconds_rss": timings["elapsed_seconds_rss"],
                 "elapsed_seconds_ddgs": timings["elapsed_seconds_ddgs"],
                 "elapsed_seconds_candidate_pool": timings["elapsed_seconds_candidate_pool"],
+                "candidate_pool_timings": candidate_pool.get("candidate_pool_timings", {}),
                 "elapsed_seconds_journal": timings["elapsed_seconds_journal"],
                 "elapsed_seconds_selection": timings["elapsed_seconds_selection"],
                 "elapsed_seconds_python_selection": timings["elapsed_seconds_python_selection"],
@@ -9800,9 +10226,14 @@ if generate_btn:
                 "journal_summary_conclusion_chars": count_journal_summary_conclusion_chars(report_text),
                 "selection_debug": LAST_PYTHON_SELECTION_DEBUG,
                 "pipeline_debug_stats": pipeline_debug_stats,
+                "candidate_pool_timings": candidate_pool.get("candidate_pool_timings", {}),
                 "ddgs_query_statuses": LAST_DDGS_QUERY_STATUSES,
                 "ddgs_search_summary": LAST_DDGS_SEARCH_SUMMARY,
-                "ddgs_zero_result_queries": ddgs_zero_result_queries(LAST_DDGS_QUERY_STATUSES),
+                "ddgs_no_backend_result_queries": ddgs_queries_by_outcome(LAST_DDGS_QUERY_STATUSES, "no_backend_result"),
+                "ddgs_all_results_basic_excluded_queries": ddgs_queries_by_outcome(LAST_DDGS_QUERY_STATUSES, "all_results_basic_excluded"),
+                "ddgs_query_errors": ddgs_queries_by_outcome(LAST_DDGS_QUERY_STATUSES, "query_error"),
+                "ddgs_added_zero_queries": ddgs_queries_by_outcome(LAST_DDGS_QUERY_STATUSES, "added_zero"),
+                "ddgs_success_with_raw_queries": ddgs_queries_by_outcome(LAST_DDGS_QUERY_STATUSES, "success_with_raw"),
                 "ddgs_general_only_queries": ddgs_general_only_queries(LAST_DDGS_QUERY_STATUSES),
                 "prefetch_stats": candidate_pool.get("prefetch_stats", {}),
                 "top_excluded_valuable_candidates": pipeline_debug_stats.get("top_excluded_valuable_candidates", []),
@@ -9934,6 +10365,7 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
             "search_family": item.get("search_family", ""),
             "search_query": item.get("search_query", item.get("query", "")),
             "search_language": item.get("search_language", ""),
+            "query_region": item.get("query_region", ""),
             "source": item.get("source", ""),
             "source_display": item.get("source_display", ""),
             "source_domain_raw": item.get("source_domain_raw", ""),
@@ -10046,7 +10478,6 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "journal_count": latest_stats.get("journal_count", 0),
             "source_count": latest_stats.get("source_count", 0),
             "ddgs_query_count": latest_stats.get("ddgs_query_count", 0),
-            "ddgs_zero_result_query_count": latest_stats.get("ddgs_zero_result_query_count", len(debug_info.get("ddgs_zero_result_queries", []))),
             "ddgs_general_only_query_count": latest_stats.get("ddgs_general_only_query_count", len(debug_info.get("ddgs_general_only_queries", []))),
             "ddgs_search_summary": latest_stats.get("ddgs_search_summary", debug_info.get("ddgs_search_summary", {})),
             "planned_query_count": latest_stats.get("planned_query_count", debug_info.get("ddgs_search_summary", {}).get("planned_query_count", 0)),
@@ -10054,8 +10485,11 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "query_count_by_region": latest_stats.get("query_count_by_region", debug_info.get("ddgs_search_summary", {}).get("query_count_by_region", {})),
             "query_count_by_family": latest_stats.get("query_count_by_family", debug_info.get("ddgs_search_summary", {}).get("query_count_by_family", {})),
             "query_count_by_language": latest_stats.get("query_count_by_language", debug_info.get("ddgs_search_summary", {}).get("query_count_by_language", {})),
-            "zero_result_query_count": latest_stats.get("zero_result_query_count", debug_info.get("ddgs_search_summary", {}).get("zero_result_query_count", 0)),
-            "error_query_count": latest_stats.get("error_query_count", debug_info.get("ddgs_search_summary", {}).get("error_query_count", 0)),
+            "no_backend_result_count": latest_stats.get("no_backend_result_count", debug_info.get("ddgs_search_summary", {}).get("no_backend_result_count", 0)),
+            "all_results_basic_excluded_count": latest_stats.get("all_results_basic_excluded_count", debug_info.get("ddgs_search_summary", {}).get("all_results_basic_excluded_count", 0)),
+            "query_error_count": latest_stats.get("query_error_count", debug_info.get("ddgs_search_summary", {}).get("query_error_count", 0)),
+            "added_zero_count": latest_stats.get("added_zero_count", debug_info.get("ddgs_search_summary", {}).get("added_zero_count", 0)),
+            "success_with_raw_count": latest_stats.get("success_with_raw_count", debug_info.get("ddgs_search_summary", {}).get("success_with_raw_count", 0)),
             "rate_limited_query_count": latest_stats.get("rate_limited_query_count", debug_info.get("ddgs_search_summary", {}).get("rate_limited_query_count", 0)),
             "DDGS_added_to_raw_count": latest_stats.get("DDGS_added_to_raw_count", debug_info.get("ddgs_search_summary", {}).get("DDGS_added_to_raw_count", 0)),
             "candidate_card_limit": latest_stats.get("candidate_card_limit", 0),
@@ -10064,6 +10498,7 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "elapsed_seconds_rss": latest_stats.get("elapsed_seconds_rss", 0),
             "elapsed_seconds_ddgs": latest_stats.get("elapsed_seconds_ddgs", 0),
             "elapsed_seconds_candidate_pool": latest_stats.get("elapsed_seconds_candidate_pool", 0),
+            "candidate_pool_timings": latest_stats.get("candidate_pool_timings", debug_info.get("candidate_pool_timings", debug_info.get("pipeline_debug_stats", {}).get("candidate_pool_timings", {}))),
             "elapsed_seconds_journal": latest_stats.get("elapsed_seconds_journal", 0),
             "elapsed_seconds_selection": latest_stats.get("elapsed_seconds_selection", 0),
             "elapsed_seconds_python_selection": latest_stats.get("elapsed_seconds_python_selection", 0),
@@ -10131,9 +10566,14 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
         "dropped_selected_reasons": latest_stats.get("dropped_selected_reasons", debug_info.get("dropped_selected_reasons", [])),
         "selection_debug": debug_info.get("selection_debug", {}) if debug_info else {},
         "pipeline_debug_stats": debug_info.get("pipeline_debug_stats", {}) if debug_info else {},
+        "candidate_pool_timings": debug_info.get("candidate_pool_timings", debug_info.get("pipeline_debug_stats", {}).get("candidate_pool_timings", {})) if debug_info else {},
         "ddgs_query_statuses": debug_info.get("ddgs_query_statuses", []) if debug_info else [],
         "ddgs_search_summary": debug_info.get("ddgs_search_summary", latest_stats.get("ddgs_search_summary", {})) if debug_info else latest_stats.get("ddgs_search_summary", {}),
-        "ddgs_zero_result_queries": debug_info.get("ddgs_zero_result_queries", []) if debug_info else [],
+        "ddgs_no_backend_result_queries": debug_info.get("ddgs_no_backend_result_queries", []) if debug_info else [],
+        "ddgs_all_results_basic_excluded_queries": debug_info.get("ddgs_all_results_basic_excluded_queries", []) if debug_info else [],
+        "ddgs_query_errors": debug_info.get("ddgs_query_errors", []) if debug_info else [],
+        "ddgs_added_zero_queries": debug_info.get("ddgs_added_zero_queries", []) if debug_info else [],
+        "ddgs_success_with_raw_queries": debug_info.get("ddgs_success_with_raw_queries", []) if debug_info else [],
         "ddgs_general_only_queries": debug_info.get("ddgs_general_only_queries", []) if debug_info else [],
         "prefetch_stats": debug_info.get("prefetch_stats", debug_info.get("pipeline_debug_stats", {}).get("prefetch_stats", {})) if debug_info else {},
         "top_excluded_valuable_candidates": debug_info.get("top_excluded_valuable_candidates", debug_info.get("pipeline_debug_stats", {}).get("top_excluded_valuable_candidates", [])) if debug_info else [],
