@@ -3008,6 +3008,8 @@ def ddgs_general_only_queries(statuses: list[dict]) -> list[dict]:
 
 def _ddgs_exception_status(exc: Exception) -> str:
     message = str(exc).casefold()
+    if "no results found" in message or "no result found" in message:
+        return "zero_results"
     if "429" in message or "ratelimit" in message or "rate limit" in message:
         return "rate_limited_429"
     if "403" in message or "forbidden" in message:
@@ -3091,6 +3093,7 @@ def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -
     last_exception: Exception | None = None
     errors: list[str] = []
     received_response = False
+    zero_result_response = False
 
     for backend in ["auto", "bing"]:
         final_backend = backend
@@ -3145,14 +3148,20 @@ def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -
                     })
                 break
             except Exception as exc:
+                exception_status = _ddgs_exception_status(exc)
+                if exception_status == "zero_results":
+                    received_response = True
+                    zero_result_response = True
+                    last_exception = None
+                    break
                 last_exception = exc
                 errors.append(f"{backend} attempt {attempt}: {str(exc)[:220]}")
                 wait = attempt * 0.8 + random.uniform(0.2, 0.9)
                 time.sleep(wait)
-                if _ddgs_exception_status(exc) not in {"http_403", "rate_limited_429"}:
+                if exception_status not in {"http_403", "rate_limited_429"}:
                     break
 
-        if status_row["returned_count"] > 0:
+        if status_row["returned_count"] > 0 or zero_result_response:
             break
 
     status_row["basic_excluded_count"] = sum(status_row["excluded_counts_by_reason"].values())
@@ -4785,18 +4794,28 @@ ENGINEERING_MILESTONE_ONLY_TERMS = [
 ]
 
 SECURITY_OR_CRIME_TERMS = [
-    "knife", "stabbing", "fight", "assault", "pepper spray", "tear gas",
-    "irritant gas", "security incident", "police incident", "fare evasion",
-    "roadblock", "law enforcement", "刀具", "持刀", "刺傷", "鬥毆", "打架",
-    "刺激性氣體", "催淚氣體", "治安事件", "警方事件", "逃票", "道路路障", "執法案件",
+    "knife", "stabbing", "fight", "assault", "attack", "murder", "homicide",
+    "shooting", "pushed", "shoved", "pepper spray", "tear gas", "irritant gas",
+    "security incident", "police incident", "police investigation", "crime",
+    "passenger dispute", "fare evasion", "roadblock", "law enforcement",
+    "刀具", "持刀", "刺傷", "鬥毆", "打架", "攻擊", "謀殺", "兇殺", "槍擊",
+    "推落", "推下", "推擠", "刺激性氣體", "催淚氣體", "治安事件", "警方事件",
+    "警方調查", "刑事案件", "旅客糾紛", "逃票", "道路路障", "執法案件",
 ]
 
 MAJOR_SECURITY_RAIL_IMPACT_TERMS = [
-    "fatal", "killed", "death", "multiple injuries", "serious injuries",
+    "hit by train", "struck by train", "train collision", "train collided",
+    "train derailment", "train derailed", "track intrusion", "on the tracks",
+    "signal failure", "signalling failure", "signaling failure", "power failure",
+    "power outage", "train door", "platform screen door", "platform door",
+    "rail fire", "subway fire", "metro fire", "station fire", "train fire",
+    "derailment", "derailed", "collision", "collided", "evacuation", "evacuated",
     "service suspended", "service suspension", "major disruption", "station evacuated",
     "train evacuated", "emergency response", "security lockdown",
-    "死亡", "多人受傷", "重傷", "停駛", "營運中斷", "重大中斷",
-    "車站疏散", "列車疏散", "緊急應變", "封鎖車站",
+    "列車撞擊", "列車碰撞", "列車相撞", "列車出軌", "列車脫軌", "軌道侵入",
+    "號誌故障", "信號故障", "供電故障", "供電中斷", "車門", "月臺門", "月台門",
+    "火災", "出軌", "脫軌", "碰撞", "相撞", "疏散", "停駛", "營運中斷",
+    "重大中斷", "車站疏散", "列車疏散", "緊急應變", "封鎖車站",
 ]
 
 CORE_METRO_TECHNICAL_TERMS = [
@@ -7672,9 +7691,10 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 
 必要寫作提醒：
 - 只根據下方已入選新聞資料撰寫；正式報告只輸出已勾選章節，不得輸出未勾選類型。
-- 下方共 {len(selected_candidates)} 則新聞已由 Python 完成「入選」，所有新聞都必須保留，不得刪除、合併、替換或新增；每則新聞只能出現一次，正式報告新聞總數必須與已入選新聞資料一致。
+- 下方共 {len(selected_candidates)} 則新聞已由 Python 完成「入選」。所有不同且符合範圍的事件原則上均須保留。同一事件的不同來源必須合併；明顯屬於非都市軌道、刑事治安、旅遊、公車或其他禁止範圍的候選可排除。不得自行新增候選資料以外的事件。
+- 正式報告新聞數可因同一事件合併或明顯錯誤候選排除而小於入選數，不得因後處理或自行新增事件而大於本次入選數。
 - 候選資料中的 preliminary_type、classification、region、source_display 與 source_verb 均為程式初步判定，不是最終答案。請根據 title、snippet、date、source_domain 與 url 重新判斷新聞類型、事件所在地及來源性質。
-- 可在本次已勾選的新聞類型之間更正分類；不得因重新分類而遺漏任何入選新聞，也不得新增未勾選章節。
+- 可在本次已勾選的新聞類型之間更正分類；不同且符合範圍的事件原則上保留，同一事件必須合併，明顯錯誤候選可排除，且不得新增未勾選章節。
 
 新聞類型判斷原則：
 - 技術新知：原始資料明確描述都市軌道機電設備或系統的新導入、擴充、升級、汰換、改善、測試驗證或正式投入營運。包括新型車輛投入營運、生物辨識或 AFC 系統應用、新票閘設備、電梯或電扶梯汰換、號誌與列車控制、供電、通訊、月臺門、行控、機廠設備、維修監測、能源管理、系統整合、系統保證及資安等具體案例。
@@ -7695,8 +7715,9 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 - 發布／事件日期統一顯示為 YYYY-MM-DD，不得輸出 ISO 時間、時區或 `T00:00:00+00:00`。
 - 「事件摘要：」與「臺北捷運局啟示：」後方必須換行，摘要與啟示不得使用條列。
 - 事件摘要僅根據候選資料撰寫，重點為事件本身、都市軌道場景、涉及的機電系統或營運管理意義。原始資料未提供細節時應保守表述，不得自行補述數字、供應商、金額、GoA 等級、測試項目、車輛規格、事故原因或導入時程。
+- 資料不足時直接縮短摘要，不得於正文列舉技術規格、時程、測試內容或其他未提供項目。
 - 每則「臺北捷運局啟示」只選擇與該事件最直接相關的一至二項工程重點，不得每則同時羅列系統整合、資料治理、維修管理、資安、能源效率及風險控管。例如票閘設備著重 AFC 介面、容量與維修；電梯汰換著重設備生命週期、施工界面與無障礙服務；號誌事故著重故障隔離、備援與營運應變。
-- 資料來源請依 source_domain、source_display、date 與 url 表達；若有完整 URL，必須保留該 URL；若只有 domain，顯示 domain；若沒有完整 URL，寫「原始候選資料未提供完整 URL。」不得自行編造 URL。
+- 資料來源請依 source_domain、source_display、date 與 url 表達；連結依「原始文章 URL、Google News 文章 URL、domain」順序選用。若有完整 URL，必須保留該 URL；若只有 domain，顯示 domain；若沒有完整 URL，寫「原始候選資料未提供完整 URL。」不得自行編造 URL。
 - 不得在正式報告正文使用 MaiAgent、Python 初篩、developer debug、python_score、候選 flags、入選原因或其他模型處理語氣。
 - 請勿輸出「本期統計」、「報告產出時間」、搜尋次數、候選數量或任何系統執行資訊；這些內容將由程式後續統一產生。
 - 未啟用國際學術期刊時，正式報告正文結束於最後一則新聞；啟用期刊時，正文結束於「學術期刊綜合結論」。
@@ -7866,6 +7887,13 @@ def _extract_complete_url(text: str) -> str:
     return match.group(0).rstrip("。；;,，)")
 
 
+def _extract_complete_urls(text: str) -> list[str]:
+    return [
+        match.group(0).rstrip("。；;,，)")
+        for match in re.finditer(r"https?://[^\s\)\]）＞>，,；;。]+", text or "")
+    ]
+
+
 def _extract_domain_hint(text: str) -> str:
     text = text or ""
     url = _extract_complete_url(text)
@@ -7940,18 +7968,31 @@ def normalize_source_line(line: str) -> str:
         return line
     content = match.group(1).strip()
     date_text = _normalize_report_date_text(content)
-    url = _extract_complete_url(content)
+    urls = list(dict.fromkeys(_extract_complete_urls(content)))
+    original_article_url = next(
+        (
+            value for value in urls
+            if "news.google.com" not in _domain_from_url(value) and _is_article_level_url(value)
+        ),
+        "",
+    )
+    google_news_article_url = next(
+        (
+            value for value in urls
+            if "news.google.com" in _domain_from_url(value) and _is_article_level_url(value, allow_google_news=True)
+        ),
+        "",
+    )
+    url = original_article_url or google_news_article_url
+    content_without_urls = content
+    for value in urls:
+        content_without_urls = content_without_urls.replace(value, "")
+    domain_hint = _extract_domain_hint(content_without_urls)
+    if not url and urls:
+        url = urls[0]
     host = _domain_from_url(url)
-
-    if url and "news.google.com" in host:
-        url = ""
-        host = ""
-
-    domain = _extract_domain_hint(content.replace(url, "")) if not url else host
-    if domain == "news.google.com":
-        domain = ""
-    source_ref = url or domain
-    source_label = _clean_source_label(content, source_ref, domain or host)
+    source_ref = url or domain_hint
+    source_label = _clean_source_label(content, source_ref, domain_hint or host)
     url_text = source_ref or "原始候選資料未提供完整 URL。"
     parts = [source_label]
     if date_text and date_text != "日期未知":
@@ -8689,22 +8730,37 @@ def _journal_candidate_full_date(item: dict) -> str:
     return ""
 
 
-def _journal_candidate_date_for_text(text: str, journal_candidates: list[dict]) -> str:
-    haystack = text or ""
+def _normalize_doi_value(value: str) -> str:
+    match = re.search(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", value or "", flags=re.IGNORECASE)
+    return match.group(0).rstrip(".;,)").casefold() if match else ""
+
+
+def _journal_candidate_date_for_text(
+    text: str,
+    journal_candidates: list[dict],
+    report_title: str = "",
+) -> str:
+    report_urls = set(_extract_complete_urls(text or ""))
     for item in journal_candidates or []:
-        date_text = _journal_candidate_full_date(item)
-        if not date_text:
-            continue
-        for value in (item.get("url", ""), item.get("doi", "")):
-            value = str(value or "").strip()
-            if value and value in haystack:
-                return date_text
-        title_tokens = [
-            token for token in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]{5,}", item.get("title", "") or "")
-            if len(token) >= 5
-        ]
-        if title_tokens and sum(1 for token in title_tokens[:6] if token in haystack) >= 2:
-            return date_text
+        candidate_url = _extract_complete_url(str(item.get("url", "") or ""))
+        if candidate_url and candidate_url in report_urls:
+            return _journal_candidate_full_date(item)
+
+    report_dois = {
+        doi
+        for doi in (_normalize_doi_value(value) for value in [text or "", *_extract_complete_urls(text or "")])
+        if doi
+    }
+    for item in journal_candidates or []:
+        candidate_doi = _normalize_doi_value(str(item.get("doi", "") or item.get("url", "") or ""))
+        if candidate_doi and candidate_doi in report_dois:
+            return _journal_candidate_full_date(item)
+
+    normalized_report_title = _normalize_title(report_title)
+    if normalized_report_title:
+        for item in journal_candidates or []:
+            if normalized_report_title == _normalize_title(str(item.get("title", "") or "")):
+                return _journal_candidate_full_date(item)
     return ""
 
 
@@ -8723,73 +8779,36 @@ def repair_journal_dates_in_report(report_md: str, journal_candidates: list[dict
     section = report_md[heading_match.start():section_end]
     after = report_md[section_end:]
 
-    candidate_dates = [date for date in (_journal_candidate_full_date(item) for item in journal_candidates) if date]
-    date_index = 0
-    active_date = ""
+    item_matches = list(re.finditer(r"(?m)^\s*(?:#{1,6}\s*)?(\d+)[\.、]\s*(.+?)\s*$", section))
+    if not item_matches:
+        return report_md
+    conclusion_match = re.search(r"(?m)^#{0,6}\s*學術期刊綜合結論", section)
+    replacements: list[tuple[int, int, str]] = []
+    for index, item_match in enumerate(item_matches):
+        block_start = item_match.start()
+        if index + 1 < len(item_matches):
+            block_end = item_matches[index + 1].start()
+        elif conclusion_match and conclusion_match.start() > block_start:
+            block_end = conclusion_match.start()
+        else:
+            block_end = len(section)
+        block = section[block_start:block_end]
+        report_title = re.sub(r"\s{2,}$", "", item_match.group(2)).strip()
+        matched_date = _journal_candidate_date_for_text(block, journal_candidates, report_title)
+        if not matched_date:
+            continue
+        repaired_block = re.sub(
+            r"(?m)^(?P<prefix>\s*(?:\d+[\.、]\s*)?(?:[-*]\s*)?(?:•\s*)?發表日期\s*[：:]\s*).*$",
+            lambda match: f"{match.group('prefix')}{matched_date}",
+            block,
+            count=1,
+        )
+        replacements.append((block_start, block_end, repaired_block))
 
-    def _next_candidate_date() -> str:
-        nonlocal date_index
-        if date_index >= len(candidate_dates):
-            return ""
-        date_text = candidate_dates[date_index]
-        date_index += 1
-        return date_text
-
-    def _mark_candidate_date_used(date_text: str) -> None:
-        nonlocal date_index
-        while date_text and date_index < len(candidate_dates):
-            current = candidate_dates[date_index]
-            date_index += 1
-            if current == date_text:
-                break
-
-    def _replace_line_date(line_text: str, date_text: str) -> str:
-        if not date_text:
-            return line_text
-        if "發表日期" in line_text:
-            return re.sub(
-                r"^\s*(?:\d+[\.\、]\s*)?(?:[-*]\s*)?(?:•\s*)?發表日期.*$",
-                f"• 發表日期：{date_text}",
-                line_text,
-                count=1,
-            )
-        if "日期未知" in line_text:
-            return line_text.replace("日期未知", date_text, 1)
-        if re.search(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", line_text):
-            line_text = re.sub(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", date_text, line_text, count=1)
-            return re.sub(rf"({re.escape(date_text)})[，,\s]*(?:{re.escape(date_text)})", r"\1", line_text)
-        if re.search(r"20\d{2}年\s*\d{1,2}月\s*\d{1,2}日", line_text):
-            line_text = re.sub(r"20\d{2}年\s*\d{1,2}月\s*\d{1,2}日", date_text, line_text, count=1)
-            return re.sub(rf"({re.escape(date_text)})[，,\s]*(?:{re.escape(date_text)})", r"\1", line_text)
-        if re.match(r"^\s*(?:[-*]\s*)?(?:•\s*)?發表日期\s*[：:]\s*$", line_text):
-            return re.sub(r"([：:])\s*$", rf"\1{date_text}", line_text)
-        return line_text
-
-    repaired_lines: list[str] = []
-    for line in section.splitlines():
-        stripped = line.strip()
-        if stripped == "---" or stripped.startswith(("###", "🔹")):
-            active_date = ""
-
-        matched_date = _journal_candidate_date_for_text(line, journal_candidates)
-        if matched_date:
-            active_date = matched_date
-            _mark_candidate_date_used(matched_date)
-
-        if "發表日期" in line:
-            replacement_date = matched_date or active_date or _next_candidate_date()
-            if replacement_date:
-                line = _replace_line_date(line, replacement_date)
-                active_date = replacement_date
-        elif "資料來源" in line:
-            replacement_date = matched_date or active_date
-            if replacement_date and ("日期未知" in line or re.search(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", line)):
-                line = _replace_line_date(line, replacement_date)
-                active_date = replacement_date
-
-        repaired_lines.append(line)
-
-    return before + "\n".join(repaired_lines) + after
+    repaired_section = section
+    for block_start, block_end, repaired_block in reversed(replacements):
+        repaired_section = repaired_section[:block_start] + repaired_block + repaired_section[block_end:]
+    return before + repaired_section + after
 
 
 def _is_canonical_journal_section(section: str) -> bool:
@@ -8972,9 +8991,6 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
         return False
 
     def _repair_date_value(value: str, index: int) -> str:
-        candidate_date = _journal_candidate_full_date(_candidate_for_item(index))
-        if candidate_date:
-            return candidate_date
         value = (value or "").strip()
         match = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", value)
         if match:
@@ -9273,68 +9289,9 @@ def identify_dropped_selected_candidates(report_md: str, selected_candidates: li
     return dropped
 
 
-def _fallback_system_value_for_candidate(candidate: dict) -> str:
-    theme = _candidate_system_theme(candidate)
-    if theme and theme != "未分類":
-        return theme
-    classification = candidate.get("classification") or candidate.get("preliminary_type", "")
-    if classification == "重大事故":
-        return "營運安全、設備監測與應變管理"
-    if classification == "營運政策":
-        return "營運管理、旅客資訊與車站設備"
-    if classification == "營運爭議":
-        return "營運管理與風險溝通"
-    if classification == "規範更新":
-        return "規範、系統安全與驗證"
-    return "未明確載明機電系統"
-
-
-def _fallback_report_item_for_candidate(candidate: dict) -> str:
-    category = candidate.get("classification") or candidate.get("preliminary_type") or "技術新知"
-    title = formal_title_from_candidate(candidate)
-    date_text = _normalize_report_date_text(candidate.get("date", "")) if candidate.get("date") else "日期未知"
-    region = _candidate_region_display(candidate)
-    source_url = _effective_source_url(candidate)
-    source_display = candidate.get("source_display") or source_label_for_report(
-        candidate.get("source", ""), candidate.get("url", ""), candidate.get("source_href", ""), candidate.get("source_tier", "")
-    )
-    snippet = _short_formal_sentence(candidate.get("snippet", "") or candidate.get("title", ""), 260)
-    insight = _short_formal_sentence(
-        "本案由 Python 規則選題保守補回；後續可追蹤原始來源，確認其對系統整合、維修管理、營運安全或資料治理之具體影響。",
-        220,
-    )
-    return "\n".join([
-        f"🔹 [{category}] {title}",
-        "",
-        f"• 發布/事件日期：{date_text}",
-        "",
-        f"• 國家/地區：{region}",
-        "",
-        f"• 相關機電系統：{_fallback_system_value_for_candidate(candidate)}",
-        "",
-        "• 事件摘要：",
-        snippet,
-        "",
-        "• 臺北捷運局啟示：",
-        insight,
-        "",
-        normalize_source_line(f"• 資料來源：{source_display}，{date_text}，{source_url or candidate.get('source_domain', '')}"),
-        "",
-        "---",
-    ])
-
-
 def restore_missing_selected_report_items(report_md: str, selected_candidates: list[dict]) -> tuple[str, list[dict]]:
     dropped = identify_dropped_selected_candidates(report_md, selected_candidates)
-    if not dropped:
-        return report_md, []
-    additions = "\n\n".join(_fallback_report_item_for_candidate(candidate) for candidate in dropped)
-    match = re.search(r"(?m)^📊", report_md or "")
-    if match:
-        restored = report_md[:match.start()].rstrip() + "\n\n" + additions + "\n\n" + report_md[match.start():].lstrip()
-    else:
-        restored = (report_md or "").rstrip() + "\n\n" + additions
-    return normalize_report_statistics_line(normalize_final_report_md(restored)), dropped
+    return report_md, dropped
 
 
 def compact_report_line_for_pdf(line: str) -> str:
@@ -10051,6 +10008,7 @@ if generate_btn:
             report_prompt = build_report_prompt(selected_candidates, journal_candidates, search_count)
             stage_start = time.perf_counter()
             report_response = call_maiagent_cloud(report_prompt)
+            maiagent_report_response_count = count_report_items(report_response)
             timings["elapsed_seconds_report"] = round(time.perf_counter() - stage_start, 2)
             maiagent_call_count += 1
             progress_bar.progress(0.88)
@@ -10072,8 +10030,12 @@ if generate_btn:
             pdf_bytes = try_markdown_to_pdf_bytes(report_text)
             dropped_selected_ids = [int(item.get("id", 0) or 0) for item in dropped_selected_candidates]
             dropped_selected_titles = [item.get("title", "") for item in dropped_selected_candidates]
-            dropped_selected_reasons = ["MaiAgent 未輸出該 Python 入選候選，已由後處理補回。" for _ in dropped_selected_candidates]
+            dropped_selected_reasons = [
+                "MaiAgent 未輸出該 Python 入選候選；僅記錄 developer debug，未自動補回正式報告。"
+                for _ in dropped_selected_candidates
+            ]
             formal_count = count_report_items(report_text)
+            postprocess_news_count_delta = formal_count - maiagent_report_response_count
             category_counts = count_report_items_by_category(report_text)
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
                 re.search(r"(?m)^🔹\s*\[規範更新\]", report_text)
@@ -10120,6 +10082,9 @@ if generate_btn:
                 "filtered_count": candidate_pool["filtered_count"],
                 "ai_selected_count": len(selected_candidates),
                 "formal_count": formal_count,
+                "maiagent_report_response_count": maiagent_report_response_count,
+                "postprocess_news_count_delta": postprocess_news_count_delta,
+                "postprocess_news_count_invariant_passed": formal_count <= maiagent_report_response_count,
                 "prompt_chars": prompt_chars,
                 "raw_chars": raw_chars,
                 "maiagent_call_count": maiagent_call_count,
