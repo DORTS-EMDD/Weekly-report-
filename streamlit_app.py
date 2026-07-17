@@ -428,6 +428,10 @@ PDF_FONT_CANDIDATES = [
     ("linux_noto", Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")),
     ("linux_noto", Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc")),
     ("linux_noto", Path("/usr/share/fonts/truetype/noto/NotoSansTC-Regular.ttf")),
+    ("linux_wqy", Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc")),
+    ("linux_wqy", Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc")),
+    ("linux_fallback", Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf")),
+    ("linux_fallback", Path("/usr/share/fonts/truetype/arphic/uming.ttc")),
     ("windows", Path(r"C:\Windows\Fonts\msjh.ttc")),
     ("windows", Path(r"C:\Windows\Fonts\msjh.ttf")),
     ("windows", Path(r"C:\Windows\Fonts\msjhl.ttc")),
@@ -440,6 +444,59 @@ LAST_PDF_ERROR = ""
 
 class PdfFontUnavailableError(RuntimeError):
     pass
+
+
+def iter_pdf_font_candidates():
+    """Yield configured and discovered CJK fonts in deployment priority order."""
+    seen: set[str] = set()
+
+    def _yield(source: str, path: Path):
+        key = os.path.normcase(os.path.abspath(str(path)))
+        if key not in seen:
+            seen.add(key)
+            return source, path
+        return None
+
+    configured_path = os.environ.get("METRO_REPORT_PDF_FONT_PATH", "").strip()
+    if configured_path:
+        candidate = _yield("environment", Path(configured_path))
+        if candidate:
+            yield candidate
+
+    for source, path in PDF_FONT_CANDIDATES:
+        if source != "project":
+            continue
+        candidate = _yield(source, path)
+        if candidate:
+            yield candidate
+
+    project_fonts_dir = APP_DIR / "fonts"
+    if project_fonts_dir.is_dir():
+        for pattern in ("*.ttf", "*.ttc"):
+            for path in sorted(project_fonts_dir.rglob(pattern)):
+                candidate = _yield("project", path)
+                if candidate:
+                    yield candidate
+
+    for source, path in PDF_FONT_CANDIDATES:
+        if source == "project":
+            continue
+        candidate = _yield(source, path)
+        if candidate:
+            yield candidate
+
+    discovery_specs = (
+        ("linux_noto", Path("/usr/share/fonts"), "NotoSans*TC*.ttf"),
+        ("linux_wqy", Path("/usr/share/fonts"), "wqy-*.ttc"),
+        ("linux_fallback", Path("/usr/share/fonts"), "*Fallback*.ttf"),
+    )
+    for source, root, pattern in discovery_specs:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob(pattern)):
+            candidate = _yield(source, path)
+            if candidate:
+                yield candidate
 
 ADVANCED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議", "規範更新"]
 DEFAULT_SELECTED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議"]
@@ -9547,14 +9604,23 @@ def register_pdf_fonts() -> tuple[str, str]:
         pass
 
     attempted: list[str] = []
-    for source, font_path in PDF_FONT_CANDIDATES:
+    existing_count = 0
+    failure_details: list[str] = []
+    required_cjk_chars = "繁體中文捷運號誌"
+    for source, font_path in iter_pdf_font_candidates():
         path = str(font_path)
         attempted.append(path)
         if not font_path.exists():
             continue
-        for kwargs in ({"subfontIndex": 0}, {}):
+        existing_count += 1
+        for kwargs in ({"subfontIndex": 0}, {"subfontIndex": 1}, {}):
             try:
-                pdfmetrics.registerFont(TTFont(font_name, path, **kwargs))
+                font = TTFont(font_name, path, **kwargs)
+                char_map = getattr(font.face, "charToGlyph", {}) or {}
+                missing_chars = [char for char in required_cjk_chars if ord(char) not in char_map]
+                if missing_chars:
+                    raise ValueError(f"缺少繁體中文字形：{''.join(missing_chars)}")
+                pdfmetrics.registerFont(font)
                 LAST_PDF_FONT_INFO = {
                     "font_name": font_name,
                     "path": path,
@@ -9562,7 +9628,9 @@ def register_pdf_fonts() -> tuple[str, str]:
                     "embedded_required": "true",
                 }
                 return font_name, font_name
-            except Exception:
+            except Exception as exc:
+                if len(failure_details) < 6:
+                    failure_details.append(f"{font_path.name}: {exc}")
                 continue
 
     LAST_PDF_FONT_INFO = {
@@ -9570,11 +9638,16 @@ def register_pdf_fonts() -> tuple[str, str]:
         "path": "",
         "source": "missing",
         "embedded_required": "true",
+        "attempted_count": str(len(attempted)),
+        "existing_count": str(existing_count),
+        "failure_details": " | ".join(failure_details),
     }
     raise PdfFontUnavailableError(
-        "找不到可嵌入的繁體中文字型，PDF 未產生。請安裝 fonts-noto-cjk，"
-        "或將 NotoSansTC-Regular.ttf 放入程式 fonts 目錄。"
-        f" 已檢查 {len(attempted)} 個字型路徑。"
+        "找不到 ReportLab 可嵌入且含繁體中文字形的字型，PDF 未產生。"
+        "Linux 請確認 packages.txt 已安裝 fonts-wqy-zenhei；"
+        "也可將可嵌入的 CJK TrueType 字型放入程式 fonts 目錄，"
+        "或以 METRO_REPORT_PDF_FONT_PATH 指定完整路徑。"
+        f" 已檢查 {len(attempted)} 個候選，其中 {existing_count} 個檔案存在。"
     )
 
 
