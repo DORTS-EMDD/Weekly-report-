@@ -438,9 +438,10 @@ EMPTY_TEXT_BY_TYPE = {
 }
 MIN_REPORT_ITEMS = 3
 MAX_ITEMS_PER_SOURCE = 25
-DDGS_MAX_RESULTS = 25
 DDGS_RESULTS_PER_QUERY = 8
 DDGS_QUERY_CHAR_LIMIT = 180
+DDGS_GLOBAL_QUERY_LIMIT = 40
+DDGS_REGIONAL_QUERY_LIMIT = 60
 PREFETCH_TIMEOUT_SECONDS = 4
 PREFETCH_MAX_CHARS = 6000
 PREFETCH_LIMIT_BY_PERIOD = {
@@ -510,13 +511,13 @@ REGION_SEARCH_TERMS = {
     "荷蘭": "Netherlands Amsterdam metro Rotterdam metro",
     "瑞士": "Switzerland Zurich tram Lausanne metro",
     "澳洲": "Australia Sydney Metro Melbourne Metro Brisbane Metro light rail",
-    "義大利": "Italy Milan Metro Rome Metro Turin tram light rail",
+    "義大利": "Italy metro metropolitana tram light rail",
     "瑞典": "Sweden Stockholm metro Gothenburg tram light rail",
     "奧地利": "Austria Vienna U-Bahn Wiener Linien tram metro",
     "丹麥": "Denmark Copenhagen Metro light rail",
     "挪威": "Norway Oslo Metro tram light rail",
     "俄羅斯": "Russia Moscow Metro tram metro rolling stock signalling",
-    "葡萄牙": "Portugal Lisbon Metro Porto Metro tram funicular",
+    "葡萄牙": "Portugal metro metropolitana tram funicular",
     "巴西": "Brazil Sao Paulo Metro Rio Metro metro tram",
     "印度": "India Delhi Metro Mumbai Metro Bengaluru Metro metro rail",
 }
@@ -652,118 +653,52 @@ NON_URBAN_HARD_EXCLUDE_TERMS = [
     if term not in {"passenger rail", "railway contract", "railway contracts", "railway procurement"}
 ]
 
-NON_URBAN_QUERY_EXCLUSIONS = (
-    '-"high-speed rail" -"high speed rail" -HSR -Shinkansen -"bullet train" '
-    '-intercity -"regional rail" -"commuter rail" -freight -locomotive '
-    '-Amtrak -Korail -RegioJet -bus -coach -highway'
-)
-
-TECH_PRECISION_QUERIES = [
-    '("metro" OR subway OR MRT OR LRT OR tram) '
-    '("contactless payment" OR "tap to pay" OR "scan to pay" OR "open-loop payment" OR AFC OR validator OR "fare gate" OR "biometric payment") '
-    '(rollout OR deployment OR upgrade OR expansion OR launch) -bus -retail -promotion -campaign -airport',
-    '("metro" OR subway OR MRT OR LRT OR tram OR U-Bahn) '
-    '("new train" OR "train cars" OR "rolling stock" OR "light rail vehicle" OR LRV OR "metro cars") '
-    '(delivered OR unveiled OR ordered OR rollout OR "enter service" OR commissioned) -museum -tour -model -heritage',
-    '("metro" OR subway OR MRT OR U-Bahn) '
-    '(signalling OR signaling OR CBTC OR ATO OR ATP OR ATS OR "train control") '
-    '(upgrade OR modernization OR modernisation OR migration OR testing OR commissioning)',
-    '("metro" OR subway OR tram) '
-    '("life-cycle management" OR "life cycle management" OR "asset management" OR overhaul OR "predictive maintenance" OR "condition monitoring") '
-    '(fleet OR depot OR equipment OR maintenance)',
-    '("subway station" OR "metro station" OR MRT OR U-Bahn) '
-    '("fire protection" OR "fire safety" OR ventilation OR elevator OR escalator OR accessibility) '
-    '("design services" OR tender OR upgrade OR replacement)',
-    '(tram OR streetcar OR LRT OR metro) '
-    '("track renewal" OR "track lubrication" OR "lubricator replacement" OR depot OR OMC OR "maintenance centre" OR "maintenance center") '
-    '(work OR replacement OR overhaul OR upgrade)',
-]
-
-ACCIDENT_PRECISION_QUERY = (
-    '("metro" OR subway OR MRT OR LRT OR tram OR streetcar OR funicular OR U-Bahn OR métro) '
-    '(derailment OR collision OR fire OR smoke OR evacuation OR fatal OR killed OR injured OR shutdown '
-    'OR "signalling failure" OR "signaling failure" OR "power failure" OR "brake failure") '
-    '(investigation OR inquiry OR suspension OR disruption OR regulator OR safety) '
-    '-crime -shooting -stabbing -theft -assault -bus'
-)
-
-POLICY_PRECISION_QUERY = (
-    '("metro" OR MRT OR subway OR tram OR LRT) '
-    '("line opening" OR "opening date" OR "service restructuring" OR "closure for works" OR "fare reform" '
-    'OR "operating hours" OR "line extension" OR "capacity increase" OR "system renewal") '
-    '-tourism -guide -festival -weekend -promotion -campaign'
-)
-
-DISPUTE_PRECISION_QUERY = (
-    '("metro" OR subway OR MRT OR LRT OR tram) '
-    '(strike OR "union dispute" OR lawsuit OR "procurement dispute" OR "contract dispute" '
-    'OR "cost overrun" OR protest OR arbitration) '
-    '(service OR project OR contract OR delay OR construction)'
-)
-
-GLOBAL_MULTILINGUAL_TECH_QUERIES = [
-    ('de', '(U-Bahn OR Stadtbahn OR Straßenbahn) (CBTC OR Signaltechnik OR Fahrzeuge OR Brandschutz OR "kontaktloses Bezahlen") (Modernisierung OR bestellt OR Inbetriebnahme OR Ausschreibung) -Bus'),
-    ('fr', '(métro OR tramway) (signalisation OR "matériel roulant" OR "protection incendie" OR "paiement sans contact") (modernisation OR commande OR "mise en service" OR appel d\'offres) -bus'),
-    ('es', '(metro OR tranvía OR "tren ligero") (señalización OR "material rodante" OR "pago sin contacto") (modernización OR pedido OR "puesta en servicio" OR licitación) -autobús'),
-    ('ru', '(метро OR трамвай) (сигнализация OR вагоны OR "биометрическая оплата" OR модернизация) (заказ OR ввод OR испытания OR тендер) -автобус'),
-    ('pt-it', '(metro OR metropolitana OR eléctrico OR tram) ("material circulante" OR segnalamento OR señalización OR "pagamento sem contacto" OR "protezione antincendio") (modernização OR modernizzazione OR encomenda OR ordine OR "entrada em serviço") -bus'),
-]
-
-GLOBAL_MULTILINGUAL_ACCIDENT_QUERIES = [
-    ('de', '(U-Bahn OR Straßenbahn OR Stadtbahn) (Entgleisung OR Kollision OR Brand OR Evakuierung OR Tote OR Verletzte OR "Betrieb eingestellt" OR Untersuchung) -Bus'),
-    ('fr', '(métro OR tramway OR funiculaire) (déraillement OR collision OR incendie OR évacuation OR morts OR blessés OR interruption OR enquête) -bus'),
-    ('es', '(metro OR tranvía OR funicular) (descarrilamiento OR colisión OR incendio OR evacuación OR muertos OR heridos OR suspensión OR investigación) -autobús'),
-    ('ru', '(метро OR трамвай OR фуникулер) ("сход с рельсов" OR столкновение OR пожар OR эвакуация OR погиб OR пострадал OR "остановка движения" OR расследование) -автобус'),
-    ('ja', '(地下鉄 OR メトロ OR 路面電車 OR トラム) (脱線 OR 衝突 OR 火災 OR 避難 OR 死亡 OR 負傷 OR 運休 OR 調査) -バス -新幹線'),
-    ('ko', '(지하철 OR 도시철도 OR 경전철 OR 트램) (탈선 OR 충돌 OR 화재 OR 대피 OR 사망 OR 부상 OR 운행중단 OR 조사) -버스'),
-    ('zh', '(地鐵 OR 地铁 OR 捷運 OR 輕軌 OR 轻轨 OR 有軌電車 OR 有轨电车) (脫軌 OR 脱轨 OR 碰撞 OR 火災 OR 火灾 OR 疏散 OR 死亡 OR 受傷 OR 受伤 OR 停駛 OR 停驶 OR 調查 OR 调查) -公車 -巴士'),
-]
-
-OFFICIAL_INVESTIGATION_SITE_QUERIES = [
-    'site:ntsb.gov (subway OR metro OR light rail OR streetcar OR transit) (derailment OR collision OR fire OR investigation)',
-    'site:tsb.gc.ca (metro OR subway OR light rail OR streetcar OR transit) (derailment OR collision OR fire OR investigation)',
-    'site:atsb.gov.au (metro OR tram OR light rail) (derailment OR collision OR fire OR investigation)',
-    'site:bea-tt.developpement-durable.gouv.fr (métro OR tramway OR funiculaire) (déraillement OR collision OR incendie OR enquête)',
-    'site:gov.uk/raib (tram OR metro OR light rail OR funicular) (derailment OR collision OR fire OR investigation)',
-]
-
 LAST_DDGS_QUERY_METADATA: dict[str, dict] = {}
 LAST_DDGS_QUERY_STATUSES: list[dict] = []
+LAST_DDGS_SEARCH_SUMMARY: dict = {}
 
 SEARCH_QUERY_SPECS = [
     {"family": "technology", "lang": "en", "query": "metro subway MRT LRT tram CBTC signalling upgrade commissioning"},
     {"family": "technology", "lang": "en", "query": "metro subway LRT tram rolling stock new trains ordered delivered"},
     {"family": "technology", "lang": "en", "query": "metro subway tram contactless payment AFC fare gates rollout"},
     {"family": "technology", "lang": "de", "query": "U-Bahn Stadtbahn Strassenbahn Signaltechnik Fahrzeuge Modernisierung"},
-    {"family": "technology", "lang": "fr", "query": "metro tramway signalisation materiel roulant modernisation"},
-    {"family": "technology", "lang": "es", "query": "metro tranvia tren ligero senalizacion material rodante modernizacion"},
-    {"family": "technology", "lang": "it", "query": "metropolitana tram segnalamento materiale rotabile modernizzazione Milano"},
-    {"family": "technology", "lang": "pt", "query": "metro eletrico material circulante sinalizacao modernizacao Lisboa"},
+    {"family": "technology", "lang": "fr", "query": "métro tramway signalisation matériel roulant modernisation"},
+    {"family": "technology", "lang": "es", "query": "metro tranvía tren ligero señalización material rodante modernización"},
+    {"family": "technology", "lang": "it", "query": "metro metropolitana tram segnalamento materiale rotabile modernizzazione"},
+    {"family": "technology", "lang": "pt", "query": "metro metropolitana tram funicular sinalização material circulante modernização"},
     {"family": "technology", "lang": "ru", "query": "метро трамвай сигнализация вагоны модернизация"},
+    {"family": "technology", "lang": "ja", "query": "地下鉄 メトロ 路面電車 信号 車両 自動運転 更新 導入"},
+    {"family": "technology", "lang": "ko", "query": "지하철 도시철도 경전철 신호 차량 자동운전 현대화 도입"},
+    {"family": "technology", "lang": "zh", "query": "地鐵 地铁 捷運 輕軌 轻轨 信號 信号 車輛 车辆 自動化 自动化 更新"},
     {"family": "major_accident", "lang": "en", "query": "metro subway LRT tram derailment collision fire evacuation investigation"},
     {"family": "major_accident", "lang": "en", "query": "funicular tram metro fatal injured shutdown safety investigation"},
-    {"family": "major_accident", "lang": "pt", "query": "metro eletrico funicular descarrilamento colisao incendio investigacao Lisboa"},
-    {"family": "major_accident", "lang": "it", "query": "metropolitana tram funicolare deragliamento collisione incendio indagine Milano"},
+    {"family": "major_accident", "lang": "pt", "query": "metro metropolitana tram funicular descarrilamento colisão incêndio investigação"},
+    {"family": "major_accident", "lang": "it", "query": "metro metropolitana tram funicular deragliamento collisione incendio indagine"},
     {"family": "major_accident", "lang": "ru", "query": "метро трамвай фуникулер сход с рельсов столкновение пожар расследование"},
-    {"family": "major_accident", "lang": "fr", "query": "metro tramway funiculaire deraillement collision incendie enquete"},
-    {"family": "major_accident", "lang": "es", "query": "metro tranvia funicular descarrilamiento colision incendio investigacion"},
+    {"family": "major_accident", "lang": "fr", "query": "métro tramway funiculaire déraillement collision incendie enquête"},
+    {"family": "major_accident", "lang": "es", "query": "metro tranvía funicular descarrilamiento colisión incendio investigación"},
+    {"family": "major_accident", "lang": "ja", "query": "地下鉄 メトロ 路面電車 トラム 脱線 衝突 火災 避難 調査"},
+    {"family": "major_accident", "lang": "ko", "query": "지하철 도시철도 경전철 트램 탈선 충돌 화재 대피 조사"},
+    {"family": "major_accident", "lang": "zh", "query": "地鐵 地铁 捷運 輕軌 轻轨 脫軌 脱轨 碰撞 火災 火灾 調查 调查"},
     {"family": "policy", "lang": "en", "query": "metro subway tram line opening fare reform operating hours service change"},
     {"family": "policy", "lang": "en", "query": "metro subway LRT line extension capacity increase closure works"},
     {"family": "policy", "lang": "de", "query": "U-Bahn Stadtbahn Fahrplan Betriebszeiten Tarife Eroeffnung"},
-    {"family": "policy", "lang": "fr", "query": "metro tramway ouverture ligne tarif horaires travaux"},
-    {"family": "policy", "lang": "it", "query": "metropolitana tram apertura linea tariffe orari lavori Milano"},
-    {"family": "policy", "lang": "pt", "query": "metro Lisboa eletrico abertura linha tarifas horarios obras"},
+    {"family": "policy", "lang": "fr", "query": "métro tramway ouverture ligne tarif horaires travaux"},
+    {"family": "policy", "lang": "it", "query": "metro metropolitana tram apertura linea tariffe orari lavori"},
+    {"family": "policy", "lang": "pt", "query": "metro metropolitana tram abertura linha tarifas horários obras"},
     {"family": "dispute", "lang": "en", "query": "metro subway tram strike union lawsuit procurement dispute delay cost overrun"},
     {"family": "dispute", "lang": "en", "query": "light rail metro contract dispute arbitration protest service disruption"},
-    {"family": "dispute", "lang": "it", "query": "metropolitana tram sciopero contenzioso appalto ritardo Milano"},
-    {"family": "dispute", "lang": "pt", "query": "metro Lisboa eletrico greve disputa contrato atraso"},
+    {"family": "dispute", "lang": "it", "query": "metro metropolitana tram sciopero contenzioso appalto ritardo"},
+    {"family": "dispute", "lang": "pt", "query": "metro metropolitana tram greve disputa contrato atraso"},
     {"family": "dispute", "lang": "ru", "query": "метро трамвай забастовка спор контракт задержка"},
-    {"family": "official_investigation", "lang": "en", "query": "site:ntsb.gov subway metro light rail streetcar derailment collision fire investigation", "use_news": False},
-    {"family": "official_investigation", "lang": "en", "query": "site:tsb.gc.ca metro subway light rail streetcar derailment collision investigation", "use_news": False},
-    {"family": "official_investigation", "lang": "en", "query": "site:atsb.gov.au metro tram light rail derailment collision fire investigation", "use_news": False},
-    {"family": "official_investigation", "lang": "fr", "query": "site:bea-tt.developpement-durable.gouv.fr metro tramway funiculaire deraillement enquete", "use_news": False},
-    {"family": "official_investigation", "lang": "en", "query": "site:gov.uk/raib tram metro light rail funicular derailment collision fire investigation", "use_news": False},
+    {"family": "official_investigation", "lang": "en", "query": "urban rail metro tram derailment collision fire official investigation safety board", "use_news": False},
 ]
+
+REGION_QUERY_LANGUAGES = {
+    "日本": "ja", "韓國": "ko", "香港": "zh", "法國": "fr", "德國": "de",
+    "西班牙": "es", "義大利": "it", "葡萄牙": "pt", "俄羅斯": "ru",
+    "加拿大": "en", "瑞士": "de", "奧地利": "de", "巴西": "pt",
+}
 
 QUERY_FAMILY_BY_TYPE_INDEX = {
     0: "technology",
@@ -780,7 +715,8 @@ SEARCH_LANGUAGE_MARKERS = [
     ("de", ["u-bahn", "stadtbahn", "straßenbahn", "entgleisung", "brandschutz"]),
     ("fr", ["métro", "tramway", "déraillement", "évacuation", "enquête"]),
     ("es", ["tranvía", "descarrilamiento", "colisión", "investigación"]),
-    ("pt-it", ["metropolitana", "eléctrico", "pagamento", "segnalamento"]),
+    ("it", ["metropolitana", "sciopero", "funicolare", "segnalamento", "deragliamento"]),
+    ("pt", ["eletrico", "elétrico", "greve", "investigacao", "investigação", "sinalizacao", "sinalização", "descarrilamento"]),
 ]
 
 AIRPORT_PEOPLE_MOVER_EXCLUDE_TERMS = [
@@ -1736,7 +1672,7 @@ REGION_NEWS_QUERIES: dict[str, list[tuple[str, str, str, str, str]]] = {
     "加拿大": [("Google News地區代理－Canada Metro",
               "(TTC subway OR SkyTrain Vancouver OR REM Montreal OR light rail) -bus -coach -highway", "en-CA", "CA", "en")],
     "義大利": [("Google News地區代理－Italy Metro/Tram",
-              "(Milan Metro OR Rome Metro OR tram OR metropolitana)", "it", "IT", "it")],
+              "(metro OR metropolitana OR tram OR ferrovia urbana)", "it", "IT", "it")],
     "瑞典": [("Google News地區代理－Sweden Metro/Tram",
              "(Stockholm metro OR Gothenburg tram OR light rail)", "sv", "SE", "sv")],
     "奧地利": [("Google News地區代理－Austria U-Bahn/Tram",
@@ -2663,7 +2599,7 @@ def fetch_rss_feeds(
 
     for idx, (source_name, url) in enumerate(sources, 1):
         if status_text:
-            status_text.text(f"📡 RSS {idx}/{len(sources)}：{clean_source_name_for_ui(source_name)}...")
+            status_text.text("正在蒐集國際捷運新聞")
 
         method = _method_for_url(url)
         if _is_known_bad_official_rss(source_name, url):
@@ -2728,28 +2664,6 @@ def fetch_rss_feeds(
     return raw_text
 
 
-# ═══════════════════════════════════════════════════════
-#  精簡化 DDGS 關鍵字搜尋 (加速優化版)
-# ═══════════════════════════════════════════════════════
-def _fast_query_bucket(query: str) -> str:
-    metadata = LAST_DDGS_QUERY_METADATA.get(query or "")
-    if metadata:
-        query_hash = hashlib.sha1((query or "").encode("utf-8")).hexdigest()[:8]
-        return f"{metadata.get('family', 'general')}:{metadata.get('lang', 'en')}:{query_hash}"
-    q = (query or "").casefold()
-    if any(standard.casefold() in q for standards in STANDARDS_WATCHLIST.values() for standard in standards):
-        return "standards"
-    if any(term in q for term in ("derailment", "collision", "incident", "fire", "suspended", "accident")):
-        return "incident"
-    if any(term in q for term in ("strike", "controversy", "dispute", "protest", "budget overrun")):
-        return "controversy"
-    if any(term in q for term in ("policy", "fare", "accessibility", "ridership", "frequency", "regulation")):
-        return "policy"
-    if any(term in q for term in ("cbtc", "signalling", "signaling", "rolling stock", "driverless", "power", "depot", "automation")):
-        return "technology"
-    return "general"
-
-
 def _search_language_from_query(query: str) -> str:
     metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {}
     if metadata.get("lang"):
@@ -2758,9 +2672,9 @@ def _search_language_from_query(query: str) -> str:
     q_lower = q.casefold()
     if any(marker in q for marker in ("метро", "трамвай", "фуникулер", "забастовка")):
         return "ru"
-    if any(marker in q_lower for marker in ("lisboa", "eletrico", "greve", "investigacao", "sinalizacao")):
+    if any(marker in q_lower for marker in ("eletrico", "elétrico", "greve", "investigacao", "investigação", "sinalizacao", "sinalização", "descarrilamento")):
         return "pt"
-    if any(marker in q_lower for marker in ("milano", "metropolitana", "sciopero", "funicolare", "segnalamento")):
+    if any(marker in q_lower for marker in ("sciopero", "funicolare", "segnalamento", "deragliamento", "collisione")):
         return "it"
     for language, markers in SEARCH_LANGUAGE_MARKERS:
         if any(marker.casefold() in q_lower for marker in markers):
@@ -2773,7 +2687,7 @@ def _search_family_from_query(query: str) -> str:
     if metadata.get("family"):
         return metadata["family"]
     q = (query or "").casefold()
-    if any(term in q for term in ("deragliamento", "descarrilamento", "colisao", "incendio", "расследование", "сход с рельсов", "столкновение")):
+    if any(term in q for term in ("deragliamento", "descarrilamento", "colisao", "colisão", "collisione", "incendio", "incêndio", "расследование", "сход с рельсов", "столкновение")):
         return "major_accident"
     if any(term in q for term in ("sciopero", "greve", "забастовка", "procurement dispute", "contract dispute", "cost overrun", "arbitration")):
         return "dispute"
@@ -2818,11 +2732,19 @@ def _compact_query(query: str, limit: int = DDGS_QUERY_CHAR_LIMIT) -> str:
     return " ".join(kept).strip() or q[:limit].rstrip()
 
 
+def _ddgs_timelimit_for_lookback(days: int) -> str:
+    if int(days) <= 7:
+        return "w"
+    if int(days) <= 31:
+        return "m"
+    return "y"
+
+
 def _query_with_period(query: str) -> str:
     q = query.strip()
-    if lookback_int <= 31:
-        return _compact_query(f"{q} {today:%B %Y}")
-    return _compact_query(f"{q} {today:%Y}")
+    if lookback_int > 31:
+        q = f"{q} {today:%Y}"
+    return _compact_query(q)
 
 
 def _active_query_specs(family: str) -> list[dict]:
@@ -2840,53 +2762,52 @@ def _selected_query_families() -> list[str]:
 
 
 def _query_metadata_for(query: str) -> dict:
-    metadata = LAST_DDGS_QUERY_METADATA.get(query or "")
+    metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {}
     if metadata:
         return metadata
     return {
         "family": _search_family_from_query(query),
         "lang": _search_language_from_query(query),
+        "query_region": "unplanned",
         "use_news": True,
+        "timelimit": _ddgs_timelimit_for_lookback(lookback_int),
+        "requested_max_results": DDGS_RESULTS_PER_QUERY,
     }
 
 
-def limit_fast_search_queries(queries: list[str], news_query_indices: set[int]) -> tuple[list[str], set[int]]:
-    max_queries = 14 if not is_global_scope else (34 if lookback_int in ADVANCED_LOOKBACK_OPTIONS else 28)
-    selected_pairs: list[tuple[int, str]] = []
-    seen_buckets: set[str] = set()
+def _regional_query_spec_sequence(families: list[str], preferred_lang: str) -> list[dict]:
+    selected_specs: list[dict] = []
+    selected_ids: set[int] = set()
 
-    for original_idx, query in enumerate(queries, 1):
-        bucket = _fast_query_bucket(query)
-        if bucket in seen_buckets:
-            continue
-        seen_buckets.add(bucket)
-        selected_pairs.append((original_idx, query))
-        if len(selected_pairs) >= max_queries:
-            break
+    for family in families:
+        family_specs = _active_query_specs(family)
+        preferred = next((spec for spec in family_specs if spec.get("lang") == preferred_lang), None)
+        fallback = next((spec for spec in family_specs if spec.get("lang") == "en"), None)
+        chosen = preferred or fallback or (family_specs[0] if family_specs else None)
+        if chosen:
+            selected_specs.append(chosen)
+            selected_ids.add(id(chosen))
 
-    if not is_global_scope and len(selected_pairs) < max_queries:
-        selected_original_indices = {idx for idx, _ in selected_pairs}
-        for original_idx, query in reversed(list(enumerate(queries, 1))):
-            if original_idx in selected_original_indices:
-                continue
-            selected_pairs.append((original_idx, query))
-            selected_original_indices.add(original_idx)
-            if len(selected_pairs) >= max_queries:
-                break
-        selected_pairs.sort(key=lambda item: item[0])
+    for language in (preferred_lang, "en"):
+        for family in families:
+            for spec in _active_query_specs(family):
+                if id(spec) in selected_ids or spec.get("lang") != language:
+                    continue
+                selected_specs.append(spec)
+                selected_ids.add(id(spec))
 
-    limited_queries = [query for _, query in selected_pairs]
-    remapped_news_indices = {
-        new_idx
-        for new_idx, (old_idx, _) in enumerate(selected_pairs, 1)
-        if old_idx in news_query_indices
-    }
-    global LAST_DDGS_QUERY_METADATA
-    LAST_DDGS_QUERY_METADATA = {
-        query: LAST_DDGS_QUERY_METADATA.get(query, _query_metadata_for(query))
-        for query in limited_queries
-    }
-    return limited_queries, remapped_news_indices
+    for family in families:
+        for spec in _active_query_specs(family):
+            if id(spec) not in selected_ids:
+                selected_specs.append(spec)
+                selected_ids.add(id(spec))
+    return selected_specs
+
+
+def _standard_search_queries():
+    for standards in STANDARDS_WATCHLIST.values():
+        for standard in standards:
+            yield f'"{standard}" revision amendment published draft metro rail standard'
 
 
 def build_search_queries() -> tuple[list[str], set[int]]:
@@ -2894,168 +2815,94 @@ def build_search_queries() -> tuple[list[str], set[int]]:
     LAST_DDGS_QUERY_METADATA = {}
     queries: list[str] = []
     news_indices: set[int] = set()
+    seen_queries: set[str] = set()
+    query_limit = DDGS_GLOBAL_QUERY_LIMIT if is_global_scope else DDGS_REGIONAL_QUERY_LIMIT
+    timelimit = _ddgs_timelimit_for_lookback(lookback_int)
 
-    def _add(query: str, family: str, lang: str = "en", use_news: bool = True) -> None:
+    def _add(
+        query: str,
+        family: str,
+        lang: str = "en",
+        use_news: bool = True,
+        query_region: str = "global",
+    ) -> bool:
+        if len(queries) >= query_limit:
+            return False
         final_query = _query_with_period(query)
+        if not final_query or final_query in seen_queries:
+            return False
+        seen_queries.add(final_query)
         queries.append(final_query)
         LAST_DDGS_QUERY_METADATA[final_query] = {
             "family": family,
             "lang": lang,
-            "timelimit": "",
-            "requested": DDGS_RESULTS_PER_QUERY,
+            "query_region": query_region,
             "use_news": use_news,
+            "timelimit": timelimit,
+            "requested_max_results": DDGS_RESULTS_PER_QUERY,
+            "planned_index": len(queries),
         }
         if use_news:
             news_indices.add(len(queries))
+        return True
 
-    prefixes = [""] if is_global_scope else [REGION_SEARCH_TERMS.get(region, region) for region in active_regions]
-    for family in _selected_query_families():
-        for prefix in prefixes:
+    selected_families = _selected_query_families()
+    include_official = "official_investigation" in selected_families
+    content_families = [family for family in selected_families if family != "official_investigation"]
+
+    if is_global_scope:
+        for family in content_families:
             for spec in _active_query_specs(family):
-                query = f"{prefix} {spec['query']}".strip()
                 _add(
-                    query,
+                    spec.get("query", ""),
                     family=spec.get("family", family),
                     lang=spec.get("lang", "en"),
                     use_news=bool(spec.get("use_news", True)),
                 )
+    elif content_families and active_regions:
+        regions = list(dict.fromkeys(active_regions))
+        official_reserve = 1 if include_official else 0
+        country_budget = max(0, query_limit - official_reserve)
+        max_per_country = min(4, max(2, len(content_families)))
+        allocations = {region: min(2, country_budget // max(1, len(regions))) for region in regions}
+        remaining = country_budget - sum(allocations.values())
+        while remaining > 0 and any(count < max_per_country for count in allocations.values()):
+            for region in regions:
+                if remaining <= 0:
+                    break
+                if allocations[region] < max_per_country:
+                    allocations[region] += 1
+                    remaining -= 1
 
-    if len(ADVANCED_TYPES) > 4 and ADVANCED_TYPES[4] in selected_types:
-        update_terms = " ".join(STANDARD_UPDATE_TERMS[:4])
-        for category, standards in STANDARDS_WATCHLIST.items():
-            for standard in standards:
+        for region in regions:
+            preferred_lang = REGION_QUERY_LANGUAGES.get(region, "en")
+            specs = _regional_query_spec_sequence(content_families, preferred_lang)
+            prefix = REGION_SEARCH_TERMS.get(region, region)
+            for spec in specs[:allocations[region]]:
                 _add(
-                    f'"{standard}" {update_terms} metro rail standard update',
-                    family="standards_update",
-                    lang="en",
-                    use_news=True,
+                    f"{prefix} {spec.get('query', '')}",
+                    family=spec.get("family", "general"),
+                    lang=spec.get("lang", preferred_lang),
+                    use_news=bool(spec.get("use_news", True)),
+                    query_region=region,
                 )
 
-    if fast_mode_enabled:
-        return limit_fast_search_queries(queries, news_indices)
-    return queries, news_indices
+    if include_official:
+        official_spec = next(iter(_active_query_specs("official_investigation")), None)
+        if official_spec:
+            _add(
+                official_spec.get("query", ""),
+                family="official_investigation",
+                lang=official_spec.get("lang", "en"),
+                use_news=bool(official_spec.get("use_news", False)),
+                query_region="global",
+            )
 
-    """依據勾選類型建立精準查詢族群；指定國家模式只加使用者勾選國家。"""
-    queries = []
-    news_indices = set()
-
-    def _add(query: str, use_news: bool = True) -> None:
-        queries.append(_query_with_period(query))
-        if use_news:
-            news_indices.add(len(queries))
-
-    def _region_prefix() -> list[str]:
-        if is_global_scope:
-            return [""]
-        return [REGION_SEARCH_TERMS.get(region, region) for region in active_regions]
-
-    prefixes = _region_prefix()
-    if "技術新知" in selected_types:
-        for prefix in prefixes:
-            for query in TECH_PRECISION_QUERIES:
-                _add(f"{prefix} {query}".strip())
-        if is_global_scope:
-            for _, query in GLOBAL_MULTILINGUAL_TECH_QUERIES:
-                _add(query)
-
-    if "重大事故" in selected_types:
-        for prefix in prefixes:
-            _add(f"{prefix} {ACCIDENT_PRECISION_QUERY}".strip())
-        if is_global_scope:
-            for _, query in GLOBAL_MULTILINGUAL_ACCIDENT_QUERIES:
-                _add(query)
-            for query in OFFICIAL_INVESTIGATION_SITE_QUERIES:
-                _add(query)
-
-    if "營運政策" in selected_types:
-        for prefix in prefixes:
-            _add(f"{prefix} {POLICY_PRECISION_QUERY}".strip())
-
-    if "營運爭議" in selected_types:
-        for prefix in prefixes:
-            _add(f"{prefix} {DISPUTE_PRECISION_QUERY}".strip())
-
-    if "規範更新" in selected_types:
-        update_terms = " OR ".join(f'"{term}"' for term in STANDARD_UPDATE_TERMS)
-        for category, standards in STANDARDS_WATCHLIST.items():
-            for standard in standards:
-                idx = len(queries) + 1
-                queries.append(f'"{standard}" ({update_terms}) metro rail standard update {today:%Y}')
-                news_indices.add(idx)
-
-    if fast_mode_enabled:
-        return limit_fast_search_queries(queries, news_indices)
-    return queries, news_indices
-
-
-def _legacy_run_single_query_v190(i: int, query: str, use_news: bool, news_timelimit: str) -> tuple[int, str, str, list[dict], str]:
-    """執行單一查詢（純運算/網路請求，不觸碰 Streamlit API，可安全在背景執行緒執行）"""
-    # 隨機抖動起跑時間，避免多執行緒同時擊中 DDGS 造成瞬間流量觸發限流
-    time.sleep(random.uniform(0.1, 0.6))
-    result_items: list[dict] = []
-    final_backend = ""
-    final_status = "略過"
-
-    for backend in ["auto", "bing"]:
-        for attempt in range(1, 3):
-            try:
-                with DDGS() as ddgs:
-                    if use_news:
-                        results = ddgs.news(query, max_results=DDGS_MAX_RESULTS, timelimit=news_timelimit, backend=backend)
-                    else:
-                        results = ddgs.text(query, max_results=DDGS_MAX_RESULTS, timelimit=news_timelimit, backend=backend)
-                if results:
-                    for r in results:
-                        body = (r.get("body") or r.get("excerpt") or r.get("description") or "")[:250]
-                        href = r.get("href") or r.get("url") or ""
-                        title = (r.get("title") or "").strip()
-                        if not title:
-                            continue
-                        item_date = r.get("date") or r.get("published") or ""
-                        candidate_text = f"{title} {body} {href} {item_date}"
-
-                        if _contains_taiwan_reference(candidate_text):
-                            continue
-
-                        # 規範更新查詢必須符合「標準編號 + 更新動作 + 來源 URL」
-                        if _is_standard_update_query(query):
-                            if not item_date or not _is_standard_update_candidate(candidate_text):
-                                continue
-                        else:
-                            if not _is_urban_rail_candidate(candidate_text):
-                                continue
-
-                        if (
-                            _is_tech_news_only_mode()
-                            and not _is_standard_update_query(query)
-                            and not _is_technical_news_candidate(candidate_text)
-                        ):
-                            continue
-                        is_valid, reason = _is_valid_news_url(href)
-                        if not is_valid:
-                            continue
-                        result_items.append({
-                            "title": title,
-                            "summary": body,
-                            "link": href,
-                            "date": item_date or "日期未知",
-                        })
-                    final_backend = backend
-                    final_status = "成功" if result_items else "無結果"
-                else:
-                    final_backend = backend
-                    final_status = "無結果"
+    if len(ADVANCED_TYPES) > 4 and ADVANCED_TYPES[4] in selected_types:
+        for query in _standard_search_queries():
+            if not _add(query, family="standards_update", lang="en", use_news=True):
                 break
-            except Exception as exc:
-                wait = attempt * 1.0 + random.uniform(0.5, 1.5)
-                time.sleep(wait)
-                if not any(k in str(exc) for k in ("Ratelimit", "429", "403")):
-                    break
-
-        if result_items:
-            break
-
-    return i, query, final_backend or "auto", result_items, final_status
+    return queries, news_indices
 
 
 def _format_ddg_block(i: int, backend: str, query: str, items: list[dict], status: str) -> str:
@@ -3086,19 +2933,33 @@ def _search_result_date_hint(date_text: str, fallback_text: str = "") -> str:
 
 
 def _ddgs_query_status_template(query: str, news_timelimit: str) -> dict:
-    metadata = _query_metadata_for(query)
+    metadata = _query_metadata_for(query) or {}
+    family = metadata.get("family", "general")
+    language = metadata.get("lang", "en")
+    requested = int(metadata.get("requested_max_results", DDGS_RESULTS_PER_QUERY) or DDGS_RESULTS_PER_QUERY)
     return {
-        "family": metadata.get("family", "general"),
+        "search_family": family,
+        "search_language": language,
         "query": query,
-        "lang": metadata.get("lang", "en"),
-        "timelimit": news_timelimit,
-        "requested": DDGS_RESULTS_PER_QUERY,
+        "query_region": metadata.get("query_region", "unplanned"),
+        "use_news": bool(metadata.get("use_news", True)),
+        "timelimit": metadata.get("timelimit") or news_timelimit,
+        "requested_max_results": requested,
         "returned_count": 0,
         "valid_url_count": 0,
         "date_valid_count": 0,
+        "basic_excluded_count": 0,
         "added_to_raw_count": 0,
+        "excluded_counts_by_reason": {},
+        "backend": "",
+        "execution_status": "not_executed",
         "error_message": "",
         "elapsed_seconds": 0.0,
+        "planned_index": int(metadata.get("planned_index", 0) or 0),
+        # Backward-compatible aliases retained for existing developer tooling.
+        "family": family,
+        "lang": language,
+        "requested": requested,
     }
 
 
@@ -3112,8 +2973,75 @@ def ddgs_zero_result_queries(statuses: list[dict]) -> list[dict]:
 def ddgs_general_only_queries(statuses: list[dict]) -> list[dict]:
     return [
         row for row in statuses or []
-        if (row.get("family") or "general") == "general"
+        if (row.get("search_family") or row.get("family") or "general") == "general"
     ]
+
+
+def _ddgs_exception_status(exc: Exception) -> str:
+    message = str(exc).casefold()
+    if "429" in message or "ratelimit" in message or "rate limit" in message:
+        return "rate_limited_429"
+    if "403" in message or "forbidden" in message:
+        return "http_403"
+    if isinstance(exc, (TimeoutError, requests.Timeout)) or "timeout" in message or "timed out" in message:
+        return "timeout"
+    return "other_exception"
+
+
+def _basic_search_url_exclusion_reason(title: str, href: str, candidate_text: str) -> str:
+    if not title:
+        return "empty_title"
+    if not href:
+        return "empty_url"
+    try:
+        parsed = urlparse(href)
+    except Exception:
+        return "unparseable_result"
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return "invalid_url"
+    host = parsed.netloc.lower().removeprefix("www.")
+    if _is_blocked_host(host) or any(
+        _host_matches(host, domain)
+        for domain in LOW_VALUE_EXCLUDED_HOSTS | PORTAL_SOCIAL_LOW_VALUE_DOMAINS
+    ):
+        return "blocked_or_low_value_domain"
+    if _is_domestic_taiwan_host(host) or _contains_taiwan_reference(candidate_text):
+        return "taiwan_news"
+    return ""
+
+
+def _basic_search_date_exclusion_reason(date_text: str) -> str:
+    date_obj = _candidate_date_obj(date_text)
+    if not date_obj:
+        return ""
+    cutoff_date = today - datetime.timedelta(days=max(1, min(int(lookback_days), 365)) + 3)
+    if date_obj < cutoff_date or date_obj > today + datetime.timedelta(days=1):
+        return "date_out_of_range"
+    return ""
+
+
+def build_ddgs_search_summary(statuses: list[dict], planned_query_count: int | None = None) -> dict:
+    rows = statuses or []
+
+    def _count_by(key: str, fallback_key: str = "") -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for row in rows:
+            value = row.get(key) or (row.get(fallback_key) if fallback_key else "") or "unassigned"
+            counts[str(value)] = counts.get(str(value), 0) + 1
+        return counts
+
+    error_statuses = {"http_403", "rate_limited_429", "timeout", "other_exception"}
+    return {
+        "planned_query_count": int(planned_query_count if planned_query_count is not None else len(rows)),
+        "executed_query_count": sum(1 for row in rows if row.get("execution_status") not in {"not_executed", "not_executed_dependency_missing"}),
+        "query_count_by_region": _count_by("query_region"),
+        "query_count_by_family": _count_by("search_family", "family"),
+        "query_count_by_language": _count_by("search_language", "lang"),
+        "zero_result_query_count": sum(1 for row in rows if row.get("execution_status") == "zero_results"),
+        "error_query_count": sum(1 for row in rows if row.get("execution_status") in error_statuses),
+        "rate_limited_query_count": sum(1 for row in rows if row.get("execution_status") in {"http_403", "rate_limited_429"}),
+        "DDGS_added_to_raw_count": sum(int(row.get("added_to_raw_count", 0) or 0) for row in rows),
+    }
 
 
 def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -> tuple[int, str, str, list[dict], str, dict]:
@@ -3122,83 +3050,120 @@ def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -
     time.sleep(random.uniform(0.1, 0.4))
     result_items: list[dict] = []
     final_backend = ""
-    final_status = "not_run"
-    last_error = ""
+    last_exception: Exception | None = None
+    errors: list[str] = []
+    received_response = False
 
     for backend in ["auto", "bing"]:
+        final_backend = backend
         for attempt in range(1, 3):
             try:
                 with DDGS() as ddgs:
                     if use_news:
-                        results = ddgs.news(query, max_results=DDGS_RESULTS_PER_QUERY, timelimit=news_timelimit, backend=backend)
+                        results = ddgs.news(
+                            query,
+                            max_results=status_row["requested_max_results"],
+                            timelimit=status_row["timelimit"],
+                            backend=backend,
+                        )
                     else:
-                        results = ddgs.text(query, max_results=DDGS_RESULTS_PER_QUERY, timelimit=news_timelimit, backend=backend)
+                        results = ddgs.text(
+                            query,
+                            max_results=status_row["requested_max_results"],
+                            timelimit=status_row["timelimit"],
+                            backend=backend,
+                        )
                 result_list = list(results or [])
-                status_row["returned_count"] = max(status_row["returned_count"], len(result_list))
-                final_backend = backend
+                received_response = True
+                status_row["returned_count"] = len(result_list)
+                if not result_list:
+                    break
                 for r in result_list:
+                    if not isinstance(r, dict):
+                        reason = "unparseable_result"
+                        status_row["excluded_counts_by_reason"][reason] = status_row["excluded_counts_by_reason"].get(reason, 0) + 1
+                        continue
                     body = (r.get("body") or r.get("excerpt") or r.get("description") or "")[:350]
                     href = r.get("href") or r.get("url") or ""
                     title = (r.get("title") or "").strip()
-                    if not title:
-                        continue
                     item_date = _search_result_date_hint(r.get("date") or r.get("published") or "", f"{title} {body}")
                     candidate_text = f"{title} {body} {href} {item_date}"
-
-                    is_valid, reason = _is_valid_news_url(href)
-                    if not is_valid:
+                    reason = _basic_search_url_exclusion_reason(title, href, candidate_text)
+                    if reason:
+                        status_row["excluded_counts_by_reason"][reason] = status_row["excluded_counts_by_reason"].get(reason, 0) + 1
                         continue
                     status_row["valid_url_count"] += 1
+                    date_reason = _basic_search_date_exclusion_reason(item_date)
+                    if date_reason:
+                        status_row["excluded_counts_by_reason"][date_reason] = status_row["excluded_counts_by_reason"].get(date_reason, 0) + 1
+                        continue
                     if _candidate_date_obj(item_date):
                         status_row["date_valid_count"] += 1
-                    if _contains_taiwan_reference(candidate_text):
-                        continue
-                    if _is_standard_update_query(query) and not _is_standard_update_candidate(candidate_text):
-                        continue
                     result_items.append({
                         "title": title,
                         "summary": body,
                         "link": href,
-                        "date": item_date or "?交??芰",
+                        "date": item_date or "日期未知",
                     })
-                final_status = "ok" if result_items else "no_usable_results"
                 break
             except Exception as exc:
-                last_error = str(exc)[:300]
+                last_exception = exc
+                errors.append(f"{backend} attempt {attempt}: {str(exc)[:220]}")
                 wait = attempt * 0.8 + random.uniform(0.2, 0.9)
                 time.sleep(wait)
-                if not any(k in str(exc) for k in ("Ratelimit", "429", "403")):
+                if _ddgs_exception_status(exc) not in {"http_403", "rate_limited_429"}:
                     break
 
-        if result_items:
+        if status_row["returned_count"] > 0:
             break
 
-    if last_error and not result_items:
-        final_status = "error"
-    status_row["error_message"] = last_error
+    status_row["basic_excluded_count"] = sum(status_row["excluded_counts_by_reason"].values())
+    status_row["added_to_raw_count"] = len(result_items)
+    status_row["backend"] = final_backend
+    if status_row["returned_count"] > 0 and result_items:
+        execution_status = "success"
+    elif status_row["returned_count"] > 0:
+        execution_status = "all_results_basic_excluded"
+    elif received_response:
+        execution_status = "zero_results"
+    elif last_exception is not None:
+        execution_status = _ddgs_exception_status(last_exception)
+    else:
+        execution_status = "not_executed"
+    status_row["execution_status"] = execution_status
+    status_row["error_message"] = " | ".join(errors)[-600:]
     status_row["elapsed_seconds"] = round(time.perf_counter() - started, 2)
-    return i, query, final_backend or "auto", result_items, final_status, status_row
+    return i, query, final_backend or "auto", result_items, execution_status, status_row
 
 
 def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
-    global LAST_DDGS_QUERY_STATUSES
+    """Execute the planned DDGS queries and retain per-query developer diagnostics."""
+    global LAST_DDGS_QUERY_STATUSES, LAST_DDGS_SEARCH_SUMMARY
     LAST_DDGS_QUERY_STATUSES = []
-    """執行 DDGS 多後端搜尋（平行化版本：查詢數變多但改為併發執行，速度不會被拖慢）"""
+    LAST_DDGS_SEARCH_SUMMARY = {}
     if not selected_types:
+        LAST_DDGS_SEARCH_SUMMARY = build_ddgs_search_summary([], 0)
         return "未勾選任何新聞類型，略過搜尋。"
-    if DDGS is None:
-        return "ddgs 套件未安裝，略過 ddgs 搜尋；請確認 requirements.txt 已包含 ddgs。"
 
     search_queries, news_query_indices = build_search_queries()
     total = len(search_queries)
     days = int(lookback_days)
-    news_timelimit = "w" if days <= 7 else "m" if days <= 31 else "y"
+    news_timelimit = _ddgs_timelimit_for_lookback(days)
+    if DDGS is None:
+        for query in search_queries:
+            row = _ddgs_query_status_template(query, news_timelimit)
+            row["execution_status"] = "not_executed_dependency_missing"
+            row["error_message"] = "ddgs package is not installed"
+            LAST_DDGS_QUERY_STATUSES.append(row)
+        LAST_DDGS_SEARCH_SUMMARY = build_ddgs_search_summary(LAST_DDGS_QUERY_STATUSES, total)
+        return "ddgs 套件未安裝，略過 ddgs 搜尋；請確認 requirements.txt 已包含 ddgs。"
+    if not search_queries:
+        LAST_DDGS_SEARCH_SUMMARY = build_ddgs_search_summary([], 0)
+        return "沒有規劃 DDGS 查詢。"
+
     results_map: dict[int, str] = {}
     done_count = 0
-    seen_titles: set[str] = set()
-    seen_urls: set[str] = set()
 
-    # 同時最多 6 條併發，兼顧速度與避免被 DDGS 判定為濫用流量
     max_workers = max(1, min(6, total))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -3214,31 +3179,23 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
                 query = search_queries[i - 1] if 0 < i <= len(search_queries) else ""
                 backend = "auto"
                 items = []
-                status = "error"
+                status = _ddgs_exception_status(exc)
                 query_status = _ddgs_query_status_template(query, news_timelimit)
+                query_status["execution_status"] = status
                 query_status["error_message"] = str(exc)[:300]
-            deduped_items: list[dict] = []
-            for item in items:
-                title_key = _normalize_title(item["title"])
-                url_key = _dedupe_url(item["link"])
-                if title_key in seen_titles or url_key in seen_urls:
-                    continue
-                seen_titles.add(title_key)
-                seen_urls.add(url_key)
-                deduped_items.append(item)
-            query_status["added_to_raw_count"] = len(deduped_items)
             LAST_DDGS_QUERY_STATUSES.append(query_status)
-            results_map[i] = _format_ddg_block(i, backend, query, deduped_items, status)
+            results_map[i] = _format_ddg_block(i, backend, query, items, status)
             done_count += 1
             if status_text:
-                status_text.text(f"🔍 已完成搜尋 {done_count:02d}/{total}...")
+                status_text.text("正在蒐集國際捷運新聞")
             if progress_bar:
                 progress_bar.progress(done_count / total)
 
     LAST_DDGS_QUERY_STATUSES = sorted(
         LAST_DDGS_QUERY_STATUSES,
-        key=lambda row: (str(row.get("family", "")), str(row.get("lang", "")), str(row.get("query", ""))),
+        key=lambda row: (int(row.get("planned_index", 0) or 0), str(row.get("query", ""))),
     )
+    LAST_DDGS_SEARCH_SUMMARY = build_ddgs_search_summary(LAST_DDGS_QUERY_STATUSES, total)
     return "\n\n".join(results_map[i] for i in sorted(results_map))
 
 
@@ -6926,7 +6883,7 @@ def _journal_source_page_results(status_text=None) -> tuple[list[dict], list[dic
     seen_links: set[str] = set()
     for source_name, page_url in JOURNAL_SOURCE_PAGES:
         if status_text:
-            status_text.text(f"📚 解析學術來源頁：{source_name}...")
+            status_text.text("正在整理候選資料")
         html = _journal_safe_get(page_url)
         if not html:
             statuses.append({"query": source_name, "status": "來源頁讀取失敗", "count": 0, "url": page_url})
@@ -7149,7 +7106,7 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
         if len(candidates) >= target_max:
             break
         if status_text:
-            status_text.text(f"📚 國際學術與技術研究補充搜尋 {idx}/{len(queries)}...")
+            status_text.text("正在整理候選資料")
         query_text = f'{query} journal OR research OR paper OR IEEE OR "Transportation Research"'
         try:
             with DDGS() as ddgs:
@@ -9432,7 +9389,7 @@ if generate_btn:
 
         try:
             run_start = time.perf_counter()
-            status_text.text("⚡ 展覽快速版載入預先產製展示報告……")
+            status_text.text("正在進行報告撰寫")
             report_text, pdf_bytes, demo_meta = load_demo_report_cache()
             progress_bar.progress(0.70)
 
@@ -9552,16 +9509,7 @@ if generate_btn:
                 progress_bar.progress(0.95)
 
             progress_bar.progress(1.0)
-            status_text.markdown(
-                f"""
-                <div class="notice-success">
-                  <strong>✅ 展覽快速版報告已載入</strong><br>
-                  此為預先產製展示報告，不是即時搜尋結果；本次未呼叫 MaiAgent。<br>
-                  正式新聞：{formal_count} 則｜{email_note}。
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            status_text.text("報告產製完成")
         except Exception as e:
             progress_placeholder.empty()
             status_text.error(f"❌ 展覽快速版載入失敗：{e}")
@@ -9616,9 +9564,7 @@ if generate_btn:
                 fast_mode_enabled,
                 return_skipped=True,
             )
-            status_text.text(
-                f"🔎 蒐集國際新聞來源……（共 {len(combined_sources)} 個來源）"
-            )
+            status_text.text("正在蒐集國際捷運新聞")
             stage_start = time.perf_counter()
             rss_results, fetched_source_statuses = fetch_rss_feeds(
                 combined_sources, status_text=status_text, return_status=True
@@ -9629,7 +9575,7 @@ if generate_btn:
             progress_bar.progress(0.25)
             st.session_state["latest_source_statuses"] = source_statuses
 
-            status_text.text("🔍 蒐集國際新聞來源……（ddgs 多後端搜尋）")
+            status_text.text("正在蒐集國際捷運新聞")
             ddg_progress = ProgressRange(progress_bar, 0.25, 0.40)
             search_count = len(build_search_queries()[0])
             stage_start = time.perf_counter()
@@ -9637,7 +9583,7 @@ if generate_btn:
             timings["elapsed_seconds_ddgs"] = round(time.perf_counter() - stage_start, 2)
             progress_bar.progress(0.42)
 
-            status_text.text("🧹 整理候選資料，排除重複與不相關新聞……")
+            status_text.text("正在整理候選資料")
             stage_start = time.perf_counter()
             candidate_pool = prepare_candidate_pool(rss_results, ddg_results)
             timings["elapsed_seconds_candidate_pool"] = round(time.perf_counter() - stage_start, 2)
@@ -9645,12 +9591,12 @@ if generate_btn:
             long_term_coverage = build_long_term_coverage_warning(candidate_pool["filtered_candidates"])
             progress_bar.progress(0.52)
 
-            status_text.text("🛡️ 排除舊聞與低品質來源……")
+            status_text.text("正在整理候選資料")
             time.sleep(0.1)
             progress_bar.progress(0.58)
 
             # Step 2：Python 規則選題
-            status_text.text("🧮 Python 規則選題……")
+            status_text.text("正在整理候選資料")
             selection_prompt = ""
             selection_response = ""
             stage_start = time.perf_counter()
@@ -9675,7 +9621,7 @@ if generate_btn:
             progress_bar.progress(0.76)
 
             # Step 3：MaiAgent 第二階段正式報告
-            status_text.text(f"📝 MaiAgent 產生正式{report_period_label}……")
+            status_text.text("正在進行報告撰寫")
             report_prompt = build_report_prompt(selected_candidates, journal_candidates, search_count)
             stage_start = time.perf_counter()
             report_response = call_maiagent_cloud(report_prompt)
@@ -9683,7 +9629,7 @@ if generate_btn:
             maiagent_call_count += 1
             progress_bar.progress(0.88)
 
-            status_text.text("📄 完成 PDF / Email 輸出準備……")
+            status_text.text("正在進行報告撰寫")
             pdf_stage_start = time.perf_counter()
             report_text = report_response
             report_text = sanitize_report_text(report_text)
@@ -9758,6 +9704,8 @@ if generate_btn:
                 "ddgs_query_count": search_count,
                 "ddgs_zero_result_query_count": len(ddgs_zero_result_queries(LAST_DDGS_QUERY_STATUSES)),
                 "ddgs_general_only_query_count": len(ddgs_general_only_queries(LAST_DDGS_QUERY_STATUSES)),
+                "ddgs_search_summary": LAST_DDGS_SEARCH_SUMMARY,
+                **LAST_DDGS_SEARCH_SUMMARY,
                 "candidate_card_limit": candidate_pool.get("candidate_card_limit", len(candidate_pool["candidate_cards"])),
                 "candidate_card_count": len(candidate_pool["candidate_cards"]),
                 "elapsed_seconds_total": timings["elapsed_seconds_total"],
@@ -9853,6 +9801,7 @@ if generate_btn:
                 "selection_debug": LAST_PYTHON_SELECTION_DEBUG,
                 "pipeline_debug_stats": pipeline_debug_stats,
                 "ddgs_query_statuses": LAST_DDGS_QUERY_STATUSES,
+                "ddgs_search_summary": LAST_DDGS_SEARCH_SUMMARY,
                 "ddgs_zero_result_queries": ddgs_zero_result_queries(LAST_DDGS_QUERY_STATUSES),
                 "ddgs_general_only_queries": ddgs_general_only_queries(LAST_DDGS_QUERY_STATUSES),
                 "prefetch_stats": candidate_pool.get("prefetch_stats", {}),
@@ -9904,17 +9853,7 @@ if generate_btn:
                 else ""
             )
             progress_bar.progress(1.0)
-            status_text.markdown(
-                f"""
-                <div class="notice-success">
-                  <strong>✅ 報告已完成</strong><br>
-                  可於下方查看正式{report_period_label}、下載 PDF 或手動寄送 Email。<br>
-                  正式新聞：{formal_count} 則{standards_note}｜
-                  {email_note}。
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            status_text.text("報告產製完成")
 
         except Exception as e:
             progress_placeholder.empty()
@@ -10109,6 +10048,16 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "ddgs_query_count": latest_stats.get("ddgs_query_count", 0),
             "ddgs_zero_result_query_count": latest_stats.get("ddgs_zero_result_query_count", len(debug_info.get("ddgs_zero_result_queries", []))),
             "ddgs_general_only_query_count": latest_stats.get("ddgs_general_only_query_count", len(debug_info.get("ddgs_general_only_queries", []))),
+            "ddgs_search_summary": latest_stats.get("ddgs_search_summary", debug_info.get("ddgs_search_summary", {})),
+            "planned_query_count": latest_stats.get("planned_query_count", debug_info.get("ddgs_search_summary", {}).get("planned_query_count", 0)),
+            "executed_query_count": latest_stats.get("executed_query_count", debug_info.get("ddgs_search_summary", {}).get("executed_query_count", 0)),
+            "query_count_by_region": latest_stats.get("query_count_by_region", debug_info.get("ddgs_search_summary", {}).get("query_count_by_region", {})),
+            "query_count_by_family": latest_stats.get("query_count_by_family", debug_info.get("ddgs_search_summary", {}).get("query_count_by_family", {})),
+            "query_count_by_language": latest_stats.get("query_count_by_language", debug_info.get("ddgs_search_summary", {}).get("query_count_by_language", {})),
+            "zero_result_query_count": latest_stats.get("zero_result_query_count", debug_info.get("ddgs_search_summary", {}).get("zero_result_query_count", 0)),
+            "error_query_count": latest_stats.get("error_query_count", debug_info.get("ddgs_search_summary", {}).get("error_query_count", 0)),
+            "rate_limited_query_count": latest_stats.get("rate_limited_query_count", debug_info.get("ddgs_search_summary", {}).get("rate_limited_query_count", 0)),
+            "DDGS_added_to_raw_count": latest_stats.get("DDGS_added_to_raw_count", debug_info.get("ddgs_search_summary", {}).get("DDGS_added_to_raw_count", 0)),
             "candidate_card_limit": latest_stats.get("candidate_card_limit", 0),
             "candidate_card_count": latest_stats.get("candidate_card_count", 0),
             "elapsed_seconds_total": latest_stats.get("elapsed_seconds_total", 0),
@@ -10183,6 +10132,7 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
         "selection_debug": debug_info.get("selection_debug", {}) if debug_info else {},
         "pipeline_debug_stats": debug_info.get("pipeline_debug_stats", {}) if debug_info else {},
         "ddgs_query_statuses": debug_info.get("ddgs_query_statuses", []) if debug_info else [],
+        "ddgs_search_summary": debug_info.get("ddgs_search_summary", latest_stats.get("ddgs_search_summary", {})) if debug_info else latest_stats.get("ddgs_search_summary", {}),
         "ddgs_zero_result_queries": debug_info.get("ddgs_zero_result_queries", []) if debug_info else [],
         "ddgs_general_only_queries": debug_info.get("ddgs_general_only_queries", []) if debug_info else [],
         "prefetch_stats": debug_info.get("prefetch_stats", debug_info.get("pipeline_debug_stats", {}).get("prefetch_stats", {})) if debug_info else {},
