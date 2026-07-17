@@ -1409,7 +1409,21 @@ report_shortfall_summary_line = (
     if target_is_enforced
     else "**長期回顧說明**：（簡述本期趨勢、重複內容排除後有效候選品質與來源限制）"
 )
-selected_report_topic = "、".join(selected_types) if selected_types else "技術趨勢"
+def _formal_report_topic_labels(report_types: list[str]) -> list[str]:
+    labels: list[str] = []
+    operations_added = False
+    for category in report_types or []:
+        if category in {"營運政策", "營運爭議"}:
+            if not operations_added:
+                labels.append("營運議題")
+                operations_added = True
+            continue
+        if category not in labels:
+            labels.append(category)
+    return labels
+
+
+selected_report_topic = "、".join(_formal_report_topic_labels(selected_types)) if selected_types else "技術趨勢"
 report_title = f"【{today.strftime('%Y/%m/%d')}】國際捷運{selected_report_topic}{report_period_label}"
 is_global_scope = scope_mode == "全球（安全白名單來源）"
 active_regions = [] if is_global_scope else selected_regions
@@ -1494,7 +1508,8 @@ def build_report_download_filename(prefix: str, extension: str, run_config: dict
     report_date = _compact_date(config.get("report_date"), report_date_obj)
     clean_prefix = re.sub(r"[^A-Za-z0-9_]+", "_", str(prefix or "report")).strip("_")
     clean_extension = re.sub(r"[^A-Za-z0-9]+", "", str(extension or "")).lower()
-    return f"{clean_prefix}_{report_type_code}_{report_date}.{clean_extension}"
+    filename = f"{clean_prefix}_{report_type_code.strip()}_{report_date.strip()}.{clean_extension.strip()}"
+    return re.sub(r"\s+\.", ".", filename).strip()
 
 
 def google_news_search_url(query: str, hl: str = "en-US", gl: str = "US", ceid_lang: str = "en") -> str:
@@ -1876,7 +1891,7 @@ def render_main_dashboard(source_count: int, standards_count: int):
         <div class="hero-card">
           <div class="hero-eyebrow">臺北市政府捷運工程局｜機電系統設計處</div>
           <div class="hero-title">國際捷運技術{report_period_label} AI 自動產生系統</div>
-          <div class="hero-subtitle">國際技術新知、重大事故、營運政策、營運爭議與規範更新之自動化監測</div>
+          <div class="hero-subtitle">國際技術新知、重大事故、營運議題與規範更新之自動化監測</div>
             <div class="hero-meta">
             <span class="hero-pill">今日日期：{today.strftime('%Y/%m/%d')}</span>
             <span class="hero-pill">資料涵蓋：{week_start.strftime('%Y/%m/%d')} - {today.strftime('%Y/%m/%d')}</span>
@@ -4535,42 +4550,82 @@ def _annual_observation_themes(candidates: list[dict]) -> list[str]:
     return [label for label, terms in theme_terms if _contains_any_term(combined, terms)]
 
 
-def build_annual_observation_section(selected_candidates: list[dict]) -> str:
+def _annual_observation_report_blocks(report_md: str) -> list[str]:
+    formal_area = re.split(
+        r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:國際學術期刊|技術研究補充)\s*$",
+        report_md or "",
+        maxsplit=1,
+    )[0]
+    return re.findall(
+        r"(?ms)^\s*(🔹\s*\[(?:技術新知|重大事故|營運政策|營運爭議|規範更新)\].*?)"
+        r"(?=^\s*🔹\s*\[[^\]]+\]|^\s*#{0,6}\s*[一二三四五六七八九十]\s*、|^\s*📊|^\s*⏰|\Z)",
+        formal_area,
+    )
+
+
+def _annual_observation_report_dates_are_recent(blocks: list[str]) -> bool:
+    dates = []
+    for block in blocks or []:
+        match = re.search(r"發布/事件日期\s*[：:]\s*(\d{4}-\d{2}-\d{2})", block)
+        date_obj = _candidate_date_obj(match.group(1)) if match else None
+        if date_obj:
+            dates.append(date_obj)
+    return bool(dates) and min(dates) > today - datetime.timedelta(days=60)
+
+
+def build_annual_observation_section(final_report_md: str) -> str:
     if lookback_int != 365:
         return ""
-    candidates = selected_candidates or []
-    if not candidates:
-        return "## 年度觀察重點\n本年度回顧未取得可供歸納的已入選新聞，正式報告以下列已輸出章節為準。"
+    blocks = _annual_observation_report_blocks(final_report_md)
+    counts = count_report_items_by_category(final_report_md)
+    categories = ("技術新知", "重大事故", "營運政策", "營運爭議")
+    count_text = "、".join(f"{category}{counts.get(category, 0)}則" for category in categories)
+    sentences = [f"本年度回顧依最終正式報告整理，共收錄{count_text}。"]
+    if not blocks:
+        sentences.append("本年度未取得可供歸納的正式新聞，以下列最終章節與統計為準。")
+        return "## 年度觀察重點\n" + "".join(sentences)
 
-    candidate_regions = [_canonical_candidate_region(dict(candidate)) for candidate in candidates]
     regions = _unique_limited([
-        region for region in candidate_regions if region not in {"未判定", "國際研究"}
+        match.group(1).strip()
+        for block in blocks
+        for match in [re.search(r"國家/地區\s*[：:]\s*([^\n]+)", block)]
+        if match and match.group(1).strip() not in {"未判定", "國際研究"}
     ])
-    categories = [
-        category for category in ADVANCED_TYPES
-        if any((candidate.get("classification") or candidate.get("preliminary_type")) == category for candidate in candidates)
-    ]
-    themes = _unique_limited(_annual_observation_themes(candidates), 4)
+    positive_categories = [category for category in categories if counts.get(category, 0) > 0]
+    if positive_categories:
+        max_count = max(counts.get(category, 0) for category in positive_categories)
+        leading = [category for category in positive_categories if counts.get(category, 0) == max_count]
+        sentences.append(f"新聞類型以{'、'.join(leading)}為主。")
+    if regions:
+        sentences.append(f"案例主要分布於{'、'.join(regions)}。")
 
-    region_text = "、".join(regions) if regions else "已入選新聞所載地區"
-    category_text = "、".join(categories) if categories else "已入選新聞類型"
-    sentences = [
-        f"本年度回顧依已入選新聞整理，案例主要分布於{region_text}，新聞類型以{category_text}為主。"
-    ]
+    report_candidates = [{"title": block, "snippet": block, "source": ""} for block in blocks]
+    themes = _unique_limited(_annual_observation_themes(report_candidates), 4)
     if themes:
-        sentences.append(f"從入選標題與摘要可見，觀察重點集中在{'、'.join(themes)}等都市軌道議題。")
-    if _annual_observation_dates_are_recent(candidates):
-        sentences.append("本年度回顧係依系統取得之候選資料整理，部分來源回傳資料集中於近期，故本報告以具明確日期與都市軌道關聯之案例為主。")
+        sentences.append(f"從最終新聞內容可見，觀察重點集中在{'、'.join(themes)}等都市軌道議題。")
+    if _annual_observation_report_dates_are_recent(blocks):
+        sentences.append("最終新聞日期多集中於近期，年度趨勢解讀應以本次實際輸出的案例範圍為準。")
     return "## 年度觀察重點\n" + "".join(sentences)
 
 
-def insert_annual_observation_section(report_md: str, selected_candidates: list[dict]) -> str:
-    if lookback_int != 365 or "年度觀察重點" in (report_md or ""):
+def _remove_annual_observation_section(report_md: str) -> str:
+    return re.sub(
+        r"(?ms)^\s*#{1,6}\s*年度觀察重點\s*$.*?"
+        r"(?=^\s*#{0,6}\s*[一二三四五六七八九十]\s*、|^\s*📊|^\s*⏰|\Z)",
+        "",
+        report_md or "",
+        count=1,
+    ).strip()
+
+
+def insert_annual_observation_section(report_md: str) -> str:
+    if lookback_int != 365:
         return report_md
-    section = build_annual_observation_section(selected_candidates)
+    report_without_observation = _remove_annual_observation_section(report_md)
+    section = build_annual_observation_section(report_without_observation)
     if not section:
-        return report_md
-    lines = (report_md or "").splitlines()
+        return report_without_observation
+    lines = report_without_observation.splitlines()
     insert_idx = 1 if lines and lines[0].lstrip().startswith("#") else 0
     while insert_idx < len(lines) and (not lines[insert_idx].strip() or lines[insert_idx].lstrip().startswith(">")):
         insert_idx += 1
@@ -4606,6 +4661,8 @@ def _selected_report_sections() -> str:
         lines.append("三、營運議題")
     if "規範更新" in selected_types:
         lines.append("四、規範更新")
+    if include_research_supplement:
+        lines.append(research_section_heading(markdown=False))
     return "\n".join(lines) if lines else "無"
 
 
@@ -4617,7 +4674,8 @@ def _section_number_for_index(index: int) -> str:
 
 
 def research_section_heading(markdown: bool = False) -> str:
-    heading = "五、國際學術期刊"
+    section_number = "五" if standards_enabled or "規範更新" in selected_types else "四"
+    heading = f"{section_number}、國際學術期刊"
     return f"## {heading}" if markdown else heading
 
 
@@ -7783,6 +7841,7 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 
 新聞類型判斷原則：
 - 技術新知：原始資料明確描述都市軌道機電設備或系統的新導入、擴充、升級、汰換、改善、測試驗證或正式投入營運。包括新型車輛投入營運、生物辨識或 AFC 系統應用、新票閘設備、電梯或電扶梯汰換、號誌與列車控制、供電、通訊、月臺門、行控、機廠設備、維修監測、能源管理、系統整合、系統保證及資安等具體案例。
+- 技術新知不限於採購、合約或正式上線事件；候選若明確說明都市軌道機電技術原理、工程挑戰或系統應用，即使屬專業技術文章仍應保留。Frauscher 軸計數器與電車號誌工程文章即屬此類，不得只因缺少單一專案事件而刪除。
 - 重大事故：已實際發生，且涉及傷亡、出軌、碰撞、火災、重大設備損壞、停駛、重大營運中斷，或具有明確系統安全檢討價值的事件。
 - 營運政策：票價、服務調整、營運諮詢、預定封閉、例行維修、一般工程安排、旅客服務及治理措施。若新聞同時具有明確設備導入、系統升級或技術驗證內容，應優先歸為技術新知。
 - 營運爭議：罷工、勞資、票價、合約、預算、工程延誤、訴訟或公共爭議。
@@ -7802,7 +7861,9 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 - 事件摘要僅根據候選資料撰寫，重點為事件本身、都市軌道場景、涉及的機電系統或營運管理意義。原始資料未提供細節時應保守表述，不得自行補述數字、供應商、金額、GoA 等級、測試項目、車輛規格、事故原因或導入時程。
 - 資料不足時直接縮短摘要，不得於正文列舉技術規格、時程、測試內容或其他未提供項目。
 - 每則「臺北捷運局啟示」只選擇與該事件最直接相關的一至二項工程重點，不得每則同時羅列系統整合、資料治理、維修管理、資安、能源效率及風險控管。例如票閘設備著重 AFC 介面、容量與維修；電梯汰換著重設備生命週期、施工界面與無障礙服務；號誌事故著重故障隔離、備援與營運應變。
+- 「相關機電系統」應保留候選內容可支持的具體且合理用語；不得把「車站無障礙設施、車站機電」降級為「車站、車站機電」，也不得自行擴寫成「電梯、車站電梯」等重複詞。
 - 資料來源請依 source_domain、source_display、date 與 url 表達；連結依「原始文章 URL、Google News 文章 URL、domain」順序選用。若有完整 URL，必須保留該 URL；若只有 domain，顯示 domain；若無可用連結，僅列來源名稱且不得說明資料缺漏。不得自行編造 URL。
+- 若事件摘要使用 supplemental_sources 的供應商、技術或數據資訊，資料來源欄必須同時列出主要來源與相應補充來源的完整連結。例如 TTC Line 2 摘要若使用 Hitachi 數位號誌或 40% 容量資訊，必須同時列出 TTC 主要來源及 Hitachi／Newswire 補充來源。
 - 不得在正式報告正文使用 MaiAgent、Python 初篩、developer debug、python_score、候選 flags、入選原因或其他模型處理語氣。
 - 請勿輸出「本期統計」、「報告產出時間」、搜尋次數、候選數量或任何系統執行資訊；這些內容將由程式後續統一產生。
 - 未啟用國際學術期刊時，正式報告正文結束於最後一則新聞；啟用期刊時，正文結束於「學術期刊綜合結論」。
@@ -8055,6 +8116,29 @@ def normalize_source_line(line: str) -> str:
     if not match:
         return line
     content = match.group(1).strip()
+    if re.search(r"[；;]\s*補充來源\s*[：:]", content):
+        primary_content, supplemental_content = re.split(
+            r"[；;]\s*補充來源\s*[：:]\s*",
+            content,
+            maxsplit=1,
+        )
+        normalized_primary = normalize_source_line(f"• 資料來源：{primary_content}")
+        supplemental_entries: list[str] = []
+        for raw_entry in re.split(r"[；;]+", supplemental_content):
+            entry = raw_entry.strip()
+            if not entry:
+                continue
+            entry_urls = list(dict.fromkeys(_extract_complete_urls(entry)))
+            label = entry
+            for entry_url in entry_urls:
+                label = label.replace(entry_url, "")
+            label = re.sub(r"^[、,，：:\s]+|[、,，：:\s]+$", "", label)
+            if not label and entry_urls:
+                label = _domain_from_url(entry_urls[0])
+            supplemental_entries.append("，".join([label] + entry_urls) if label else "，".join(entry_urls))
+        if supplemental_entries:
+            return normalized_primary + "；補充來源：" + "；".join(supplemental_entries)
+        return normalized_primary
     date_text = _normalize_report_date_text(content)
     urls = list(dict.fromkeys(_extract_complete_urls(content)))
     original_article_url = next(
@@ -8084,7 +8168,14 @@ def normalize_source_line(line: str) -> str:
     parts = [source_label]
     if date_text and date_text != "日期未知":
         parts.append(date_text)
-    if source_ref:
+    ordered_urls = list(dict.fromkeys(
+        [value for value in urls if "news.google.com" not in _domain_from_url(value) and _is_article_level_url(value)]
+        + [value for value in urls if "news.google.com" in _domain_from_url(value) and _is_article_level_url(value, allow_google_news=True)]
+        + urls
+    ))
+    if ordered_urls:
+        parts.extend(ordered_urls)
+    elif source_ref:
         parts.append(source_ref)
     return f"• 資料來源：{'，'.join(part for part in parts if part)}"
 
@@ -8321,6 +8412,37 @@ def normalize_research_section_heading(text: str) -> str:
     )
 
 
+def normalize_formal_report_title(text: str) -> str:
+    normalized = text or ""
+    for old in (
+        "營運政策、營運爭議",
+        "營運爭議、營運政策",
+        "營運政策／營運爭議",
+        "營運爭議／營運政策",
+    ):
+        normalized = normalized.replace(old, "營運議題")
+    return normalized
+
+
+def normalize_report_section_numbering(text: str) -> str:
+    normalized = text or ""
+    section_numbers = {
+        "技術新知": "一",
+        "重大事故": "二",
+        "營運議題": "三",
+        "規範更新": "四",
+        "國際學術期刊": "五" if standards_enabled or "規範更新" in selected_types else "四",
+    }
+    for label, number in section_numbers.items():
+        aliases = "(?:國際學術期刊|技術研究補充)" if label == "國際學術期刊" else re.escape(label)
+        normalized = re.sub(
+            rf"(?m)^\s*#{{0,6}}\s*[一二三四五六七八九十]\s*、\s*{aliases}\s*$",
+            f"## {number}、{label}",
+            normalized,
+        )
+    return re.sub(r"\n{3,}", "\n\n", normalized).strip()
+
+
 def _operational_block_sort_key(block: str) -> tuple[str, str]:
     date_match = re.search(r"發布/事件日期\s*[：:]\s*(\d{4}-\d{2}-\d{2})", block or "")
     title_match = re.search(r"(?m)^🔹\s*\[[^\]]+\]\s*(.+)$", block or "")
@@ -8409,12 +8531,13 @@ def merge_operational_report_sections(report_md: str) -> str:
         "## 四、規範更新",
         text,
     )
+    research_number = "五" if standards_enabled or "規範更新" in selected_types else "四"
     text = re.sub(
         r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:國際學術期刊|技術研究補充)\s*$",
-        "## 五、國際學術期刊",
+        f"## {research_number}、國際學術期刊",
         text,
     )
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+    return normalize_report_section_numbering(text)
 
 
 INTERNAL_REPORT_REPLACEMENTS = {
@@ -8550,30 +8673,25 @@ def normalize_electromechanical_system_line(line: str) -> str:
 
 
 def normalize_electromechanical_system_value(value: str, context: str = "") -> str:
-    value = (value or "").strip()
-    context_without_value = (context or "").replace(value, "")
-    if "未明確載明機電系統" in value:
-        concrete_value = value.replace("未明確載明機電系統", "")
-        concrete_value = re.sub(r"[、,\s]+", "、", concrete_value).strip("、 ，,")
-        if concrete_value:
-            value = concrete_value
-    if "資通訊與資安" in value and not _contains_any_term(context_without_value, ICT_SECURITY_CONTEXT_TERMS):
-        if _contains_any_term(context_without_value, WORK_ZONE_MONITORING_TERMS):
-            value = value.replace("資通訊與資安", "維修安全監測設備")
-        elif value.strip("、 ，,") == "資通訊與資安":
-            value = "維修安全監測設備"
-        else:
-            value = value.replace("資通訊與資安", "")
-    if "電梯" in value or "升降機" in value:
-        value = value.replace("無障礙設施", "車站電梯").replace("無障礙服務", "車站電梯")
-    if "票閘" in value or "閘門" in value:
-        value = value.replace("旅客服務", "AFC 自動收費系統")
-    for term in SERVICE_OR_CIVIL_SYSTEM_TERMS:
-        value = value.replace(term, "")
-    value = re.sub(r"[、,\s]+", "、", value).strip("、 ，,")
-    if not value:
-        value = "未明確載明機電系統"
-    return value
+    del context
+    raw_value = re.sub(r"\s+", " ", (value or "").strip())
+    placeholders = {
+        "未明確載明機電系統", "未明確載明", "未載明", "不明", "未知", "無", "n/a", "na", "-",
+    }
+    tokens = [
+        token.strip(" \t\r\n、,，;；。")
+        for token in re.split(r"[、,，;；]+", raw_value)
+    ]
+    concrete_tokens = [token for token in tokens if token and token.casefold() not in placeholders]
+    retained = concrete_tokens or [token for token in tokens if token]
+    unique_tokens: list[str] = []
+    seen: set[str] = set()
+    for token in retained:
+        key = re.sub(r"\s+", "", token).casefold()
+        if key and key not in seen:
+            seen.add(key)
+            unique_tokens.append(token)
+    return "、".join(unique_tokens) if unique_tokens else "未明確載明機電系統"
 
 
 def _short_formal_sentence(text: str, limit: int = 180) -> str:
@@ -8894,7 +9012,7 @@ def normalize_final_report_md(md: str) -> str:
 
 def sanitize_report_text(text: str) -> str:
     text = (
-        text.replace("全球（排除台灣）", "全球（安全白名單來源）")
+        normalize_formal_report_title(text).replace("全球（排除台灣）", "全球（安全白名單來源）")
         .replace("全球(排除台灣)", "全球（安全白名單來源）")
         .replace("（排除台灣）", "")
         .replace("(排除台灣)", "")
@@ -8911,9 +9029,10 @@ def sanitize_report_text(text: str) -> str:
     text = normalize_final_report_md(text)
     text = normalize_research_section_heading(text)
     text = merge_operational_report_sections(text)
+    text = normalize_report_section_numbering(text)
     text = strip_internal_report_fields(text)
     text = remove_missing_data_disclaimers(text)
-    return normalize_report_statistics_line(text)
+    return normalize_formal_report_title(normalize_report_statistics_line(text))
 
 
 
@@ -9391,6 +9510,95 @@ def _report_block_matches_candidate(block: str, candidate: dict) -> bool:
     return bool(title_tokens) and sum(1 for token in title_tokens[:6] if token in (block or "")) >= 2
 
 
+def _supplemental_source_is_used(report_block: str, candidate: dict, source_row: dict) -> bool:
+    summary_match = re.search(
+        r"(?ms)^•\s*事件摘要\s*[：:]\s*(.*?)"
+        r"(?=^•\s*(?:臺北捷運局啟示|資料來源|發布/事件日期|國家/地區|相關機電系統)\s*[：:]|\Z)",
+        report_block or "",
+    )
+    summary = summary_match.group(1) if summary_match else report_block or ""
+    summary_folded = summary.casefold()
+    supplemental_text = f"{source_row.get('title', '')} {source_row.get('source_display', '')}".casefold()
+
+    if re.search(r"\b40\s*%", supplemental_text) and re.search(r"40\s*%", summary):
+        return True
+    bilingual_signals = (
+        (("hitachi",), ("hitachi", "日立")),
+        (("digital signalling", "digital signaling"), ("digital signalling", "digital signaling", "數位號誌", "數位信號")),
+        (("capacity increase",), ("capacity increase", "容量提升", "容量增加", "運能提升", "運能增加")),
+    )
+    for source_terms, summary_terms in bilingual_signals:
+        if any(term in supplemental_text for term in source_terms) and any(term in summary_folded for term in summary_terms):
+            return True
+
+    source_display = str(source_row.get("source_display", "") or "").casefold()
+    source_name = source_display.split(".", 1)[0]
+    if len(source_name) >= 4 and source_name in summary_folded:
+        return True
+    candidate_title = str(candidate.get("title", "") or "").casefold()
+    if "ttc" in candidate_title and "line 2" in candidate_title:
+        return bool(re.search(r"40\s*%|hitachi|日立|數位號誌|數位信號|運能(?:提升|增加)|容量(?:提升|增加)", summary, flags=re.IGNORECASE))
+    return False
+
+
+def _report_block_matches_supplemental_candidate(block: str, candidate: dict) -> bool:
+    if _report_block_matches_candidate(block, candidate):
+        return True
+    block_folded = (block or "").casefold()
+    title_folded = str(candidate.get("title", "") or "").casefold()
+    operator_markers = [marker for marker in ("ttc", "mta", "wmata", "bvg", "translink", "frauscher", "austin") if marker in title_folded]
+    route_markers = [marker for marker in ("line 2", "r211", "m4", "skytrain") if marker in title_folded]
+    return bool(operator_markers and any(marker in block_folded for marker in operator_markers)) and (
+        not route_markers or any(marker in block_folded for marker in route_markers)
+    )
+
+
+def ensure_supplemental_sources_in_report(report_md: str, selected_candidates: list[dict]) -> str:
+    candidates = [candidate for candidate in selected_candidates or [] if candidate.get("supplemental_sources")]
+    if not report_md or not candidates:
+        return report_md
+    parts = re.split(r"(?m)^(🔹\s*\[[^\]]+\].*)$", report_md)
+    if len(parts) <= 1:
+        return report_md
+    output = [parts[0]]
+    for idx in range(1, len(parts), 2):
+        heading = parts[idx]
+        body = parts[idx + 1] if idx + 1 < len(parts) else ""
+        block = heading + body
+        candidate = next(
+            (item for item in candidates if _report_block_matches_supplemental_candidate(block, item)),
+            None,
+        )
+        if not candidate:
+            output.extend([heading, body])
+            continue
+        used_sources = [
+            source_row for source_row in candidate.get("supplemental_sources", []) or []
+            if _supplemental_source_is_used(block, candidate, source_row)
+        ]
+        additions: list[str] = []
+        for source_row in used_sources:
+            source_url = _extract_complete_url(str(source_row.get("url", "") or ""))
+            source_display = str(source_row.get("source_display", "") or _domain_from_url(source_url) or "補充來源").strip()
+            if source_url and source_url not in block:
+                additions.append(f"{source_display}，{source_url}")
+            elif source_display and source_display.casefold() not in block.casefold():
+                additions.append(source_display)
+        if additions:
+            suffix = "；補充來源：" + "；".join(additions)
+            if re.search(r"(?m)^•\s*資料來源\s*[：:].*$", body):
+                body = re.sub(
+                    r"(?m)^(•\s*資料來源\s*[：:].*)$",
+                    lambda match: match.group(1).rstrip("；; ") + suffix,
+                    body,
+                    count=1,
+                )
+            else:
+                body = body.rstrip() + f"\n\n• 資料來源：{suffix.lstrip('；')}\n"
+        output.extend([heading, body])
+    return "".join(output)
+
+
 def _candidate_region_display(candidate: dict) -> str:
     text = _candidate_selection_text(candidate)
     region = _canonical_candidate_region(dict(candidate))
@@ -9580,7 +9788,11 @@ def compact_report_line_for_pdf(line: str) -> str:
         lambda m: f"{m.group(1)}（{m.group(2)}）",
         line,
     )
-    line = re.sub(r"https?://[^\s\)\]]+", lambda m: _extract_complete_url(m.group(0)) or m.group(0), line)
+    line = re.sub(
+        r"https?://[^\s\)\]）＞>，,；;。]+",
+        lambda match: match.group(0).rstrip("。；;,，)"),
+        line,
+    )
     return line
 
 
@@ -9726,7 +9938,7 @@ def build_final_incident_coverage_debug(
     )
     maiagent_count = count_report_items_by_category(maiagent_report_response).get("重大事故", 0)
     final_count = count_report_items_by_category(final_report_md).get("重大事故", 0)
-    dropped_after_maiagent = max(0, maiagent_count - final_count)
+    dropped_after_maiagent = max(0, python_count - final_count)
     warning = bool(
         global_scope
         and int(report_days or 0) in {90, 365}
@@ -9965,7 +10177,7 @@ def _builtin_demo_report_text() -> str:
     if "規範更新" in selected_types:
         sections.extend([
             "",
-            "五、規範更新",
+            "四、規範更新",
             "本期未發現符合條件資料。",
         ])
     if include_research_supplement:
@@ -10336,12 +10548,15 @@ if generate_btn:
             report_text = normalize_final_report_md(report_text)
             report_text = repair_journal_dates_in_report(report_text, journal_candidates)
             report_text = normalize_journal_section_format(report_text, journal_candidates)
-            report_text = insert_annual_observation_section(report_text, selected_candidates)
             report_text, dropped_selected_candidates = restore_missing_selected_report_items(report_text, selected_candidates)
             report_text = repair_report_region_lines(report_text, selected_candidates)
             report_text = repair_generic_report_titles(report_text, selected_candidates)
             report_text = merge_operational_report_sections(report_text)
+            report_text = normalize_report_section_numbering(report_text)
+            report_text = ensure_supplemental_sources_in_report(report_text, selected_candidates)
             report_text = remove_missing_data_disclaimers(report_text)
+            report_text = insert_annual_observation_section(report_text)
+            report_text = normalize_formal_report_title(report_text)
             report_text = apply_final_report_footer(report_text, journal_candidates)
             pdf_bytes = try_markdown_to_pdf_bytes(report_text)
             dropped_selected_ids = [int(item.get("id", 0) or 0) for item in dropped_selected_candidates]
