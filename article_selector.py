@@ -7,7 +7,28 @@ import re
 import urllib.parse
 
 from config import *
-from article_processor import *
+from article_processor import (
+    _candidate_date_obj,
+    _canonical_candidate_region,
+    _contains_any_term,
+    _contains_taiwan_reference,
+    _date_from_url_path,
+    _date_sort_key,
+    _dedupe_route_line_tokens,
+    _dedupe_titles_conflict_on_entities,
+    _domain_from_url,
+    _effective_source_url,
+    _extract_complete_url,
+    _extract_domain_hint,
+    _host_matches,
+    _normalize_source_domain,
+    _original_source_domain,
+    _prefetch_candidate_article,
+    _quality_rank,
+    _shorten,
+    _source_tier_rank,
+    _strip_source_name_noise,
+)
 
 LOW_VALUE_POLICY_TERMS = [
     "holiday service", "weekend service", "weekender", "service advisory",
