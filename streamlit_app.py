@@ -39,6 +39,64 @@ from pdf_exporter import (
     _soft_wrap_long_tokens as shared_soft_wrap_long_tokens,
 )
 from email_service import send_streamlit_email
+from config import *
+import article_selector as selector_service
+from article_selector import build_selector_api, REPORT_SELECTION_DEBUG_DEFAULT
+from article_processor import (
+    _parse_pub_date, _is_recent, _source_tuple, _host_matches, _domain_from_url,
+    _normalize_source_domain, _extract_site_domain_from_google_news, _is_blocked_host,
+    _is_domestic_taiwan_host, _contains_taiwan_reference, _contains_any_term,
+    _domain_hint_from_source_label, _original_source_domain, _strict_source_domain,
+    _strip_source_name_noise, _candidate_region_text, _region_from_domain_hints,
+    _region_guess_from_candidate, _canonical_candidate_region, _normalize_title,
+    _dedupe_url, _entry_source_href, _entry_pub_str, _clean_text, _shorten,
+    _is_article_level_url, _effective_source_url, _clean_candidate_url, _quality_rank,
+    _source_tier_rank, classify_source_quality, classify_source_tier,
+    source_label_for_report, source_verb_for_report, _region_term_matches,
+    _explicit_event_region_hint, _event_region_hint_from_text, guess_region_from_text,
+    _candidate_date_obj, _date_from_url_path, _date_sort_key,
+    _make_news_candidate as service_make_news_candidate,
+    parse_rss_candidates as service_parse_rss_candidates,
+    parse_ddg_candidates as service_parse_ddg_candidates,
+    _dedupe_entity_tokens, _dedupe_route_line_tokens,
+    _dedupe_titles_conflict_on_entities, _is_similar_title_duplicate,
+    dedupe_candidates as service_dedupe_candidates,
+    _extract_complete_url, _extract_complete_urls, _extract_domain_hint,
+    _canonical_url_from_html, _resolve_google_news_article_url,
+    _prefetch_url_for_candidate, _extract_prefetch_text, _prefetch_candidate_article,
+)
+from search_queries import (
+    SEARCH_QUERY_SPECS, REGION_QUERY_LANGUAGES, QUERY_FAMILY_BY_TYPE_INDEX, SEARCH_LANGUAGE_MARKERS,
+    build_rss_sources, KNOWN_BAD_OFFICIAL_RSS_HOSTS, KNOWN_BAD_OFFICIAL_RSS_LABELS,
+    FORMAL_SOURCE_PROXY_LABELS, REGION_NEWS_QUERIES, FAST_SOURCE_KEYWORDS,
+    _source_skip_record, _source_identity, _is_known_bad_official_rss,
+    _conditional_news_sources as service_conditional_news_sources,
+    build_region_news_sources, build_standards_news_sources,
+    select_fast_rss_sources, build_run_news_sources as service_build_run_news_sources,
+)
+from search_service import (
+    FeedFetchError as ServiceFeedFetchError,
+    google_news_search_url as service_google_news_search_url,
+    google_news_site_proxy_url as service_google_news_site_proxy_url,
+    compact_query as service_compact_query,
+    ddgs_timelimit_for_lookback as service_ddgs_timelimit_for_lookback,
+    create_requests_session as service_create_requests_session,
+    fetch_feed as service_fetch_feed,
+    execute_ddgs_query as service_execute_ddgs_query,
+)
+from maiagent_service import (
+    call_maiagent_cloud as call_maiagent_service,
+    extract_maiagent_text,
+    ensure_selected_candidate_ids as service_ensure_selected_candidate_ids,
+    extract_report_candidate_ids as service_extract_report_candidate_ids,
+    remove_internal_candidate_markers as service_remove_internal_candidate_markers,
+    validate_report_candidate_ids as service_validate_report_candidate_ids,
+    build_report_retry_prompt as service_build_report_retry_prompt,
+    REPORT_CANDIDATE_ID_PATTERN as SERVICE_REPORT_CANDIDATE_ID_PATTERN,
+    REPORT_ESCAPED_CANDIDATE_ID_PATTERN as SERVICE_REPORT_ESCAPED_CANDIDATE_ID_PATTERN,
+    INTERNAL_CANDIDATE_MARKER_PATTERN as SERVICE_INTERNAL_CANDIDATE_MARKER_PATTERN,
+    ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN as SERVICE_ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN,
+)
 
 try:
     from ddgs import DDGS
@@ -509,660 +567,63 @@ def iter_pdf_font_candidates():
             if candidate:
                 yield candidate
 
-ADVANCED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議", "規範更新"]
-DEFAULT_SELECTED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議"]
-SECTION_NUMBER_BY_TYPE = {
-    "技術新知": "一",
-    "重大事故": "二",
-    "營運政策": "三",
-    "營運爭議": "四",
-    "規範更新": "五",
-}
-EMPTY_TEXT_BY_TYPE = {
-    "技術新知": "本期未發現符合條件之技術新知案例。",
-    "重大事故": "本期未發現符合條件之重大事故案例。",
-    "營運政策": "本期未發現符合條件之營運政策案例。",
-    "營運爭議": "本期未發現符合條件之營運爭議事件。",
-    "規範更新": "本期未發現符合條件之規範版本更新、修訂草案、公告或徵詢事件。",
-}
-MIN_REPORT_ITEMS = 3
-MAX_ITEMS_PER_SOURCE = 25
-DDGS_RESULTS_PER_QUERY = 8
-DDGS_QUERY_CHAR_LIMIT = 180
-DDGS_GLOBAL_QUERY_LIMIT = 40
-DDGS_REGIONAL_QUERY_LIMIT = 60
-PREFETCH_TIMEOUT_SECONDS = 4
-PREFETCH_MAX_CHARS = 6000
-PREFETCH_LIMIT_BY_PERIOD = {
-    "weekly": 8,
-    "monthly": 15,
-    "annual": 25,
-}
-RESEARCH_SUPPLEMENT_LOOKBACK_DAYS = 90
-NORMAL_LOOKBACK_OPTIONS = [7, 14, 30]
-ADVANCED_LOOKBACK_OPTIONS = [90, 180, 365]
-REPORT_TARGET_BY_DAYS = {
-    7: 3,
-    14: 6,
-    30: 6,
-    90: 9,
-    180: 9,
-    365: 9,
-}
-LONG_TERM_TARGET_LABELS = {
-    90: "趨勢回顧",
-    180: "半年報",
-    365: "年度回顧",
-}
-REPORT_PERIOD_LABELS = {
-    7: "週報",
-    14: "雙週報",
-    30: "月報",
-    90: "季報",
-    180: "半年報",
-    365: "年度回顧",
-}
 
 
-def get_research_supplement_lookback_days(days: int) -> int:
-    try:
-        days = int(days)
-    except (TypeError, ValueError):
-        days = 90
-    if days >= 365:
-        return 365
-    if days >= 180:
-        return 180
-    return 90
 
 
-def research_supplement_allowed_for_report(days: int) -> bool:
-    return int(days or 0) in {90, 180, 365}
 
-ADVANCED_REGIONS = [
-    "日本", "韓國", "新加坡", "香港", "澳洲", "英國", "法國", "德國",
-    "美國", "加拿大", "西班牙", "荷蘭", "瑞士", "義大利", "瑞典",
-    "奧地利", "丹麥", "挪威", "俄羅斯", "葡萄牙", "巴西", "印度",
-]
 
-DEFAULT_REGIONS = [
-    "日本", "韓國", "新加坡", "香港", "澳洲", "英國", "法國", "德國",
-    "美國", "加拿大", "西班牙",
-]
 
-REGION_SEARCH_TERMS = {
-    "日本": "Japan Tokyo Metro Osaka Metro subway new transit system",
-    "韓國": "Korea Seoul Metro subway urban rail light rail",
-    "新加坡": "Singapore MRT LTA SMRT",
-    "香港": "Hong Kong MTR light rail metro",
-    "美國": "United States New York subway Washington Metro Chicago CTA",
-    "加拿大": "Canada Toronto TTC Vancouver SkyTrain Montreal REM",
-    "英國": "United Kingdom London Underground DLR tram Transport for London",
-    "法國": "France Paris Metro RATP Grand Paris Express",
-    "德國": "Germany Berlin U-Bahn Munich U-Bahn Hamburg U-Bahn",
-    "西班牙": "Spain Madrid Metro Barcelona Metro tranvia light rail metro project",
-    "荷蘭": "Netherlands Amsterdam metro Rotterdam metro",
-    "瑞士": "Switzerland Zurich tram Lausanne metro",
-    "澳洲": "Australia Sydney Metro Melbourne Metro Brisbane Metro light rail",
-    "義大利": "Italy metro metropolitana tram light rail",
-    "瑞典": "Sweden Stockholm metro Gothenburg tram light rail",
-    "奧地利": "Austria Vienna U-Bahn Wiener Linien tram metro",
-    "丹麥": "Denmark Copenhagen Metro light rail",
-    "挪威": "Norway Oslo Metro tram light rail",
-    "俄羅斯": "Russia Moscow Metro tram metro rolling stock signalling",
-    "葡萄牙": "Portugal metro metropolitana tram funicular",
-    "巴西": "Brazil Sao Paulo Metro Rio Metro metro tram",
-    "印度": "India Delhi Metro Mumbai Metro Bengaluru Metro metro rail",
-}
 
-STANDARDS_WATCHLIST = {
-    "碰撞/出軌類": ["EN 50126", "EN 50128", "EN 50129", "IEEE 1474.1", "EN 13674-1", "UIC 860-0", "IEC 61373"],
-    "觸電/電弧爆炸類": ["EN 50122", "EN 50122-2", "EN 50327", "EN 50328", "EN 50329", "IEC 62271-100", "IEC 62271-102", "IEC 60947-1", "IEC 60850"],
-    "火災/中毒類": ["NFPA 130", "ASTM E119", "IEC 60754-1", "IEC 60754-2", "IEC 60332-1", "ASTM E662", "NFPA 258", "NFPA 70"],
-    "結構性/爆炸性設備失效類": ["IEC 60076", "IEC 60076-11", "IEC 62695"],
-}
 
-STANDARD_UPDATE_TERMS = [
-    "new edition", "revision", "amendment", "corrigendum", "draft",
-    "public comment", "published", "withdrawn", "superseded",
-]
 
-BLOCKED_DOMAINS = {
-    ".cn", ".kp", ".by", ".ir",
-}
 
-LOW_VALUE_EXCLUDED_HOSTS = {
-    "buseta.wmata.com",
-    "estore.mtr.com.hk",
-    "portal.mtr.com.hk",
-    "link.mtrmb.mtr.com.hk",
-    "art.tfl.gov.uk",
-    "travelandtourworld.com",
-}
 
-PORTAL_REPOST_DOMAINS = {"msn.com", "yahoo.com", "aol.com", "patch.com"}
 
-PORTAL_SOCIAL_LOW_VALUE_DOMAINS = {
-    "facebook.com", "instagram.com", "x.com", "twitter.com",
-    "youtube.com", "youtu.be", "reddit.com",
-}
 
-ALLOWED_NEWS_DOMAINS: set[str] = set()
 
-DOMESTIC_EXCLUDED_DOMAINS = {
-    ".tw",
-}
 
-DOMESTIC_EXCLUDED_TERMS = [
-    "台灣", "臺灣", "Taiwan",
-    "台北", "臺北", "Taipei", "Taipei MRT", "北捷",
-    "新北", "New Taipei",
-    "桃園", "Taoyuan", "Taoyuan Metro", "桃捷",
-    "台中", "臺中", "Taichung",
-    "台南", "臺南", "Tainan",
-    "高雄", "Kaohsiung", "Kaohsiung MRT", "高捷",
-    "基隆", "Keelung", "新竹", "Hsinchu", "苗栗", "Miaoli",
-    "宜蘭", "Yilan", "花蓮", "Hualien", "台東", "臺東", "Taitung",
-    "屏東", "Pingtung",
-]
 
-TRANSIT_NEWS_TERMS = (
-    '("urban rail" OR metro OR subway OR underground OR "mass rapid transit" OR MRT OR '
-    '"light rail" OR tram OR tramway OR streetcar OR LRRT OR LRT OR AGT OR '
-    '"automated guideway transit" OR "people mover") '
-    '-"high-speed rail" -"high speed rail" -HSR -Shinkansen -"bullet train" '
-    '-intercity -"regional rail" -freight -locomotive -bus -coach -highway'
-)
 
-URBAN_RAIL_MODE_TERMS = [
-    "metro", "subway", "underground", "tube", "metrorail", "mass rapid transit", "mrt",
-    "light rail", "tram", "tramway", "streetcar", "lrrt", "lrt",
-    "urban rail", "urban metro", "rapid transit", "people mover", "automated guideway transit",
-    "agt", "monorail", "funicular", "u-bahn", "stadtbahn", "skytrain", "dlr", "mover",
-    "地下鉄", "メトロ", "新交通システム", "都市鉄道", "路面電車", "トラム",
-    "지하철", "도시철도", "경전철",
-    "地鐵", "港鐵", "輕軌", "轻轨", "都市軌道", "捷運",
-]
 
-URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS = [
-    term for term in URBAN_RAIL_MODE_TERMS
-    if term not in {"metro"}
-]
 
-URBAN_RAIL_OPERATOR_TERMS = [
-    "tokyo metro", "seoul metro", "mtr", "lta", "smrt", "tfl", "transport for london",
-    "ratp", "wmata", "ttc", "translink", "mta", "nyct", "cta", "bart",
-    "metro de madrid", "madrid metro", "barcelona metro", "wiener linien",
-    "stockholm metro", "sporveien", "copenhagen metro", "rta dubai",
-    "東京メトロ", "서울교통공사", "港鐵", "巴黎地鐵",
-]
 
-CIVIC_METRO_NAME_ONLY_TERMS = [
-    "metro vancouver", "metro council", "metro mayor", "metro government",
-    "metro area", "metro region", "metropolitan council", "metropolitan government",
-    "metropolitan planning organization",
-    "metro atlanta", "metro nashville", "metro police", "metro fire",
-    "metro housing", "metropolitan area",
-]
 
-METRO_RAIL_CONTEXT_TERMS = [
-    "rail", "train", "station", "line", "fare", "fleet", "signalling", "signaling",
-    "rolling stock", "subway", "transit system", "platform", "depot",
-    "metro operator", "metro rail", "metro network", "metro line", "metro station",
-    "ticketing", "fare gate", "track", "tram", "light rail",
-]
 
-SOURCE_NAME_NOISE_TERMS = [
-    "metro magazine", "metro report international", "urban transport magazine",
-    "mass transit", "railway gazette international", "international railway journal",
-    "railway age", "railway-news", "railway news", "railway technology",
-    "global railway review", "intelligent transport",
-]
 
-NON_URBAN_TRANSPORT_TERMS = [
-    "high-speed rail", "high speed rail", "high-speed train", "high speed train",
-    "hsr", "shinkansen", "bullet train", "tgv", "ice train", "renfe high speed",
-    "intercity", "inter-city", "long-distance", "long distance", "regional rail",
-    "commuter rail", "national rail", "mainline", "main line", "heavy haul",
-    "freight", "locomotive", "rail freight", "passenger rail", "railway contract",
-    "railway contracts", "railway procurement", "lirr", "long island rail road",
-    "amtrak", "korail", "network rail", "east midlands railway", "regiojet",
-    "battery train", "hybrid train", "diesel-hybrid", "gsm-r outage",
-    "bus", "coach", "highway", "intercity bus", "long-distance coach", "brt",
-    "airport", "aviation", "lax", "airport people mover", "terminal people mover",
-    "airport transit", "airport shuttle", "terminal shuttle",
-    "road maintenance", "road works", "road construction", "road closure",
-    "pothole", "highway works", "traffic advisory",
-    "高速鐵路", "高速铁路", "高鐵", "高铁", "新幹線", "新干线",
-    "台鐵", "臺鐵", "台湾鉄路", "台灣鐵路", "在来線", "特急",
-    "貨運", "貨物列車", "客運鐵路", "城際鐵路", "區域鐵路", "通勤鐵路",
-    "公路", "高速公路", "道路維護", "道路施工", "道路封閉", "道路坑洞",
-    "交通提醒", "長途巴士", "客運", "機場", "航空", "航廈", "航站",
-    "高速鉄道", "高速バス", "バス", "貨物鉄道", "在来線",
-]
 
-NON_URBAN_HARD_EXCLUDE_TERMS = [
-    term for term in NON_URBAN_TRANSPORT_TERMS
-    if term not in {"passenger rail", "railway contract", "railway contracts", "railway procurement"}
-]
 
-LAST_DDGS_QUERY_METADATA: dict[str, dict] = {}
-LAST_DDGS_QUERY_STATUSES: list[dict] = []
-LAST_DDGS_SEARCH_SUMMARY: dict = {}
 
-SEARCH_QUERY_SPECS = [
-    {"family": "technology", "lang": "en", "query": "metro subway MRT LRT tram CBTC signalling upgrade commissioning"},
-    {"family": "technology", "lang": "en", "query": "metro subway LRT tram rolling stock new trains ordered delivered"},
-    {"family": "technology", "lang": "en", "query": "metro subway tram contactless payment AFC fare gates rollout"},
-    {"family": "technology", "lang": "de", "query": "U-Bahn Stadtbahn Strassenbahn Signaltechnik Fahrzeuge Modernisierung"},
-    {"family": "technology", "lang": "fr", "query": "métro tramway signalisation matériel roulant modernisation"},
-    {"family": "technology", "lang": "es", "query": "metro tranvía tren ligero señalización material rodante modernización"},
-    {"family": "technology", "lang": "it", "query": "metro metropolitana tram segnalamento materiale rotabile modernizzazione"},
-    {"family": "technology", "lang": "pt", "query": "metro metropolitana tram funicular sinalização material circulante modernização"},
-    {"family": "technology", "lang": "ru", "query": "метро трамвай сигнализация вагоны модернизация"},
-    {"family": "technology", "lang": "ja", "query": "地下鉄 メトロ 路面電車 信号 車両 自動運転 更新 導入"},
-    {"family": "technology", "lang": "ko", "query": "지하철 도시철도 경전철 신호 차량 자동운전 현대화 도입"},
-    {"family": "technology", "lang": "zh", "query": "地鐵 地铁 捷運 輕軌 轻轨 信號 信号 車輛 车辆 自動化 自动化 更新"},
-    {"family": "major_accident", "lang": "en", "query": "metro subway LRT tram derailment collision fire evacuation investigation"},
-    {"family": "major_accident", "lang": "en", "query": "funicular tram metro fatal injured shutdown safety investigation"},
-    {"family": "major_accident", "lang": "pt", "query": "metro metropolitana tram funicular descarrilamento colisão incêndio investigação"},
-    {"family": "major_accident", "lang": "it", "query": "metro metropolitana tram funicular deragliamento collisione incendio indagine"},
-    {"family": "major_accident", "lang": "ru", "query": "метро трамвай фуникулер сход с рельсов столкновение пожар расследование"},
-    {"family": "major_accident", "lang": "fr", "query": "métro tramway funiculaire déraillement collision incendie enquête"},
-    {"family": "major_accident", "lang": "es", "query": "metro tranvía funicular descarrilamiento colisión incendio investigación"},
-    {"family": "major_accident", "lang": "ja", "query": "地下鉄 メトロ 路面電車 トラム 脱線 衝突 火災 避難 調査"},
-    {"family": "major_accident", "lang": "ko", "query": "지하철 도시철도 경전철 트램 탈선 충돌 화재 대피 조사"},
-    {"family": "major_accident", "lang": "zh", "query": "地鐵 地铁 捷運 輕軌 轻轨 脫軌 脱轨 碰撞 火災 火灾 調查 调查"},
-    {"family": "policy", "lang": "en", "query": "metro subway tram line opening fare reform operating hours service change"},
-    {"family": "policy", "lang": "en", "query": "metro subway LRT line extension capacity increase closure works"},
-    {"family": "policy", "lang": "de", "query": "U-Bahn Stadtbahn Fahrplan Betriebszeiten Tarife Eroeffnung"},
-    {"family": "policy", "lang": "fr", "query": "métro tramway ouverture ligne tarif horaires travaux"},
-    {"family": "policy", "lang": "it", "query": "metro metropolitana tram apertura linea tariffe orari lavori"},
-    {"family": "policy", "lang": "pt", "query": "metro metropolitana tram abertura linha tarifas horários obras"},
-    {"family": "dispute", "lang": "en", "query": "metro subway tram strike union lawsuit procurement dispute delay cost overrun"},
-    {"family": "dispute", "lang": "en", "query": "light rail metro contract dispute arbitration protest service disruption"},
-    {"family": "dispute", "lang": "it", "query": "metro metropolitana tram sciopero contenzioso appalto ritardo"},
-    {"family": "dispute", "lang": "pt", "query": "metro metropolitana tram greve disputa contrato atraso"},
-    {"family": "dispute", "lang": "ru", "query": "метро трамвай забастовка спор контракт задержка"},
-    {"family": "official_investigation", "lang": "en", "query": "urban rail metro tram derailment collision fire official investigation safety board", "use_news": False},
-]
 
-REGION_QUERY_LANGUAGES = {
-    "日本": "ja", "韓國": "ko", "香港": "zh", "法國": "fr", "德國": "de",
-    "西班牙": "es", "義大利": "it", "葡萄牙": "pt", "俄羅斯": "ru",
-    "加拿大": "en", "瑞士": "de", "奧地利": "de", "巴西": "pt",
-}
 
-QUERY_FAMILY_BY_TYPE_INDEX = {
-    0: "technology",
-    1: "major_accident",
-    2: "policy",
-    3: "dispute",
-}
 
-SEARCH_LANGUAGE_MARKERS = [
-    ("ja", ["地下鉄", "メトロ", "脱線", "運休", "新幹線"]),
-    ("ko", ["지하철", "도시철도", "탈선", "운행중단"]),
-    ("zh", ["地鐵", "地铁", "捷運", "輕軌", "脫軌", "調查"]),
-    ("ru", ["метро", "трамвай", "сход", "пожар", "биометрическая"]),
-    ("de", ["u-bahn", "stadtbahn", "straßenbahn", "entgleisung", "brandschutz"]),
-    ("fr", ["métro", "tramway", "déraillement", "évacuation", "enquête"]),
-    ("es", ["tranvía", "descarrilamiento", "colisión", "investigación"]),
-    ("it", ["metropolitana", "sciopero", "funicolare", "segnalamento", "deragliamento"]),
-    ("pt", ["eletrico", "elétrico", "greve", "investigacao", "investigação", "sinalizacao", "sinalização", "descarrilamento"]),
-]
 
-AIRPORT_PEOPLE_MOVER_EXCLUDE_TERMS = [
-    "airport", "aviation", "lax", "airport people mover", "terminal people mover",
-    "airport transit", "airport shuttle", "terminal shuttle",
-    "機場", "航空", "航廈", "航站",
-]
 
-TECH_NEWS_REQUIRED_TERMS = [
-    "cbtc", "goa4", "driverless", "unattended train operation", "automatic train operation",
-    "automation", "automated", "train control", "signalling", "signaling", "signal system",
-    "rolling stock", "fleet", "new train", "trainset", "vehicle", "platform screen door",
-    "platform doors", "psd", "power supply", "traction power", "substation", "third rail",
-    "overhead line", "communications", "telecom", "4g", "5g", "lte", "radio", "cybersecurity",
-    "data", "monitoring", "condition monitoring", "real-time", "digital", "asset management",
-    "depot", "maintenance", "workshop", "afc", "fare gate", "ticketing", "elevator",
-    "escalator", "system integration", "testing", "commissioning", "trial run",
-    "api", "data governance", "ai image analysis", "video analytics", "system verification",
-    "自動運転", "無人運転", "ワンマン運転", "信号", "ホームドア", "車両", "電力",
-    "変電所", "通信", "保守", "検査", "試験", "システム",
-    "自動駕駛", "無人駕駛", "單人駕駛", "號誌", "信號", "月臺門", "月台門",
-    "車輛", "列車", "供電", "牽引", "變電站", "通訊", "資安", "即時監控",
-    "維修", "機廠", "測試", "試運轉", "系統整合", "列控", "資料治理",
-    "AI 影像分析", "影像分析", "測試驗證",
-]
 
-TITLE_TECHNICAL_ACTION_TERMS = [
-    "upgrade", "upgraded", "modernise", "modernize", "modernisation", "modernization",
-    "renewal", "replace", "replacement", "retrofit", "deploy", "deployed", "roll out",
-    "rollout", "install", "installation", "commission", "commissioning", "test", "testing",
-    "trial", "pilot", "launch", "enter service", "entered service", "open", "opened",
-    "introduced", "introduce", "integrate", "integrated", "integration", "contract awarded",
-    "award contract", "selected", "order", "ordered", "deliver", "delivered",
-    "upgrades", "replaces", "renews", "retrofits", "deploys", "installs",
-    "commissions", "launches", "introduces", "integrates", "awards",
-    "orders", "delivers", "activates",
-    "啟用", "導入", "部署", "升級", "更新", "汰換", "更換", "改造", "現代化",
-    "安裝", "裝設", "整合", "測試", "試運轉", "試辦", "試行", "驗證",
-    "投入營運", "正式營運", "得標", "採購", "交付", "導入新",
-]
 
-TECH_NEWS_SOFT_EXCLUDE_TERMS = [
-    "accident", "derailment", "collision", "fire", "arson", "incident", "strike",
-    "wage", "salary", "union", "fare dispute", "budget overrun", "lawsuit",
-    "ceo", "resignation", "appoints", "appointment", "preview", "ceremony",
-    "anniversary", "mascot", "branding", "pest", "hygiene", "route planning",
-    "network expansion", "line extension", "funding", "procurement scandal",
-    "bus procurement", "electric bus", "policy", "ban",
-    "事故", "脱線", "火災", "放火", "スト", "労組", "賃金", "社長", "退任",
-    "就任", "記念", "ラッピング", "ドラゴンズ", "害虫", "禁止", "バス",
-    "事故", "出軌", "脫軌", "火災", "縱火", "罷工", "工會", "薪資", "票價",
-    "爭議", "執行長", "離職", "任命", "預覽", "開幕", "紀念", "彩繪",
-    "行銷", "害蟲", "禁帶", "禁令", "公車", "電動巴士",
-]
 
-MAX_SELECTION_CANDIDATES = 150
-SELECTION_MIN_ITEMS = 8
-SELECTION_MAX_ITEMS = 20
-CANDIDATE_SNIPPET_CHARS = 140
-REPORT_SNIPPET_CHARS = 420
-JOURNAL_MAX_RESULTS_PER_QUERY = 3
-JOURNAL_MAX_ITEMS = 8
-JOURNAL_ARTICLE_FETCH_LIMIT = 18
 
-SOURCE_QUALITY_A_DOMAINS = {
-    "tfl.gov.uk", "mta.info", "wmata.com", "ttc.ca", "translink.ca",
-    "ratp.fr", "lta.gov.sg", "smrt.com.sg", "mtr.com.hk",
-    "seoulmetro.co.kr", "tokyometro.jp", "metro.tokyo.lg.jp",
-    "metro-madrid.es", "tmb.cat", "wienerlinien.at", "sl.se",
-    "cph.dk", "rta.ae", "bvg.de", "sydneymetro.info",
-    "infrastructure.gov.au", "kaupunkiliikenne.fi", "mosmetro.ru",
-    "transport.mos.ru", "lrta.gov.ph", "ntsb.gov", "tsb.gc.ca",
-    "atsb.gov.au", "bea-tt.developpement-durable.gouv.fr", "gov.uk",
-    "raib.gov.uk", "railwaygazette.com", "railjournal.com",
-    "railway-technology.com", "railway-news.com",
-    "urban-transport-magazine.com", "masstransitmag.com",
-    "intelligenttransport.com", "metro-magazine.com",
-}
 
-SOURCE_TIER_OFFICIAL_DOMAINS = {
-    "tfl.gov.uk", "mta.info", "wmata.com", "ttc.ca", "translink.ca",
-    "ratp.fr", "lta.gov.sg", "smrt.com.sg", "mtr.com.hk",
-    "seoulmetro.co.kr", "tokyometro.jp", "metro.tokyo.lg.jp",
-    "metro-madrid.es", "tmb.cat", "wienerlinien.at", "sl.se",
-    "cph.dk", "rta.ae", "uitp.org", "societedesgrandsprojets.fr",
-    "bvg.de", "sydneymetro.info", "infrastructure.gov.au",
-    "kaupunkiliikenne.fi", "mosmetro.ru", "transport.mos.ru",
-    "lrta.gov.ph", "ntsb.gov", "tsb.gc.ca", "atsb.gov.au",
-    "bea-tt.developpement-durable.gouv.fr", "gov.uk", "raib.gov.uk",
-}
 
-SOURCE_TIER_PROFESSIONAL_DOMAINS = {
-    "railwaygazette.com", "railjournal.com", "railway-technology.com",
-    "railway-news.com", "urban-transport-magazine.com", "masstransitmag.com",
-    "intelligenttransport.com", "metro-magazine.com", "railwayage.com",
-    "globalmasstransit.net", "globalmasstransit.com",
-}
 
-SOURCE_DISPLAY_BY_DOMAIN = {
-    "mta.info": "MTA 官方公告",
-    "tokyometro.jp": "Tokyo Metro 官方公告",
-    "mtr.com.hk": "港鐵官方資料",
-    "ttc.ca": "TTC 官方公告",
-    "tfl.gov.uk": "TfL 官方公告",
-    "wmata.com": "WMATA 官方公告",
-    "translink.ca": "TransLink 官方公告",
-    "ratp.fr": "RATP 官方資料",
-    "lta.gov.sg": "LTA 官方公告",
-    "smrt.com.sg": "SMRT 官方公告",
-    "seoulmetro.co.kr": "Seoul Metro 官方公告",
-    "railway-news.com": "Railway-News",
-    "railwaygazette.com": "Railway Gazette",
-    "railjournal.com": "International Railway Journal",
-    "urban-transport-magazine.com": "Urban Transport Magazine",
-    "globalmasstransit.net": "Global Mass Transit",
-    "globalmasstransit.com": "Global Mass Transit",
-    "masstransitmag.com": "Mass Transit Magazine",
-    "metro-magazine.com": "METRO Magazine",
-    "railwayage.com": "Railway Age",
-    "bvg.de": "BVG 官方公告",
-    "sydneymetro.info": "Sydney Metro 官方公告",
-    "infrastructure.gov.au": "澳洲基礎建設主管機關",
-    "kaupunkiliikenne.fi": "Kaupunkiliikenne 官方公告",
-    "mosmetro.ru": "Moscow Metro 官方公告",
-    "transport.mos.ru": "Moscow Transport 官方公告",
-    "lrta.gov.ph": "LRTA 官方公告",
-    "ntsb.gov": "NTSB 事故調查資料",
-    "tsb.gc.ca": "TSB Canada 事故調查資料",
-    "atsb.gov.au": "ATSB 事故調查資料",
-    "bea-tt.developpement-durable.gouv.fr": "BEA-TT 事故調查資料",
-    "gov.uk": "英國政府/RAIB 事故調查資料",
-    "raib.gov.uk": "RAIB 事故調查資料",
-}
 
-SOURCE_DOMAIN_HINT_BY_LABEL = {
-    "mta": "mta.info",
-    "tokyo metro": "tokyometro.jp",
-    "mtr": "mtr.com.hk",
-    "ttc": "ttc.ca",
-    "tfl": "tfl.gov.uk",
-    "wmata": "wmata.com",
-    "translink": "translink.ca",
-    "ratp": "ratp.fr",
-    "lta": "lta.gov.sg",
-    "smrt": "smrt.com.sg",
-    "seoul metro": "seoulmetro.co.kr",
-    "railway-news": "railway-news.com",
-    "railway news": "railway-news.com",
-    "railway gazette": "railwaygazette.com",
-    "international railway journal": "railjournal.com",
-    "irj": "railjournal.com",
-    "urban transport magazine": "urban-transport-magazine.com",
-    "global mass transit": "globalmasstransit.net",
-    "mass transit magazine": "masstransitmag.com",
-    "metro magazine": "metro-magazine.com",
-    "railway age": "railwayage.com",
-    "bvg": "bvg.de",
-    "sydney metro": "sydneymetro.info",
-    "moscow metro": "mosmetro.ru",
-    "mosmetro": "mosmetro.ru",
-    "lrta": "lrta.gov.ph",
-    "ntsb": "ntsb.gov",
-    "tsb canada": "tsb.gc.ca",
-    "atsb": "atsb.gov.au",
-    "bea-tt": "bea-tt.developpement-durable.gouv.fr",
-    "raib": "gov.uk",
-}
 
-SOURCE_QUALITY_C_DOMAINS = {
-    "msn.com", "yahoo.com", "aol.com", "tripadvisor.com", "timeout.com",
-    "lonelyplanet.com", "booking.com", "expedia.com", "trip.com",
-    "wikipedia.org", "wikivoyage.org", "travelandtourworld.com",
-}
 
-LOW_QUALITY_CONTENT_TERMS = [
-    "wikipedia", "travel guide", "tourist", "hotel", "airport parking",
-    "things to do", "itinerary", "visitor guide", "travel tips", "travel reminder",
-    "tourism information", "weekend travel", "airport travel", "travel and tour world",
-    "futuristic metro network", "international expansion", "seo", "sponsored",
-    "minor delay", "detour", "service alert", "service advisory",
-    "customer notice", "take transit", "temporary stop closure",
-    "hiring", "jobs", "careers", "conference registration", "event page",
-    "product page", "mtr e-store", "passenger praised", "passenger review",
-    "traveler review", "viral video", "social media", "列車模型", "吊牌掛飾",
-    "一般旅遊", "旅遊攻略", "景點", "飯店", "酒店", "旅客心得",
-    "社群影片", "旅遊資訊", "週末搭乘提醒",
-    "passengers praise", "passenger praises", "riders praise", "rider praised",
-    "commuters praise", "praised the metro", "praises the metro", "clean and safe",
-    "cheap fare", "low fare", "anniversary", "celebration", "campaign",
-    "promotion", "promotional", "open day", "tour package",
-    "旅客稱讚", "乘客稱讚", "乘客大讚", "大讚捷運", "乾淨安全",
-    "票價便宜", "低票價", "週年", "周年", "紀念活動", "宣傳", "促銷",
-]
 
-LOW_INFORMATION_PAGE_TERMS = [
-    "home", "homepage", "topic page", "archive", "category", "service page",
-    "portal", "入口", "首頁", "分類頁", "服務頁", "旅客資訊", "活動資訊",
-    "archive page", "route page", "trip result", "journey planner", "route map",
-    "route number", "RouteNumber", "trip planner", "travel information",
-    "trip results", "rider tools", "service alerts", "service advisory",
-    "mtr e-store", "untitled", "pdf map", "plan-metro", "plan-de-ligne",
-    "archives", "event page", "conference registration", "product page",
-    "jobs", "hiring", "vacancy", "career", "careers",
-    "主頁", "列車模型", "吊牌掛飾",
-    "schedule", "schedules", "timetable", "timetables", "bus schedule",
-    "bus schedules", "bus timetable", "bus timetables", "bus route",
-    "bus routes", "bus stop", "bus stops", "bus services", "promotions",
-    "campaign page", "anniversary page", "celebration page",
-    "時刻表", "班表", "公車頁", "公車路線", "公車班表", "巴士路線",
-    "巴士班表", "宣傳頁", "活動頁", "週年頁", "周年頁",
-]
 
-LOW_INFORMATION_PATH_MARKERS = [
-    "/topic", "/topics", "/archive", "/archives", "/category", "/categories",
-    "/tag/", "/tags/", "/services", "/service", "/customer", "/passenger",
-    "/mobile", "/app", "/apps", "/route", "/routes", "/trip", "/trips",
-    "/journey", "/journey-planner", "/trip-planner", "/travel-information",
-    "/rider-tools", "/service-alert", "/service-advisory", "/map", "/maps",
-    "/search", "/store", "/estore", "/e-store", "/shop", "/product",
-    "/event", "/events", "/registration", "/register", "/jobs", "/hiring",
-    "/careers", "plan-metro", "plan-de-ligne", ".pdf",
-    "/schedule", "/schedules", "/timetable", "/timetables", "/bus",
-    "/buses", "/bus-route", "/bus-routes", "/bus-services", "/promotion",
-    "/promotions", "/campaign", "/campaigns", "/anniversary", "/celebration",
-]
 
-HARD_LOW_VALUE_CANDIDATE_TERMS = [
-    "trip results", "trip result", "service alerts", "service alert",
-    "service advisory", "rider tools", "careers", "career", "hiring",
-    "jobs", "plan-metro", "plan-de-ligne", "route page", "route map",
-    "pdf map", "mtr e-store", "product page", "conference registration",
-    "event page", "untitled", "lost property", "delay certificate",
-    "contract documents holders list", "passenger praised", "passenger review",
-    "traveler review", "viral video", "social media", "mascot", "stamp rally",
-    "theme train", "themed train", "tbm farewell", "tbm demobilization",
-    "tbm removal", "tunnel boring machine farewell", "pothole",
-    "失物招領", "延誤證明", "標案文件持有人", "旅客心得", "社群影片",
-    "吉祥物", "集章活動", "主題列車", "潛盾機告別", "潛盾機撤場", "道路坑洞",
-    "schedule", "timetable", "bus schedule", "bus route", "bus stop",
-    "anniversary", "celebration", "promotional campaign", "open day",
-    "時刻表", "班表", "公車路線", "公車班表", "巴士路線", "巴士班表",
-    "週年", "周年", "紀念活動", "宣傳活動", "開放日",
-]
 
-JOURNAL_PRECISION_QUERIES = [
-    '"urban rail transit" "predictive maintenance" "condition monitoring"',
-    '"metro system" "fault diagnosis" "machine learning"',
-    '"urban rail transit" "digital twin" maintenance',
-    '"metro system" "digital twin" operation maintenance',
-    '"CBTC" "urban rail transit" safety',
-    '"communication based train control" "metro" reliability',
-    '"driverless metro" "system assurance"',
-    '"urban rail transit" "regenerative braking" energy storage',
-    '"metro" "wayside energy storage" supercapacitor',
-    '"platform screen door" "metro" fault diagnosis',
-    '"platform screen doors" "urban rail transit" reliability',
-    '"urban rail transit" cybersecurity',
-    '"CBTC" cybersecurity',
-    '"railway operational technology" cybersecurity',
-]
 
-JOURNAL_EXPLORATORY_QUERIES = [
-    '"urban rail transit" emerging technology',
-    '"metro system" innovation',
-    '"smart metro" system integration',
-    '"urban rail" advanced monitoring',
-    '"driverless metro" technology',
-    '"rail transit" intelligent maintenance',
-    '"urban rail transit" intelligent operation maintenance',
-]
 
-JOURNAL_SOURCE_PAGES = [
-    ("Springer Urban Rail Transit articles", "https://link.springer.com/journal/40864/articles"),
-]
 
-JOURNAL_EXCLUDE_TERMS = [
-    "high-speed rail", "freight railway", "intercity rail", "road traffic",
-    "bus", "autonomous vehicle", "air traffic", "pure algorithm",
-    "高速鐵路", "貨運鐵路", "城際鐵路", "公車", "自駕車", "航空",
-]
 
-JOURNAL_RAIL_CONTEXT_TERMS = [
-    "railway", "rail transit", "urban rail", "urban rail transit", "metro",
-    "metro system", "subway", "mass rapid transit", "mrt", "light rail",
-    "tram", "tramway", "cbtc", "rolling stock", "railway signalling",
-    "railway signaling", "platform screen door", "traction power",
-    "都市軌道", "捷運", "地鐵", "地下鉄", "都市鉄道", "軌道",
-]
 
-JOURNAL_ALLOWED_SOURCE_DOMAINS = {
-    "mdpi.com", "nature.com", "springer.com", "link.springer.com",
-    "sciencedirect.com", "doi.org", "tandfonline.com", "ieee.org",
-    "ieeexplore.ieee.org", "elsevier.com", "frontiersin.org",
-    "ascelibrary.org", "sagepub.com", "emerald.com",
-}
 
-JOURNAL_PREFERRED_SOURCE_TERMS = [
-    "mdpi", "sciencedirect", "ieee", "springer", "taylor & francis",
-    "tandfonline", "elsevier", "transportation research",
-    "railway engineering science",
-]
 
-JOURNAL_SYSTEM_TERMS = [
-    "cbtc", "signalling", "signaling", "train control", "rolling stock",
-    "traction power", "power supply", "maintenance", "condition monitoring",
-    "predictive maintenance", "artificial intelligence", "machine learning",
-    "digital twin", "cybersecurity", "energy efficiency", "data governance",
-    "passenger flow", "system integration", "platform screen door",
-    "號誌", "列控", "車輛", "牽引供電", "維修", "AI", "數位分身",
-    "資安", "能源效率", "資料治理", "旅客流量", "系統整合", "月臺門",
-]
 
-JOURNAL_INSIGHT_TERMS = [
-    "maintenance", "energy", "safety", "risk", "cyber", "data", "system",
-    "integration", "planning", "operations", "condition monitoring",
-    "維修", "能源", "安全", "風險", "資安", "資料", "系統", "整合", "規劃",
-]
 
-JOURNAL_CORE_SYSTEM_TERMS = [
-    "rolling stock", "vehicle system", "trainset", "signalling", "signaling",
-    "train control", "cbtc", "ato", "atp", "ats", "operations control",
-    "operation control", "traction power", "regenerative braking", "energy storage",
-    "power supply", "communications", "wireless", "data transmission",
-    "platform screen door", "platform door", "automatic fare collection", "afc",
-    "depot equipment", "maintenance equipment", "condition monitoring",
-    "fault diagnosis", "predictive maintenance", "image recognition",
-    "video analytics", "system integration", "system assurance", "rams",
-    "safety verification", "cybersecurity", "hvac", "ventilation", "fire safety",
-    "environmental control", "energy management", "digital twin",
-    "電聯車", "車輛系統", "號誌", "信號", "列車控制", "列控", "行車監控",
-    "行控中心", "牽引供電", "再生煞車", "儲能", "供電", "通訊", "無線通訊",
-    "月臺門", "月台門", "自動收費", "票務系統", "機廠設備", "維修設備",
-    "狀態監測", "故障診斷", "預測性維護", "影像辨識", "系統整合", "系統保證",
-    "安全驗證", "RAMS", "資安", "空調", "通風", "消防", "環控", "能源管理",
-    "數位孿生", "數位分身",
-]
 
-JOURNAL_SECONDARY_SYSTEM_TERMS = [
-    "track monitoring", "tunnel monitoring", "construction interface",
-    "equipment layout", "installation interface", "metro construction interface",
-    "軌道監測", "隧道監測", "施工介面", "設備配置", "安裝介面", "機電安裝",
-]
 
-JOURNAL_LOW_PRIORITY_TERMS = [
-    "crew scheduling", "crew rostering", "staff scheduling", "workforce scheduling",
-    "manpower scheduling", "passenger behavior", "passenger behaviour", "mode choice",
-    "passenger choice", "commuter behavior", "pure operation management",
-    "construction site layout", "civil construction", "civil engineering",
-    "tunnel excavation", "excavation optimization", "general railway",
-    "commuter rail", "人力排班", "人員排班", "乘務排班", "旅客行為",
-    "旅客運具選擇", "通勤行為", "純營運管理", "施工場地配置", "土建施工",
-    "隧道開挖", "一般鐵路", "通勤鐵路",
-]
 
 # ── 金鑰狀態 ──────────────────────────────────────────
 # AI 報告產製改用 MaiAgent 雲端 API。
@@ -1528,136 +989,44 @@ def build_report_download_filename(prefix: str, extension: str, run_config: dict
 
 
 def google_news_search_url(query: str, hl: str = "en-US", gl: str = "US", ceid_lang: str = "en") -> str:
-    return (
-        "https://news.google.com/rss/search?q="
-        f"{urllib.parse.quote(query)}&hl={hl}&gl={gl}&ceid={gl}:{ceid_lang}"
+    return service_google_news_search_url(query, hl=hl, gl=gl, ceid_lang=ceid_lang)
+
+
+def google_news_site_proxy_url(domain: str, days: int, keywords: str = TRANSIT_NEWS_TERMS, hl: str = "en-US", gl: str = "US", ceid_lang: str = "en") -> str:
+    return service_google_news_site_proxy_url(domain, days, keywords, hl=hl, gl=gl, ceid_lang=ceid_lang)
+
+
+RSS_SOURCES = build_rss_sources(int(lookback_days))
+
+
+
+def _conditional_news_sources(fast_mode: bool) -> tuple[list[tuple[str, str]], list[dict]]:
+    return service_conditional_news_sources(
+        fast_mode, int(lookback_days), lookback_int, standards_enabled,
     )
 
 
-def google_news_site_proxy_url(
-    domain: str,
-    days: int,
-    keywords: str = TRANSIT_NEWS_TERMS,
-    hl: str = "en-US",
-    gl: str = "US",
-    ceid_lang: str = "en",
-) -> str:
-    query = f"site:{domain} {keywords} when:{max(1, min(int(days), 365))}d"
-    return google_news_search_url(query, hl=hl, gl=gl, ceid_lang=ceid_lang)
-
+def build_run_news_sources(
+    region_sources: list[tuple[str, str]], standards_sources: list[tuple[str, str]],
+    fast_mode: bool, return_skipped: bool = False,
+):
+    return service_build_run_news_sources(
+        region_sources, standards_sources, fast_mode, rss_sources=RSS_SOURCES,
+        lookback_days=int(lookback_days), lookback_int=lookback_int,
+        standards_enabled=standards_enabled, return_skipped=return_skipped,
+    )
 
 # ═══════════════════════════════════════════════════════
 #  RSS 訂閱源（官方 RSS 優先；必要時由抓取函式 fallback 至 Google News site: 代理）
 # ═══════════════════════════════════════════════════════
-RSS_SOURCES = [
-    ("Railway Gazette International（已併入 Metro Report International 都市軌道報導）",
-     "https://www.railwaygazette.com/149.rss"),
-    ("Railway Gazette Urban rail（Google News代理）",
-     google_news_site_proxy_url("railwaygazette.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
-    ("International Railway Journal (IRJ)", "https://www.railjournal.com/feed/"),
-    ("IRJ metro / light rail（Google News代理）",
-     google_news_site_proxy_url("railjournal.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
-    ("Railway Technology", "https://www.railway-technology.com/feed/"),
-    ("Railway-News", "https://railway-news.com/feed/"),
-    ("Global Railway Review", "https://www.globalrailwayreview.com/feed/"),
-    ("Intelligent Transport", "https://www.intelligenttransport.com/feed/"),
-    ("Urban Transport Magazine（Google News代理）",
-     google_news_site_proxy_url("urban-transport-magazine.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
-    ("Mass Transit Magazine", "https://www.masstransitmag.com/rss"),
-    ("METRO Magazine Rail（Google News代理）",
-     google_news_site_proxy_url("metro-magazine.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
-    ("Smart Cities Dive Transportation（Google News代理）",
-     google_news_site_proxy_url("smartcitiesdive.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
-    ("Railway Age urban rail / light rail（Google News代理）",
-     google_news_site_proxy_url("railwayage.com", int(lookback_days), TRANSIT_NEWS_TERMS)),
-    ("UITP（無官方RSS，改用Google News代理）",
-     google_news_site_proxy_url("uitp.org", int(lookback_days), TRANSIT_NEWS_TERMS)),
-    # 2026-07 查證：masstransit.network 的 RSS 端點實際回傳的是「會員名錄」頁面
-    # （人名列表），不是新聞內容，已移除，改依賴下方已驗證有效的 Global Mass Transit。
-    ("Global Mass Transit", "https://www.globalmasstransit.net/feed"),
-    # 東洋經濟原本用全站 RSS，抓到的 20 篇裡沒有一篇是鐵道新聞（全是投資理財/職場/美食）。
-    # 改用 Google News 代理鎖定 site:toyokeizai.net + 鐵道關鍵字，才會是真的鐵道新聞。
-    ("東洋經濟 Online 鐵道（Google News代理，鎖定 site:toyokeizai.net + 鐵道）",
-     google_news_site_proxy_url("toyokeizai.net", int(lookback_days), '(地下鉄 OR メトロ OR 新交通システム OR 都市鉄道 OR 路面電車) -新幹線 -JR -在来線 -バス', "ja", "JP", "ja")),
-    ("乗りものニュース", "https://trafficnews.jp/feed"),
-    ("鉄道総合技術研究所 RTRI（無官方RSS，改用Google News代理）",
-     google_news_site_proxy_url("rtri.or.jp", int(lookback_days), '(地下鉄 OR メトロ OR 新交通システム OR 都市鉄道 OR 軌道) -新幹線 -在来線 -貨物鉄道', "ja", "JP", "ja")),
-    ("Transit Jam", "https://transitjam.com/feed/"),
-    ("TfL 官方新聞（Google News代理）",
-     google_news_site_proxy_url("tfl.gov.uk", int(lookback_days), '(Tube OR Underground OR tram OR DLR OR "London Overground") -bus -coach', "en-GB", "GB", "en")),
-    ("MTA 官方新聞（Google News代理）",
-     google_news_site_proxy_url("mta.info", int(lookback_days), '(subway OR metro OR signal OR accessibility OR safety)')),
-    ("WMATA 官方新聞（Google News代理）",
-     google_news_site_proxy_url("wmata.com", int(lookback_days), '(Metro OR Metrorail OR subway OR station OR railcar) -bus')),
-    ("TTC 官方新聞（Google News代理）",
-     google_news_site_proxy_url("ttc.ca", int(lookback_days), '(subway OR streetcar OR signal OR fleet OR safety)', "en-CA", "CA", "en")),
-    ("TransLink 官方新聞（Google News代理）",
-     google_news_site_proxy_url("translink.ca", int(lookback_days), '(SkyTrain OR "Canada Line" OR rail transit OR station) -bus', "en-CA", "CA", "en")),
-    ("RATP 官方新聞（Google News代理）",
-     google_news_site_proxy_url("ratp.fr", int(lookback_days), '(metro OR tramway OR automatisation OR securite) -bus -RER', "fr", "FR", "fr")),
-    ("Société des grands projets 官方新聞（Google News代理）",
-     google_news_site_proxy_url("societedesgrandsprojets.fr", int(lookback_days), '("Grand Paris Express" OR metro OR gare)', "fr", "FR", "fr")),
-    ("LTA 官方新聞（Google News代理）",
-     google_news_site_proxy_url("lta.gov.sg", int(lookback_days), '(MRT OR LRT OR "Thomson-East Coast Line" OR "rail transit") -bus', "en-SG", "SG", "en")),
-    ("MTR 官方新聞（Google News代理）",
-     google_news_site_proxy_url("mtr.com.hk", int(lookback_days), '(MTR OR 港鐵 OR 地鐵 OR 輕鐵 OR signalling) -bus', "zh-HK", "HK", "zh-Hant")),
-    ("Seoul Metro 官方新聞（Google News代理）",
-     google_news_site_proxy_url("seoulmetro.co.kr", int(lookback_days), '(지하철 OR 도시철도 OR 안전 OR 열차)', "ko", "KR", "kr")),
-    ("Tokyo Metro 官方新聞（Google News代理）",
-     google_news_site_proxy_url("tokyometro.jp", int(lookback_days), '(東京メトロ OR 地下鉄 OR 安全 OR 車両)', "ja", "JP", "ja")),
-]
-
-KNOWN_BAD_OFFICIAL_RSS_HOSTS = {
-    "railwaygazette.com",
-    "railjournal.com",
-    "globalrailwayreview.com",
-    "intelligenttransport.com",
-    "masstransitmag.com",
-    "trafficnews.jp",
-}
-
-KNOWN_BAD_OFFICIAL_RSS_LABELS = [
-    "Railway Gazette International",
-    "International Railway Journal",
-    "Global Railway Review",
-    "Intelligent Transport",
-    "Mass Transit Magazine",
-    "乗りものニュース",
-]
 
 
-def _source_skip_record(
-    source_name: str,
-    url: str,
-    status: str,
-    reason: str,
-    item_count: int = 0,
-) -> dict:
-    host = urlparse(url or "").netloc.lower().removeprefix("www.")
-    return {
-        "source_name": source_name,
-        "method": "Google News 代理" if "news.google.com" in host else "官方 RSS",
-        "status": status,
-        "item_count": item_count,
-        "error_message": reason,
-        "fallback_used": False,
-    }
 
 
-def _source_identity(source: tuple[str, str]) -> tuple[str, str]:
-    source_name, url = source
-    return source_name.casefold(), url.casefold()
 
 
-def _is_known_bad_official_rss(source_name: str, url: str) -> bool:
-    parsed = urlparse(url or "")
-    host = parsed.netloc.lower().removeprefix("www.")
-    if "news.google.com" in host:
-        return False
-    if host in KNOWN_BAD_OFFICIAL_RSS_HOSTS:
-        return True
-    source_lower = (source_name or "").casefold()
-    return any(label.casefold() in source_lower for label in KNOWN_BAD_OFFICIAL_RSS_LABELS)
+
+
 
 
 def clean_source_name_for_ui(source_name: str) -> str:
@@ -1676,13 +1045,6 @@ def clean_source_name_for_ui(source_name: str) -> str:
     return cleaned or str(source_name or "").strip()
 
 
-FORMAL_SOURCE_PROXY_LABELS = {
-    "日本地下鉄/メトロ", "韓國地下鐵", "Singapore MRT", "香港港鐵",
-    "Australia Metro", "UK Underground", "France Metro", "Germany U-Bahn",
-    "Spain Metro/Light Rail", "Netherlands Metro", "Switzerland Metro/Tram",
-    "US Subway/Metro", "Canada Metro", "Italy Metro/Tram", "Sweden Metro/Tram",
-    "Austria U-Bahn/Tram", "Denmark Metro/Light Rail", "Norway Metro/Tram",
-}
 
 
 def _is_query_proxy_source_label(source_name: str) -> bool:
@@ -1706,44 +1068,6 @@ def _clean_formal_source_proxy_label(label: str) -> str:
     return cleaned
 
 
-def _conditional_news_sources(fast_mode: bool) -> tuple[list[tuple[str, str]], list[dict]]:
-    sources: list[tuple[str, str]] = []
-    skipped: list[dict] = []
-    days = int(lookback_days)
-    apta_source = (
-        "APTA rail transit（Google News代理）",
-        google_news_site_proxy_url("apta.com", days, TRANSIT_NEWS_TERMS),
-    )
-    smartcitiesworld_source = (
-        "SmartCitiesWorld rail transit（Google News代理）",
-        google_news_site_proxy_url(
-            "smartcitiesworld.net",
-            days,
-            '("urban rail" OR metro OR subway OR "light rail" OR tram OR MRT OR "rail transit") -bus -parking -road -MaaS',
-        ),
-    )
-
-    if lookback_int in ADVANCED_LOOKBACK_OPTIONS or standards_enabled:
-        sources.append(apta_source)
-    else:
-        skipped.append(_source_skip_record(
-            apta_source[0],
-            apta_source[1],
-            "long_term_only_source",
-            "APTA 僅於長期報告或規範更新啟用",
-        ))
-
-    if fast_mode:
-        skipped.append(_source_skip_record(
-            smartcitiesworld_source[0],
-            smartcitiesworld_source[1],
-            "low_priority_source",
-            "SmartCitiesWorld 低頻來源，快速模式跳過",
-        ))
-    else:
-        sources.append(smartcitiesworld_source)
-
-    return sources, skipped
 
 # ═══════════════════════════════════════════════════════
 #  依勾選國家動態產生的 Google News 地區代理來源
@@ -1752,151 +1076,16 @@ def _conditional_news_sources(fast_mode: bool) -> tuple[list[tuple[str, str]], l
 # 捷運新聞覆蓋率實測為 0（見程式修訂紀錄）。這裡針對使用者勾選的國家，
 # 用當地語言關鍵字動態組出 Google News RSS 代理，補上這塊缺口。
 # 每個 tuple：(顯示名稱, 查詢關鍵字, hl 語系, gl 國別, ceid 語言代碼)
-REGION_NEWS_QUERIES: dict[str, list[tuple[str, str, str, str, str]]] = {
-    "日本": [("Google News地區代理－日本地下鉄/メトロ",
-             "(地下鉄 OR メトロ OR 新交通システム OR 都市鉄道 OR 路面電車) -新幹線 -JR -在来線 -高速バス -ゲーム -Steam -スタンプラリー -アニメ", "ja", "JP", "ja")],
-    "韓國": [("Google News地區代理－韓國地下鐵",
-             "(지하철 OR 도시철도 OR 경전철)", "ko", "KR", "kr")],
-    "新加坡": [("Google News地區代理－Singapore MRT",
-              "(MRT OR LTA OR SMRT Singapore)", "en-SG", "SG", "en")],
-    "香港": [("Google News地區代理－香港港鐵",
-             "(港鐵 OR MTR 香港)", "zh-HK", "HK", "zh-Hant")],
-    "澳洲": [("Google News地區代理－Australia Metro",
-             "(Sydney Metro OR Melbourne Metro OR Brisbane Metro OR light rail) -bus -coach -highway", "en-AU", "AU", "en")],
-    "英國": [("Google News地區代理－UK Underground",
-             "(London Underground OR TfL Tube OR DLR OR tram) -bus -coach -highway -National Rail", "en-GB", "GB", "en")],
-    "法國": [("Google News地區代理－France Metro",
-             "(Metro Paris OR RATP OR Grand Paris Express)", "fr", "FR", "fr")],
-    "德國": [("Google News地區代理－Germany U-Bahn",
-             "(U-Bahn OR Stadtbahn OR tram OR Straßenbahn) -ICE -DB -Fernverkehr -Spiel -Kinofilm -Videospiel", "de", "DE", "de")],
-    "西班牙": [("Google News地區代理－Spain Metro/Light Rail",
-              "(Madrid Metro OR Barcelona Metro OR Metro de Madrid OR tranvia OR tranvía OR light rail) -AVE -alta velocidad -autobus", "es", "ES", "es")],
-    "荷蘭": [("Google News地區代理－Netherlands Metro",
-             "(Amsterdam metro OR Rotterdam metro)", "nl", "NL", "nl")],
-    "瑞士": [("Google News地區代理－Switzerland Metro/Tram",
-             "(Zurich tram OR Lausanne metro)", "de-CH", "CH", "de")],
-    "美國": [("Google News地區代理－US Subway/Metro",
-             "(subway OR Metrorail OR light rail OR streetcar OR people mover) United States -Amtrak -intercity -bus -coach -highway", "en-US", "US", "en")],
-    "加拿大": [("Google News地區代理－Canada Metro",
-              "(TTC subway OR SkyTrain Vancouver OR REM Montreal OR light rail) -bus -coach -highway", "en-CA", "CA", "en")],
-    "義大利": [("Google News地區代理－Italy Metro/Tram",
-              "(metro OR metropolitana OR tram OR ferrovia urbana)", "it", "IT", "it")],
-    "瑞典": [("Google News地區代理－Sweden Metro/Tram",
-             "(Stockholm metro OR Gothenburg tram OR light rail)", "sv", "SE", "sv")],
-    "奧地利": [("Google News地區代理－Austria U-Bahn/Tram",
-              "(Vienna U-Bahn OR Wiener Linien OR tram)", "de-AT", "AT", "de")],
-    "丹麥": [("Google News地區代理－Denmark Metro/Light Rail",
-             "(Copenhagen Metro OR Odense Letbane OR light rail)", "da", "DK", "da")],
-    "挪威": [("Google News地區代理－Norway Metro/Tram",
-             "(Oslo Metro OR Sporveien OR tram OR light rail)", "no", "NO", "no")],
-}
 
 
-def build_region_news_sources(regions: list[str], days: int, fast_mode: bool = False) -> list[tuple[str, str]]:
-    """依勾選國家動態組出 Google News 地區代理 RSS 來源清單。"""
-    sources: list[tuple[str, str]] = []
-    days = max(1, min(int(days), 365))
-    for region in regions:
-        region_queries = REGION_NEWS_QUERIES.get(region, [])
-        if fast_mode:
-            region_queries = region_queries[:1]
-        for label, keyword, hl, gl, lang in region_queries:
-            query = f"{keyword} when:{days}d"
-            url = (
-                "https://news.google.com/rss/search?q="
-                f"{urllib.parse.quote(query)}&hl={hl}&gl={gl}&ceid={gl}:{lang}"
-            )
-            sources.append((label, url))
-    return sources
 
 
-def build_standards_news_sources(days: int) -> list[tuple[str, str]]:
-    """只有勾選規範更新時，才組出標準版本狀態的 Google News RSS 代理來源。"""
-    sources: list[tuple[str, str]] = []
-    days = max(1, min(int(days), 365))
-    update_terms = " OR ".join(f'"{term}"' for term in STANDARD_UPDATE_TERMS)
-    for category, standards in STANDARDS_WATCHLIST.items():
-        for standard in standards:
-            query = f'"{standard}" ({update_terms}) when:{days}d'
-            sources.append((f"規範更新代理－{category}－{standard}", google_news_search_url(query)))
-    return sources
 
 
-FAST_SOURCE_KEYWORDS = (
-    "railway-news",
-    "railway gazette",
-    "urban transport magazine",
-    "mass transit magazine",
-    "metro magazine",
-    "mta",
-    "tfl",
-    "lta",
-    "mtr",
-    "tokyo metro",
-    "ttc",
-    "wmata",
-    "translink",
-)
 
 
-def select_fast_rss_sources(sources: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    selected: list[tuple[str, str]] = []
-    seen_keys: set[str] = set()
-    for source_name, url in sources:
-        haystack = f"{source_name} {url}".casefold()
-        if not any(keyword in haystack for keyword in FAST_SOURCE_KEYWORDS):
-            continue
-        netloc = urlparse(url).netloc.lower().removeprefix("www.")
-        dedupe_key = source_name.casefold() if netloc == "news.google.com" else (netloc or source_name.casefold())
-        if dedupe_key in seen_keys:
-            continue
-        seen_keys.add(dedupe_key)
-        selected.append((source_name, url))
-    return selected or sources[: min(12, len(sources))]
 
 
-def build_run_news_sources(
-    region_sources: list[tuple[str, str]],
-    standards_sources: list[tuple[str, str]],
-    fast_mode: bool,
-    return_skipped: bool = False,
-) -> list[tuple[str, str]] | tuple[list[tuple[str, str]], list[dict]]:
-    skipped_statuses: list[dict] = []
-    usable_sources: list[tuple[str, str]] = []
-    for source_name, url in RSS_SOURCES:
-        if _is_known_bad_official_rss(source_name, url):
-            skipped_statuses.append(_source_skip_record(
-                source_name,
-                url,
-                "skipped_known_bad",
-                "已知官方 RSS 長期失效，保留代理或未來自訂 RSS 可能性",
-            ))
-            continue
-        usable_sources.append((source_name, url))
-
-    conditional_sources, conditional_skips = _conditional_news_sources(fast_mode)
-    usable_sources.extend(conditional_sources)
-    skipped_statuses.extend(conditional_skips)
-
-    if fast_mode:
-        selected_base = select_fast_rss_sources(usable_sources)
-        selected_keys = {_source_identity(source) for source in selected_base}
-        for source_name, url in usable_sources:
-            if _source_identity((source_name, url)) not in selected_keys:
-                skipped_statuses.append(_source_skip_record(
-                    source_name,
-                    url,
-                    "skipped_fast_mode",
-                    "快速模式跳過低優先來源",
-                ))
-        base_sources = selected_base
-    else:
-        base_sources = usable_sources
-
-    combined = base_sources + region_sources + standards_sources
-    if return_skipped:
-        return combined, skipped_statuses
-    return combined
 
 
 def render_main_dashboard(source_count: int, standards_count: int):
@@ -1942,103 +1131,44 @@ generate_btn, send_after_generate, progress_placeholder, status_placeholder = re
 )
 
 
-def _parse_pub_date(pub_str: str) -> str:
-    if not pub_str:
-        return "日期未知"
-    try:
-        return parsedate_to_datetime(pub_str).strftime("%Y-%m-%d")
-    except Exception:
-        pass
-    try:
-        return datetime.datetime.fromisoformat(
-            pub_str.replace("Z", "+00:00")
-        ).strftime("%Y-%m-%d")
-    except Exception:
-        return pub_str[:16]
-
-def _is_recent(pub_str: str, cutoff: datetime.datetime) -> bool:
-    if not pub_str:
-        return True
-    try:
-        dt = parsedate_to_datetime(pub_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=datetime.timezone.utc)
-        return dt > cutoff
-    except Exception:
-        pass
-    try:
-        dt = datetime.datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
-        return dt > cutoff
-    except Exception:
-        return True
 
 
-class FeedFetchError(Exception):
-    def __init__(self, status: str, message: str):
-        super().__init__(message)
-        self.status = status
-        self.message = message
 
-
-def create_requests_session() -> requests.Session:
-    session = requests.Session()
-    retry = Retry(
-        total=2,
-        connect=2,
-        read=2,
-        backoff_factor=0.8,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset(["GET"]),
-        raise_on_status=False,
+def _make_news_candidate(title: str, date: str, source: str, url: str, snippet: str, query: str, region: str, source_type: str, source_href: str = "") -> dict:
+    return service_make_news_candidate(
+        title, date, source, url, snippet, query, region, source_type, source_href,
+        query_metadata=LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {},
+        search_family_resolver=_search_family_from_query,
+        search_language_resolver=_search_language_from_query,
     )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (compatible; TaipeiMetroAIWeekly/5.0; +https://www.dorts.gov.taipei/)",
-        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
-    })
-    return session
 
 
-def _source_tuple(source) -> tuple[str, str]:
-    return source[0], source[1]
+def parse_rss_candidates(raw_rss: str) -> list[dict]:
+    return service_parse_rss_candidates(raw_rss, _make_news_candidate)
 
 
-def _host_matches(host: str, domain: str) -> bool:
-    host = host.lower().strip(".")
-    domain = domain.lower().strip(".")
-    return host == domain or host.endswith("." + domain)
+def parse_ddg_candidates(raw_ddg: str) -> list[dict]:
+    return service_parse_ddg_candidates(raw_ddg, _make_news_candidate)
 
 
-def _domain_from_url(url: str) -> str:
-    try:
-        return urlparse(url).netloc.lower().removeprefix("www.")
-    except Exception:
-        return ""
+def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], dict[str, int]]:
+    return service_dedupe_candidates(candidates, int(lookback_days))
 
 
-def _normalize_source_domain(domain: str) -> str:
-    host = (domain or "").strip().lower().removeprefix("www.")
-    if not host:
-        return ""
-    aliases = {
-        "news.google.com": "",
-        "finance.yahoo.com": "yahoo.com",
-        "uk.news.yahoo.com": "yahoo.com",
-        "ca.news.yahoo.com": "yahoo.com",
-        "www.gov.uk": "gov.uk",
-    }
-    return aliases.get(host, host)
+FeedFetchError = ServiceFeedFetchError
 
 
-def _extract_site_domain_from_google_news(url: str) -> str:
-    try:
-        query = parse_qs(urlparse(url).query).get("q", [""])[0]
-    except Exception:
-        return ""
-    match = re.search(r"site:([^\s\)]+)", query)
-    return match.group(1).lower().removeprefix("www.") if match else ""
+create_requests_session = service_create_requests_session
+
+
+
+
+
+
+
+
+
+
 
 
 def _fallback_google_news_url(source_url: str) -> str | None:
@@ -2051,409 +1181,58 @@ def _fallback_google_news_url(source_url: str) -> str | None:
     return google_news_site_proxy_url(domain, int(lookback_days))
 
 
-def _is_blocked_host(host: str) -> bool:
-    host = host.lower().strip(".")
-    if not host:
-        return False
-    return any(host.endswith(suffix) for suffix in BLOCKED_DOMAINS)
-
-
-def _is_domestic_taiwan_host(host: str) -> bool:
-    host = host.lower().strip(".")
-    if not host:
-        return False
-    return any(host.endswith(suffix) for suffix in DOMESTIC_EXCLUDED_DOMAINS)
-
-
-def _contains_taiwan_reference(text: str) -> bool:
-    text_lower = (text or "").casefold()
-    return any(term.casefold() in text_lower for term in DOMESTIC_EXCLUDED_TERMS)
-
-
-def _contains_any_term(text: str, terms: list[str]) -> bool:
-    text_lower = (text or "").casefold()
-    for term in terms:
-        term_lower = term.casefold()
-        if re.fullmatch(r"[a-z0-9][a-z0-9\s/&.\-]*", term_lower):
-            if re.search(rf"(?<![a-z0-9]){re.escape(term_lower)}(?![a-z0-9])", text_lower):
-                return True
-        elif term_lower in text_lower:
-            return True
-    return False
-
-
-def _domain_hint_from_source_label(text: str) -> str:
-    text_lower = (text or "").casefold()
-    for label, domain in SOURCE_DOMAIN_HINT_BY_LABEL.items():
-        if label.casefold() in text_lower:
-            return domain
-    return ""
-
-
-def _original_source_domain(source: str = "", url: str = "", source_href: str = "", query: str = "") -> str:
-    for value in (source_href, url):
-        host = _normalize_source_domain(_domain_from_url(value))
-        if host and host != "news.google.com":
-            return host
-    for value in (url, source_href, query):
-        domain = _normalize_source_domain(_extract_site_domain_from_google_news(value))
-        if domain and domain != "news.google.com":
-            return domain
-    return _normalize_source_domain(_domain_hint_from_source_label(f"{source} {query}"))
-
-
-def _strict_source_domain(url: str = "", source_href: str = "", query: str = "") -> str:
-    """Return only URL, source_href or explicit site: domains; never infer from display labels."""
-    for value in (source_href, url):
-        host = _normalize_source_domain(_domain_from_url(value))
-        if host and host != "news.google.com":
-            return host
-    for value in (url, source_href, query):
-        domain = _normalize_source_domain(_extract_site_domain_from_google_news(value))
-        if domain and domain != "news.google.com":
-            return domain
-    return ""
-
-
-def _has_high_value_operational_detail(text: str) -> bool:
-    return (
-        _contains_any_term(text, globals().get("STRICT_HIGH_VALUE_POLICY_TEXT_TERMS", []))
-        or _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS)
-        or _contains_any_term(text, ACCIDENT_SIGNAL_TERMS)
-        or _is_standard_update_candidate(text, require_url=True)
-    )
-
-
-def _has_clear_urban_rail_context(text: str, source_name: str = "") -> bool:
-    topic_text = _strip_source_name_noise(f"{source_name} {text}")
-    has_metro_with_rail_context = (
-        _contains_any_term(topic_text, ["metro"])
-        and _contains_any_term(topic_text, METRO_RAIL_CONTEXT_TERMS)
-    )
-    return (
-        _contains_any_term(topic_text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS)
-        or _contains_any_term(topic_text, URBAN_RAIL_OPERATOR_TERMS)
-        or has_metro_with_rail_context
-    )
-
-
-def _is_airport_people_mover_only_text(text: str, source_name: str = "") -> bool:
-    topic_text = _strip_source_name_noise(f"{source_name} {text}")
-    if not _contains_any_term(topic_text, AIRPORT_PEOPLE_MOVER_EXCLUDE_TERMS):
-        return False
-    airport_specific = _contains_any_term(topic_text, [
-        "airport people mover", "terminal people mover", "airport transit",
-        "airport shuttle", "terminal shuttle", "lax", "aviation",
-        "機場旅客捷運", "航廈旅客捷運", "航廈接駁", "機場接駁",
-    ])
-    non_airport_urban_terms = [
-        term for term in URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS
-        if term not in {"people mover", "automated guideway transit", "agt", "mover"}
-    ]
-    has_non_airport_urban_context = (
-        _contains_any_term(topic_text, non_airport_urban_terms)
-        or _contains_any_term(topic_text, URBAN_RAIL_OPERATOR_TERMS)
-    )
-    return airport_specific and not has_non_airport_urban_context
-
-
-def _trusted_source_title_technical_signal(candidate: dict) -> bool:
-    tier = candidate.get("source_tier", "")
-    if tier not in {"A_official", "B_professional"}:
-        return False
-    title = candidate.get("title", "")
-    if not title or _wordish_count(title) < 4:
-        return False
-    source = candidate.get("source", "")
-    source_domain = candidate.get("source_domain", "")
-    title_text = f"{title} {source} {source_domain}"
-    full_text = _candidate_selection_text(candidate) if "_candidate_selection_text" in globals() else title_text
-    if _contains_any_term(title_text, LOW_QUALITY_CONTENT_TERMS + HARD_LOW_VALUE_CANDIDATE_TERMS):
-        return False
-    if _is_airport_people_mover_only_text(full_text, source):
-        return False
-    if not _has_clear_urban_rail_context(title_text, source):
-        return False
-    has_system = _contains_any_term(title_text, TECH_NEWS_REQUIRED_TERMS)
-    has_action = _contains_any_term(title_text, TITLE_TECHNICAL_ACTION_TERMS)
-    return has_system and has_action
-
-
-def _candidate_has_high_value_operational_detail(candidate: dict, text: str = "") -> bool:
-    combined = text or _candidate_selection_text(candidate)
-    return _has_high_value_operational_detail(combined) or _trusted_source_title_technical_signal(candidate)
-
-
-def _is_low_value_service_notice_text(text: str) -> bool:
-    return _contains_any_term(text, LOW_VALUE_POLICY_TERMS + LOW_INFORMATION_PAGE_TERMS)
-
-
-def hard_low_value_candidate_reason(candidate: dict) -> str:
-    title = candidate.get("title", "")
-    snippet = candidate.get("snippet", "")
-    source = candidate.get("source", "")
-    url = candidate.get("url", "")
-    source_href = candidate.get("source_href", "")
-    text = f"{title} {snippet} {source} {url} {source_href}"
-    text_lower = text.casefold()
-    host_candidates = [
-        _domain_from_url(source_href),
-        _domain_from_url(url),
-        candidate.get("source_domain", ""),
-    ]
-    if any(
-        host and _host_matches(host, domain)
-        for host in host_candidates
-        for domain in LOW_VALUE_EXCLUDED_HOSTS
-    ):
-        return "硬性低價值來源或子網域"
-    if _contains_any_term(text, FINANCIAL_MARKET_TERMS):
-        return "股票行情或企業財經分析"
-
-    has_high_value = _candidate_has_high_value_operational_detail(candidate, text)
-    if has_high_value:
-        return ""
-    if "_candidate_prefetch_signal" in globals() and _candidate_prefetch_signal(candidate):
-        return ""
-
-    if any(term.casefold() in text_lower for term in HARD_LOW_VALUE_CANDIDATE_TERMS):
-        return "硬性低價值頁面"
-
-    path_text = " ".join(urlparse(value or "").path.casefold() for value in (url, source_href))
-    if any(marker in path_text for marker in LOW_INFORMATION_PATH_MARKERS):
-        return "硬性低價值路徑"
-
-    return ""
-
-
-def _wordish_count(text: str) -> int:
-    return len(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", text or ""))
-
-
-def _information_quality_issue(candidate: dict) -> str:
-    title = candidate.get("title", "")
-    snippet = candidate.get("snippet", "")
-    source = candidate.get("source", "")
-    text = f"{title} {snippet} {source} {candidate.get('url', '')} {candidate.get('source_href', '')}"
-    title_count = _wordish_count(title)
-    snippet_count = _wordish_count(snippet)
-    is_official = candidate.get("source_tier") == "A_official"
-    has_high_value = _candidate_has_high_value_operational_detail(candidate, text)
-
-    if _is_low_value_service_notice_text(text) and not has_high_value:
-        if _contains_any_term(text, ["route page", "route number", "RouteNumber", "trip planner"]):
-            return "低價值路線公告"
-        return "日常服務推播"
-    if title_count < 4 and snippet_count < 10 and not (is_official and has_high_value):
-        return "摘要資訊不足"
-    if snippet_count < 8 and not has_high_value:
-        return "摘要資訊不足"
-    return ""
-
-
-def _strip_source_name_noise(text: str) -> str:
-    cleaned = text or ""
-    for term in SOURCE_NAME_NOISE_TERMS:
-        cleaned = re.sub(re.escape(term), " ", cleaned, flags=re.IGNORECASE)
-    return cleaned
-
-
-def _is_standards_source(source_name: str) -> bool:
-    return (source_name or "").startswith("規範更新代理")
-
-
-def _is_standard_update_query(query: str) -> bool:
-    query_lower = (query or "").casefold()
-    return any(
-        standard.casefold() in query_lower
-        for standards in STANDARDS_WATCHLIST.values()
-        for standard in standards
-    )
-def _is_standard_update_candidate(text: str, require_url: bool = True) -> bool:
-    """
-    判斷是否為真正的規範更新。
-    只有「標準編號 + 明確更新動作 + 可查證來源」才算規範更新。
-    單純標準清單、官方首頁、持續追蹤中，不可列入正式週報。
-    """
-    text_raw = text or ""
-    text_lower = text_raw.casefold()
-
-    has_standard = any(
-        standard.casefold() in text_lower
-        for standards in STANDARDS_WATCHLIST.values()
-        for standard in standards
-    )
-
-    update_action_terms = [
-        "new edition", "revision", "amendment", "corrigendum",
-        "draft", "public comment", "published", "withdrawn",
-        "superseded", "revised", "updated",
-        "新版", "新版本", "修訂", "修正", "增補", "勘誤",
-        "草案", "徵詢", "公告", "發布", "撤回", "取代",
-    ]
-
-    tracking_only_terms = [
-        "持續追蹤中", "持續追蹤", "追蹤清單",
-        "標準體系公告", "無單一新聞連結",
-        "standard watchlist", "tracking only",
-        "catalogue", "catalog", "webstore",
-    ]
-
-    has_update_action = any(term.casefold() in text_lower for term in update_action_terms)
-    is_tracking_only = any(term.casefold() in text_lower for term in tracking_only_terms)
-    has_url = re.search(r"https?://", text_raw) is not None
-
-    if is_tracking_only:
-        return False
-    if require_url and not has_url:
-        return False
-
-    return has_standard and has_update_action
-
-
-def _candidate_region_text(candidate: dict) -> str:
-    return " ".join(str(candidate.get(key, "") or "") for key in (
-        "region", "title", "snippet", "url", "source_href", "source_domain", "source"
-    ))
-
-
-def _region_from_domain_hints(candidate: dict) -> str:
-    source_url = _effective_source_url(candidate)
-    hosts = [
-        candidate.get("source_domain", ""),
-        _domain_from_url(source_url),
-        _domain_from_url(candidate.get("source_href", "")),
-        _domain_from_url(candidate.get("url", "")),
-        _original_source_domain(
-            candidate.get("source", ""),
-            candidate.get("url", ""),
-            candidate.get("source_href", ""),
-            "",
-        ),
-    ]
-    for host in hosts:
-        for domain, region in REGION_DOMAIN_HINTS.items():
-            if host and _host_matches(host, domain):
-                return region
-    return ""
-
-
-def _region_guess_from_candidate(candidate: dict) -> str:
-    title = str(candidate.get("title", "") or "")
-    snippet = str(candidate.get("snippet", "") or "")
-    explicit_event_guess = _explicit_event_region_hint(f"{title} {snippet}")
-    if explicit_event_guess:
-        return explicit_event_guess
-
-    query_region = str(candidate.get("query_region", "") or "").strip()
-    if query_region and query_region not in {"global", "unplanned", "未判定", "國際", "國際研究"}:
-        return query_region
-    query_guess = guess_region_from_text(candidate.get("query", ""))
-    if query_guess != "未判定":
-        return query_guess
-
-    title_guess = guess_region_from_text(title)
-    if title_guess != "未判定":
-        return title_guess
-    snippet_guess = guess_region_from_text(snippet)
-    if snippet_guess != "未判定":
-        return snippet_guess
-
-    source_guess = guess_region_from_text(candidate.get("source", ""))
-    if source_guess != "未判定":
-        return source_guess
-    domain_guess = _region_from_domain_hints(candidate)
-    if domain_guess:
-        return domain_guess
-
-    path_text = " ".join(
-        urlparse(candidate.get(key, "") or "").path.replace("/", " ")
-        for key in ("url", "source_href")
-    )
-    path_guess = guess_region_from_text(path_text)
-    if path_guess != "未判定":
-        return path_guess
-    existing = str(candidate.get("region", "") or "").strip()
-    return existing if existing not in {"", "未判定", "國際研究"} else "未判定"
-
-
-def _canonical_candidate_region(candidate: dict) -> str:
-    region = str(candidate.get("region", "") or "").strip()
-    guessed = _region_guess_from_candidate(candidate)
-    if guessed == "巴西":
-        region = "巴西"
-    elif guessed != "未判定" and (not region or region in {"未判定", "國際", "國際研究"} or region != guessed):
-        region = guessed
-    if region in {"Brazil", "Brasil", "São Paulo", "Sao Paulo", "聖保羅", "圣保罗"}:
-        region = "巴西"
-    if not region:
-        region = "未判定"
-    candidate["region"] = region
-    return region
-
-
-def _is_allowed_international_candidate(candidate: dict, text: str, looks_like_standard: bool) -> bool:
-    source = candidate.get("source", "")
-    host = _original_source_domain(
-        source,
-        candidate.get("url", ""),
-        candidate.get("source_href", ""),
-        candidate.get("query", ""),
-    )
-    if looks_like_standard or _is_standards_source(source):
-        return True
-    if host and _host_matches(host, "uitp.org"):
-        return True
-    international_terms = [
-        "international report", "global report", "cross-national", "multinational",
-        "global survey", "benchmark report", "technical report",
-        "國際報告", "全球報告", "跨國", "多國", "技術報告",
-    ]
-    return _contains_any_term(text, international_terms) and _contains_any_term(text, URBAN_RAIL_MODE_TERMS)
-
-
-def _is_urban_rail_candidate(text: str, source_name: str = "") -> bool:
-    """正式新聞候選須直接連到都會軌道；標準更新另由規範規則處理。"""
-    if _is_standards_source(source_name):
-        return True
-
-    topic_text = _strip_source_name_noise(text)
-    has_metro_word = _contains_any_term(topic_text, ["metro"])
-    has_metro_with_rail_context = has_metro_word and _contains_any_term(topic_text, METRO_RAIL_CONTEXT_TERMS)
-    has_unambiguous_mode = _contains_any_term(topic_text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS)
-    has_operator = _contains_any_term(f"{source_name} {topic_text}", URBAN_RAIL_OPERATOR_TERMS)
-    has_non_urban = _contains_any_term(topic_text, NON_URBAN_TRANSPORT_TERMS)
-    has_hard_non_urban = _contains_any_term(topic_text, NON_URBAN_HARD_EXCLUDE_TERMS)
-    has_civic_metro_name_only = _contains_any_term(topic_text, CIVIC_METRO_NAME_ONLY_TERMS)
-    has_clear_urban_context = has_unambiguous_mode or has_operator or has_metro_with_rail_context
-
-    if has_civic_metro_name_only and not (has_unambiguous_mode or has_operator):
-        return False
-    if _is_airport_people_mover_only_text(topic_text, source_name):
-        return False
-    if has_hard_non_urban and not has_clear_urban_context:
-        return False
-    if has_non_urban and not has_clear_urban_context:
-        return False
-    return has_clear_urban_context
-
-
-def _is_tech_news_only_mode() -> bool:
-    return bool(selected_types) and set(selected_types) == {"技術新知"}
-
-
-def _is_technical_news_candidate(text: str, source_name: str = "") -> bool:
-    """只勾技術新知時，排除純事故、政策、人事、行銷或一般工程進度。"""
-    if _is_standards_source(source_name):
-        return True
-
-    topic_text = _strip_source_name_noise(f"{source_name} {text}")
-    has_technical_term = _contains_any_term(topic_text, TECH_NEWS_REQUIRED_TERMS)
-    has_soft_exclude = _contains_any_term(topic_text, TECH_NEWS_SOFT_EXCLUDE_TERMS)
-
-    if has_soft_exclude and not has_technical_term:
-        return False
-    return has_technical_term
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def _is_allowed_host(host: str) -> bool:
@@ -2501,66 +1280,16 @@ def _is_valid_news_url(url: str, source_href: str = "") -> tuple[bool, str]:
     return True, ""
 
 
-def _normalize_title(title: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^\w\u4e00-\u9fff]+", " ", title.casefold())).strip()
 
 
-def _dedupe_url(url: str) -> str:
-    parsed = urlparse(url)
-    clean = parsed._replace(
-        scheme=parsed.scheme.lower(),
-        netloc=parsed.netloc.lower(),
-        path=parsed.path.rstrip("/"),
-        params="",
-        query="",
-        fragment="",
-    )
-    return urlunparse(clean)
 
 
-def _entry_source_href(entry) -> str:
-    source = entry.get("source") if hasattr(entry, "get") else None
-    if isinstance(source, dict):
-        return source.get("href") or source.get("url") or ""
-    return ""
 
 
-def _entry_pub_str(entry) -> str:
-    for key in ("published", "updated", "created", "date"):
-        value = entry.get(key, "")
-        if value:
-            return str(value)
-    for key in ("published_parsed", "updated_parsed"):
-        value = entry.get(key)
-        if value:
-            try:
-                return datetime.datetime.fromtimestamp(time.mktime(value), tz=datetime.timezone.utc).isoformat()
-            except Exception:
-                pass
-    return ""
 
 
 def _fetch_feed(session: requests.Session, url: str):
-    if feedparser is None:
-        raise FeedFetchError("parse error", "feedparser 套件未安裝")
-    try:
-        response = session.get(url, timeout=15)
-    except requests.exceptions.Timeout as exc:
-        raise FeedFetchError("timeout", str(exc)) from exc
-    except requests.exceptions.RequestException as exc:
-        raise FeedFetchError("parse error", str(exc)) from exc
-
-    if response.status_code == 403:
-        raise FeedFetchError("403", "HTTP 403 Forbidden")
-    if response.status_code in (404, 405):
-        raise FeedFetchError(str(response.status_code), f"HTTP {response.status_code}")
-    if response.status_code >= 400:
-        raise FeedFetchError("parse error", f"HTTP {response.status_code}")
-
-    parsed = feedparser.parse(response.content)
-    if getattr(parsed, "bozo", False) and not getattr(parsed, "entries", []):
-        raise FeedFetchError("parse error", str(getattr(parsed, "bozo_exception", "RSS/Atom parse error")))
-    return parsed
+    return service_fetch_feed(session, url, feedparser)
 
 
 def _items_from_parsed_feed(
@@ -2845,25 +1574,10 @@ def _search_family_from_query(query: str) -> str:
 
 
 def _compact_query(query: str, limit: int = DDGS_QUERY_CHAR_LIMIT) -> str:
-    q = re.sub(r"\s+", " ", (query or "").strip())
-    if len(q) <= limit:
-        return q
-    words = q.split(" ")
-    kept: list[str] = []
-    for word in words:
-        candidate = " ".join(kept + [word])
-        if len(candidate) > limit:
-            break
-        kept.append(word)
-    return " ".join(kept).strip() or q[:limit].rstrip()
+    return service_compact_query(query, limit)
 
 
-def _ddgs_timelimit_for_lookback(days: int) -> str:
-    if int(days) <= 7:
-        return "w"
-    if int(days) <= 31:
-        return "m"
-    return "y"
+_ddgs_timelimit_for_lookback = service_ddgs_timelimit_for_lookback
 
 
 def _query_with_period(query: str) -> str:
@@ -3207,22 +1921,11 @@ def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -
         final_backend = backend
         for attempt in range(1, 3):
             try:
-                with DDGS() as ddgs:
-                    if use_news:
-                        results = ddgs.news(
-                            query,
-                            max_results=status_row["requested_max_results"],
-                            timelimit=status_row["timelimit"],
-                            backend=backend,
-                        )
-                    else:
-                        results = ddgs.text(
-                            query,
-                            max_results=status_row["requested_max_results"],
-                            timelimit=status_row["timelimit"],
-                            backend=backend,
-                        )
-                result_list = list(results or [])
+                result_list = service_execute_ddgs_query(
+                    DDGS, query, use_news=use_news,
+                    max_results=status_row["requested_max_results"],
+                    timelimit=status_row["timelimit"], backend=backend,
+                )
                 received_response = True
                 status_row["returned_count"] = len(result_list)
                 if not result_list:
@@ -3354,151 +2057,26 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
     return "\n\n".join(results_map[i] for i in sorted(results_map))
 
 
-def _clean_text(text: str) -> str:
-    text = re.sub(r"<[^>]+>", " ", text or "")
-    text = re.sub(r"&nbsp;|&#160;", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
 
 
-def _shorten(text: str, max_chars: int = CANDIDATE_SNIPPET_CHARS) -> str:
-    text = _clean_text(text)
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - 1].rstrip() + "…"
 
 
-def _is_article_level_url(value: str, allow_google_news: bool = False) -> bool:
-    url = _clean_candidate_url(value)
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return False
-    if "news.google.com" in parsed.netloc.casefold():
-        return allow_google_news and parsed.path not in {"", "/"}
-    return parsed.path not in {"", "/"}
 
 
-def _effective_source_url(candidate: dict) -> str:
-    resolved_url = candidate.get("resolved_article_url") or ""
-    source_href = candidate.get("source_href") or ""
-    url = candidate.get("url") or ""
-    if _is_article_level_url(resolved_url):
-        return _clean_candidate_url(resolved_url)
-    if _is_article_level_url(source_href):
-        return _clean_candidate_url(source_href)
-    if _is_article_level_url(url, allow_google_news=True):
-        return _clean_candidate_url(url)
-    # A Google News article URL is a valid fallback. Never replace it with a
-    # synthesized publisher home page, which is not a source article.
-    if "news.google.com" in _domain_from_url(url):
-        return _clean_candidate_url(url)
-    return _clean_candidate_url(source_href or url)
 
 
-def _clean_candidate_url(value: str) -> str:
-    value = (value or "").strip()
-    if value.casefold() in {"http:", "https:", "http://", "https://"}:
-        return ""
-    url = _extract_complete_url(value)
-    if url:
-        return url
-    domain = _extract_domain_hint(value)
-    return domain or value
 
 
-def _quality_rank(quality: str) -> int:
-    return {"A": 0, "B": 1, "C": 2}.get((quality or "B").upper(), 1)
 
 
-def _source_tier_rank(tier: str) -> int:
-    return {
-        "A_official": 0,
-        "B_professional": 1,
-        "C_media": 2,
-        "D_proxy_low_value": 3,
-    }.get(tier or "C_media", 2)
 
 
-def classify_source_quality(source: str, url: str, source_href: str = "") -> tuple[str, str]:
-    strict_host = _strict_source_domain(url, source_href)
-    label_host = _domain_hint_from_source_label(source)
-    host = strict_host or label_host
-    text = f"{source} {url} {source_href}".casefold()
-
-    if host and any(_host_matches(host, domain) for domain in PORTAL_REPOST_DOMAINS | PORTAL_SOCIAL_LOW_VALUE_DOMAINS):
-        return "C", "入口、轉載或社群平台"
-    if strict_host and any(_host_matches(strict_host, domain) for domain in SOURCE_QUALITY_A_DOMAINS):
-        return "A", "官方/營運機構/政府交通機關/專業鐵道媒體"
-    if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_C_DOMAINS):
-        return "C", "轉載、旅遊或低信度網站"
-    if any(term.casefold() in text for term in LOW_QUALITY_CONTENT_TERMS):
-        return "C", "旅遊、SEO 或內容農場線索"
-    return "B", "一般新聞媒體或未分級來源"
 
 
-def classify_source_tier(source: str, url: str, source_href: str = "") -> tuple[str, str]:
-    strict_host = _strict_source_domain(url, source_href)
-    label_host = _domain_hint_from_source_label(source)
-    host = strict_host or label_host
-    text = f"{source} {url} {source_href}".casefold()
-    path_lower = urlparse(url or "").path.casefold()
-
-    if host and any(_host_matches(host, domain) for domain in LOW_VALUE_EXCLUDED_HOSTS):
-        return "D_proxy_low_value", "低價值來源或子網域"
-    if host and any(_host_matches(host, domain) for domain in PORTAL_SOCIAL_LOW_VALUE_DOMAINS):
-        return "D_proxy_low_value", "入口、轉載或社群平台"
-    if any(marker in path_lower for marker in LOW_INFORMATION_PATH_MARKERS):
-        return "D_proxy_low_value", "入口頁、查詢頁、路線頁、PDF 或低資訊頁"
-    if any(term.casefold() in text for term in LOW_INFORMATION_PAGE_TERMS):
-        return "D_proxy_low_value", "入口頁、分類頁或低資訊內容"
-    if host and any(_host_matches(host, domain) for domain in PORTAL_REPOST_DOMAINS):
-        return "C_media", "一般入口或轉載媒體"
-    if strict_host and any(_host_matches(strict_host, domain) for domain in SOURCE_TIER_OFFICIAL_DOMAINS):
-        return "A_official", "官方公告、政府交通主管機關或營運機構"
-    if host and any(_host_matches(host, domain) for domain in SOURCE_TIER_PROFESSIONAL_DOMAINS):
-        return "B_professional", "專業鐵道或大眾運輸媒體"
-    if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_C_DOMAINS):
-        return "C_media", "一般媒體、轉載或入口媒體"
-    if "news.google.com" in _domain_from_url(url) and not host:
-        return "D_proxy_low_value", "Google News 代理且原始來源未明確辨識"
-    return "C_media", "一般新聞媒體或未分級來源"
 
 
-def source_label_for_report(source: str, url: str, source_href: str = "", tier: str = "") -> str:
-    strict_host = _strict_source_domain(url, source_href)
-    label_host = _domain_hint_from_source_label(source)
-    display_host = strict_host or (
-        label_host
-        if label_host and any(_host_matches(label_host, domain) for domain in SOURCE_TIER_PROFESSIONAL_DOMAINS)
-        else ""
-    )
-    for domain, label in SOURCE_DISPLAY_BY_DOMAIN.items():
-        if display_host and _host_matches(display_host, domain):
-            return label
-
-    source_clean = clean_source_name_for_ui(source)
-    if _is_query_proxy_source_label(source):
-        if display_host and display_host != "news.google.com":
-            return display_host
-        return "資料來源未明確辨識"
-
-    if source_clean and source_clean not in {"RSS", "ddgs", "Google News"}:
-        if tier == "A_official" and "官方" not in source_clean:
-            return f"{source_clean} 官方公告"
-        return source_clean
-    if display_host and display_host != "news.google.com":
-        return display_host
-    if "news.google.com" in _domain_from_url(url):
-        return "資料來源未明確辨識"
-    return "資料來源未明確辨識"
 
 
-def source_verb_for_report(tier: str, label: str) -> str:
-    if tier == "A_official" or "官方" in (label or ""):
-        return "公告"
-    if tier == "B_professional":
-        return "報導"
-    return "報導"
 
 
 EVENT_REGION_PRIORITY_HINTS: list[tuple[str, list[str]]] = [
@@ -3510,836 +2088,60 @@ EVENT_REGION_PRIORITY_HINTS: list[tuple[str, list[str]]] = [
 ]
 
 
-def _region_term_matches(text_lower: str, term: str) -> bool:
-    term_lower = (term or "").casefold()
-    if not term_lower:
-        return False
-    if re.fullmatch(r"[a-z0-9.\-]+", term_lower) and len(term_lower.replace(".", "").replace("-", "")) <= 4:
-        return bool(re.search(rf"(?<![a-z0-9]){re.escape(term_lower)}(?![a-z0-9])", text_lower))
-    return term_lower in text_lower
-
-
-def _explicit_event_region_hint(text: str) -> str:
-    text_lower = (text or "").casefold()
-    # Ambiguous operator names are paired with an event city before generic
-    # query or publisher hints are considered.
-    explicit_hints = [
-        ("英國", ["translink northern ireland", "translink ni", "belfast", "northern ireland"]),
-        ("美國", ["austin transit partnership", "austin light rail", "wmata", "washington metro", "new york subway", "nyct", "mta"]),
-        ("加拿大", ["ttc", "toronto subway", "toronto", "translink vancouver", "vancouver translink", "vancouver", "skytrain"]),
-        ("德國", ["bvg", "berlin", "berlin tram"]),
-    ]
-    for region, terms in explicit_hints:
-        if any(_region_term_matches(text_lower, term) for term in terms):
-            return region
-    return ""
-
-
-def _event_region_hint_from_text(text: str) -> str:
-    text_lower = (text or "").casefold()
-    for region, terms in EVENT_REGION_PRIORITY_HINTS:
-        if any(_region_term_matches(text_lower, term) for term in terms):
-            return region
-    return ""
-
-
-def guess_region_from_text(text: str) -> str:
-    text_lower = (text or "").casefold()
-    priority_hint = _event_region_hint_from_text(text)
-    if priority_hint:
-        return priority_hint
-    aliases = {
-        "日本": ["japan", "tokyo", "osaka", "日本", "東京", "大阪"],
-        "韓國": ["korea", "seoul", "韓國", "韩国", "서울"],
-        "新加坡": ["singapore", "lta", "smrt", "新加坡"],
-        "香港": ["hong kong", "mtr.com.hk", "香港", "港鐵", "港铁"],
-        "澳洲": ["australia", "sydney", "melbourne", "brisbane", "澳洲"],
-        "英國": ["united kingdom", "uk", "london", "tfl", "underground", "英國", "英国", "倫敦"],
-        "法國": ["france", "paris", "ratp", "法國", "法国", "巴黎"],
-        "德國": ["germany", "berlin", "munich", "hamburg", "u-bahn", "德國", "德国"],
-        "美國": [
-            "united states", "new york", "nyc", "manhattan", "washington", "chicago",
-            "seattle", "federal way", "star lake", "sound transit", "link light rail",
-            "wmata", "cta", "mta.info", "soundtransit.org", "美國", "美国",
-        ],
-        "加拿大": [
-            "canada", "toronto", "vancouver", "yaletown-roundhouse",
-            "yaletown–roundhouse", "ttc", "skytrain", "加拿大",
-        ],
-        "西班牙": ["spain", "madrid", "barcelona", "西班牙"],
-        "巴西": ["brazil", "brasil", "são paulo", "sao paulo", "sao-paulo", "saopaulo", "巴西", "聖保羅", "圣保罗"],
-        "印度": ["india", "mumbai", "delhi metro", "印度", "孟買", "孟买"],
-        "荷蘭": ["netherlands", "amsterdam", "rotterdam", "荷蘭", "荷兰"],
-        "瑞士": ["switzerland", "zurich", "lausanne", "瑞士"],
-        "義大利": ["italy", "milan", "rome", "turin", "義大利", "意大利"],
-        "瑞典": ["sweden", "stockholm", "gothenburg", "瑞典"],
-        "奧地利": ["austria", "vienna", "wien", "奧地利", "奥地利"],
-        "丹麥": ["denmark", "copenhagen", "丹麥", "丹麦"],
-        "挪威": ["norway", "oslo", "挪威"],
-    }
-    for region, terms in aliases.items():
-        if any(_region_term_matches(text_lower, term) for term in terms):
-            return region
-    return "未判定"
-
-
-def _candidate_date_obj(date_text: str) -> datetime.date | None:
-    text = (date_text or "").strip()
-    if not text or "未知" in text:
-        return None
-    try:
-        return parsedate_to_datetime(text).date()
-    except Exception:
-        pass
-    try:
-        return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).date()
-    except Exception:
-        pass
-    for pattern in (r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", r"(\d{4})年(\d{1,2})月(\d{1,2})日"):
-        match = re.search(pattern, text)
-        if match:
-            try:
-                return datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
-            except Exception:
-                return None
-    year_match = re.search(r"\b(20\d{2})\b", text)
-    if year_match:
-        try:
-            return datetime.date(int(year_match.group(1)), 1, 1)
-        except Exception:
-            return None
-    return None
-
-
-def _date_from_url_path(*urls: str) -> datetime.date | None:
-    """Extract an explicit calendar date from an article URL path."""
-    for raw_url in urls:
-        if not raw_url:
-            continue
-        path = unquote(urlparse(raw_url).path or "")
-        for pattern in (
-            r"(?<!\d)(20\d{2})/(\d{1,2})/(\d{1,2})(?!\d)",
-            r"(?<!\d)(20\d{2})-(\d{1,2})-(\d{1,2})(?!\d)",
-        ):
-            match = re.search(pattern, path)
-            if not match:
-                continue
-            try:
-                return datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
-            except ValueError:
-                continue
-    return None
-
-
-def _date_sort_key(candidate: dict) -> int:
-    date_obj = _candidate_date_obj(candidate.get("date", ""))
-    return date_obj.toordinal() if date_obj else 0
-
-
-def _make_news_candidate(
-    title: str,
-    date: str,
-    source: str,
-    url: str,
-    snippet: str,
-    query: str,
-    region: str,
-    source_type: str,
-    source_href: str = "",
-) -> dict:
-    normalized_date = _clean_text(date)
-    if not _candidate_date_obj(normalized_date):
-        url_date = _date_from_url_path(source_href, url)
-        if url_date:
-            normalized_date = url_date.isoformat()
-    raw_domain = _domain_from_url(source_href or url) or _extract_site_domain_from_google_news(url) or _domain_hint_from_source_label(source)
-    original_domain = _normalize_source_domain(_original_source_domain(source, url, source_href, query))
-    quality, quality_reason = classify_source_quality(source, url, source_href)
-    source_tier, source_tier_reason = classify_source_tier(source, url, source_href)
-    source_display = source_label_for_report(source, url, source_href, source_tier)
-    source_verb = source_verb_for_report(source_tier, source_display)
-    query_metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {}
-    search_family = query_metadata.get("family") or _search_family_from_query(query or source)
-    search_language = query_metadata.get("lang") or _search_language_from_query(query or source)
-    candidate = {
-        "title": _clean_text(title),
-        "date": normalized_date or "日期未知",
-        "source": _clean_text(source) or (_domain_from_url(source_href or url) or "未判定來源"),
-        "url": (url or "").strip(),
-        "snippet": _shorten(snippet, REPORT_SNIPPET_CHARS),
-        "query": _clean_text(query),
-        "region": region if region and region != "未判定" else "未判定",
-        "source_type": source_type,
-        "source_href": (source_href or "").strip(),
-        "source_quality": quality,
-        "source_quality_reason": quality_reason,
-        "source_tier": source_tier,
-        "source_tier_reason": source_tier_reason,
-        "source_display": source_display,
-        "source_verb": source_verb,
-        "source_domain_raw": raw_domain,
-        "source_domain": original_domain or _normalize_source_domain(_domain_from_url(source_href or url)),
-        "source_domain_normalized": original_domain or _normalize_source_domain(_domain_from_url(source_href or url)),
-        "search_family": search_family,
-        "search_query": _clean_text(query),
-        "search_language": search_language,
-        "query_region": query_metadata.get("query_region", ""),
-    }
-    candidate["region"] = _region_guess_from_candidate(candidate)
-    return candidate
-
-
-def parse_rss_candidates(raw_rss: str) -> list[dict]:
-    candidates: list[dict] = []
-    for block in re.split(r"(?=^【RSS來源：)", raw_rss or "", flags=re.MULTILINE):
-        block = block.strip()
-        if not block.startswith("【RSS來源："):
-            continue
-        header, *body_lines = block.splitlines()
-        source_match = re.match(r"^【RSS來源：(.+?)(?:（|】)", header)
-        source_name = source_match.group(1).strip() if source_match else "RSS"
-        source_type = "Google News 代理" if "Google News" in source_name or "代理" in source_name else "官方 RSS"
-        current: dict[str, str] = {}
-
-        def _flush_current():
-            if current.get("title") and current.get("url"):
-                candidates.append(_make_news_candidate(
-                    title=current.get("title", ""),
-                    date=current.get("date", ""),
-                    source=source_name,
-                    url=current.get("url", ""),
-                    snippet=current.get("snippet", ""),
-                    query=source_name,
-                    region=guess_region_from_text(f"{source_name} {current.get('title', '')}"),
-                    source_type=source_type,
-                    source_href=current.get("source_href", ""),
-                ))
-
-        for raw_line in body_lines:
-            line = raw_line.strip()
-            if not line:
-                continue
-            if line.startswith("日期："):
-                _flush_current()
-                current = {"date": line.split("：", 1)[1].strip()}
-            elif line.startswith("標題："):
-                current["title"] = line.split("：", 1)[1].strip()
-            elif line.startswith("摘要："):
-                current["snippet"] = line.split("：", 1)[1].strip()
-            elif line.startswith("連結："):
-                link_text = line.split("：", 1)[1].strip()
-                link_parts = link_text.split("原始來源：", 1)
-                current["url"] = link_parts[0].strip()
-                if len(link_parts) > 1:
-                    current["source_href"] = link_parts[1].strip()
-            elif line.startswith("原始來源："):
-                current["source_href"] = line.split("：", 1)[1].strip()
-        _flush_current()
-    return candidates
-
-
-def parse_ddg_candidates(raw_ddg: str) -> list[dict]:
-    candidates: list[dict] = []
-    for block in re.split(r"(?=^【搜尋\s+\d+)", raw_ddg or "", flags=re.MULTILINE):
-        block = block.strip()
-        if not block.startswith("【搜尋"):
-            continue
-        header, *body_lines = block.splitlines()
-        query_match = re.match(r"^【搜尋\s+\d+（[^）]+）】(.+?)(?:（有效候選|\s*$)", header)
-        query = query_match.group(1).strip() if query_match else header
-        current: dict[str, str] = {}
-
-        def _flush_current():
-            if current.get("title") and current.get("url"):
-                source_domain = _domain_from_url(current.get("url", ""))
-                candidates.append(_make_news_candidate(
-                    title=current.get("title", ""),
-                    date=current.get("date", ""),
-                    source=source_domain or "ddgs",
-                    url=current.get("url", ""),
-                    snippet=current.get("snippet", ""),
-                    query=query,
-                    region=guess_region_from_text(f"{query} {current.get('title', '')} {current.get('snippet', '')}"),
-                    source_type="ddgs",
-                ))
-
-        for raw_line in body_lines:
-            line = raw_line.strip()
-            if not line:
-                continue
-            if line.startswith("日期："):
-                _flush_current()
-                current = {"date": line.split("：", 1)[1].strip()}
-            elif line.startswith("標題："):
-                current["title"] = line.split("：", 1)[1].strip()
-            elif line.startswith("摘要："):
-                current["snippet"] = line.split("：", 1)[1].strip()
-            elif line.startswith("連結："):
-                current["url"] = line.split("：", 1)[1].strip()
-        _flush_current()
-    return candidates
-
-
-def _dedupe_entity_tokens(candidate: dict) -> set[str]:
-    text = " ".join(str(candidate.get(key, "") or "") for key in ("title", "url", "source_href"))
-    text = urllib.parse.unquote(text).casefold()
-    tokens: set[str] = set()
-    patterns = [
-        r"\b(?:line|route|service|tram|lrt|mrt|u-bahn|u)\s*[-#]?\s*[a-z0-9]{1,6}\b",
-        r"\b[a-z]\s*line\b",
-        r"\bline\s*[a-z0-9]{1,6}\b",
-        r"\broute\s*[a-z0-9]{1,6}\b",
-        r"\b(?:station|stop|depot)\s+[a-z0-9][a-z0-9\- ]{1,40}\b",
-        r"\b[a-z0-9][a-z0-9\- ]{1,40}\s+(?:station|stop|depot)\b",
-        r"[a-z0-9一二三四五六七八九十東西南北中環港島觀塘荃灣屯馬將軍澳迪士尼]{1,12}[線綫]",
-        r"[a-z0-9一二三四五六七八九十東西南北中環港島觀塘荃灣屯馬將軍澳迪士尼]{1,12}[站]",
-    ]
-    for pattern in patterns:
-        for match in re.findall(pattern, text, flags=re.IGNORECASE):
-            token = re.sub(r"\s+", " ", match if isinstance(match, str) else " ".join(match)).strip()
-            if len(token) >= 2:
-                tokens.add(token)
-    return tokens
-
-
-def _dedupe_route_line_tokens(candidate: dict) -> set[str]:
-    text = " ".join(str(candidate.get(key, "") or "") for key in ("title", "url", "source_href"))
-    text = urllib.parse.unquote(text).casefold().replace("_", "-")
-    tokens: set[str] = set()
-    patterns = [
-        r"\b(?:line|route|service|tram|lrt|mrt|u-bahn|u)\s*[-#]?\s*[a-z0-9]{1,6}\b",
-        r"\b(?:line|route|service|tram|lrt|mrt|u-bahn|u)[-/][a-z0-9]{1,6}\b",
-        r"\b[a-z]\s*line\b",
-        r"\bline\s*[a-z0-9]{1,6}\b",
-        r"\broute\s*[a-z0-9]{1,6}\b",
-        r"[a-z0-9一二三四五六七八九十東西南北中環港島觀塘荃灣屯馬將軍澳迪士尼]{1,12}[線綫]",
-    ]
-    for pattern in patterns:
-        for match in re.findall(pattern, text, flags=re.IGNORECASE):
-            token = re.sub(r"[\s/_]+", "-", match if isinstance(match, str) else " ".join(match)).strip("-")
-            if len(token) >= 2:
-                tokens.add(token)
-    return tokens
-
-
-def _dedupe_titles_conflict_on_entities(candidate: dict, existing: dict) -> bool:
-    left_region = candidate.get("region", "")
-    right_region = existing.get("region", "")
-    if left_region and right_region and left_region != right_region:
-        return True
-    left_lines = _dedupe_route_line_tokens(candidate)
-    right_lines = _dedupe_route_line_tokens(existing)
-    if left_lines and right_lines and left_lines.isdisjoint(right_lines):
-        return True
-    left_tokens = _dedupe_entity_tokens(candidate)
-    right_tokens = _dedupe_entity_tokens(existing)
-    if left_tokens and right_tokens and left_tokens.isdisjoint(right_tokens):
-        return True
-    left_date = _candidate_date_obj(candidate.get("date", ""))
-    right_date = _candidate_date_obj(existing.get("date", ""))
-    if left_date and right_date and abs((left_date - right_date).days) > 7:
-        return True
-    return False
-
-
-def _is_similar_title_duplicate(candidate: dict, existing: dict, threshold: float) -> bool:
-    candidate_key = _normalize_title(candidate.get("title", ""))
-    existing_key = _normalize_title(existing.get("title", ""))
-    if not candidate_key or not existing_key:
-        return False
-    similarity = difflib.SequenceMatcher(None, candidate_key, existing_key).ratio()
-    if similarity < threshold:
-        return False
-    return not _dedupe_titles_conflict_on_entities(candidate, existing)
-
-
-def dedupe_candidates(candidates: list[dict]) -> tuple[list[dict], dict[str, int]]:
-    stats = {"URL 重複": 0, "標題正規化重複": 0, "標題相似重複": 0}
-    seen_urls: set[str] = set()
-    seen_title_keys: set[str] = set()
-    title_entries: list[dict] = []
-    deduped: list[dict] = []
-    similarity_threshold = 0.84 if int(lookback_days) in ADVANCED_LOOKBACK_OPTIONS else 0.90
-
-    sorted_candidates = sorted(
-        candidates,
-        key=lambda item: (
-            _source_tier_rank(item.get("source_tier", "C_media")),
-            _quality_rank(item.get("source_quality", "B")),
-            0 if item.get("source_type") in {"官方 RSS", "Google News 代理"} else 1,
-            -_date_sort_key(item),
-        ),
-    )
-
-    for candidate in sorted_candidates:
-        url_key = _dedupe_url(candidate.get("url", ""))
-        title_key = _normalize_title(candidate.get("title", ""))
-        if url_key and url_key in seen_urls:
-            stats["URL 重複"] += 1
-            continue
-        if title_key and title_key in seen_title_keys:
-            stats["標題正規化重複"] += 1
-            continue
-        if title_key and any(_is_similar_title_duplicate(candidate, existing, similarity_threshold) for existing in title_entries):
-            stats["標題相似重複"] += 1
-            continue
-        if url_key:
-            seen_urls.add(url_key)
-        if title_key:
-            seen_title_keys.add(title_key)
-            title_entries.append(candidate)
-        deduped.append(candidate)
-    return deduped, stats
-
-
-def _compute_candidate_page_type(candidate: dict) -> tuple[str, str]:
-    url = candidate.get("url", "")
-    source_href = candidate.get("source_href", "")
-    parsed = urlparse(url or "")
-    path = (parsed.path or "").casefold()
-    query = (parsed.query or "").casefold()
-    text = _candidate_selection_text(candidate).casefold()
-    if parsed.path in ("", "/") and "news.google.com" not in parsed.netloc:
-        return "home_page", "URL path 為首頁"
-    if any(marker in path for marker in ("/search", "/tag/", "/tags/", "/category", "/categories", "/archive", "/archives", "/topic", "/topics")) or "q=" in query:
-        return "index_or_search_page", "索引、分類或搜尋頁"
-    if any(marker in path for marker in ("/login", "/signin", "/sign-in", "/account", "/subscribe", "/privacy", "/terms")):
-        return "login_or_policy_page", "登入、會員或政策頁"
-    route_like_path = any(
-        re.search(pattern, path)
-        for pattern in (
-            r"/schedules?(?:/|$)", r"/timetables?(?:/|$)", r"/trips?(?:/|$)",
-            r"/journey(?:-|/|$)", r"/routes?(?:/|$)", r"/buses?(?:/|$)",
-        )
-    )
-    if route_like_path:
-        return "route_schedule_or_bus_page", "時刻表、路線、旅程規劃或公車頁"
-    if any(marker in path for marker in ("/store", "/estore", "/e-store", "/shop", "/product", "/promotion", "/promotions", "/campaign", "/campaigns")):
-        return "ticketing_promotion_or_product_page", "票券、促銷或商品頁"
-    if any(marker in path for marker in ("/event", "/events", "/anniversary", "/celebration", "/jobs", "/careers", "/hiring")):
-        return "event_or_recruiting_page", "活動、週年或招募頁"
-    if _contains_any_term(text, FINANCIAL_MARKET_TERMS):
-        return "financial_market_page", "股票、財務或市場分析"
-    if _contains_any_term(text, PROPERTY_OR_CAMPUS_DEVELOPMENT_TERMS):
-        return "property_or_life_page", "房地產、校園或周邊生活內容"
-    if _contains_any_term(text, SECURITY_OR_CRIME_TERMS) and not _has_major_security_rail_impact(candidate):
-        return "security_or_crime_page", "治安或一般警察案件"
-    if _contains_any_term(text, LOW_QUALITY_CONTENT_TERMS + LOW_INFORMATION_PAGE_TERMS + HARD_LOW_VALUE_CANDIDATE_TERMS):
-        return "low_information_page", "旅遊、入口、活動、常設服務或低資訊頁"
-    if _is_airport_people_mover_only_text(text, candidate.get("source", "")):
-        return "airport_people_mover_page", "機場航廈 people mover 或航空旅遊內容"
-    if source_href and "news.google.com" not in _domain_from_url(source_href):
-        return "news_article", "Google News 代理已提供原始來源"
-    return "news_article", "具備候選新聞頁基本結構"
-
-
-def _candidate_page_type(candidate: dict) -> tuple[str, str]:
-    cache = _candidate_analysis_cache(candidate)
-    cached = cache.get("page_type")
-    if isinstance(cached, tuple) and len(cached) == 2:
-        return cached
-    result = _compute_candidate_page_type(candidate)
-    cache["page_type"] = result
-    return result
-
-
-def _prefetch_limit_for_period(days: int) -> int:
-    try:
-        days = int(days)
-    except (TypeError, ValueError):
-        days = 7
-    if days >= 365:
-        return PREFETCH_LIMIT_BY_PERIOD["annual"]
-    if days >= 30:
-        return PREFETCH_LIMIT_BY_PERIOD["monthly"]
-    return PREFETCH_LIMIT_BY_PERIOD["weekly"]
-
-
-def _candidate_prefetch_signal(candidate: dict) -> bool:
-    if candidate.get("source_tier") not in {"A_official", "B_professional"}:
-        return False
-    title = candidate.get("title", "")
-    if not title or _wordish_count(title) < 4:
-        return False
-    source = candidate.get("source", "")
-    title_text = f"{title} {source} {candidate.get('source_domain', '')}"
-    if not _has_clear_urban_rail_context(title_text, source):
-        return False
-    has_system_or_institution = (
-        _contains_any_term(title_text, TECH_NEWS_REQUIRED_TERMS)
-        or _contains_any_term(title_text, globals().get("HIGH_VALUE_POLICY_TERMS", []))
-        or _contains_any_term(title_text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS)
-        or _contains_any_term(title_text, DISPUTE_SIGNAL_TERMS + DISPUTE_ACTOR_TERMS)
-    )
-    has_action = _contains_any_term(
-        title_text,
-        TITLE_TECHNICAL_ACTION_TERMS + [
-            "investigation", "investigate", "inquiry", "review", "suspend", "suspended",
-            "resume", "opened", "opening", "approve", "approved", "announce", "announced",
-            "award", "awarded", "strike", "lawsuit", "protest", "delay", "delayed",
-        ],
-    )
-    return has_system_or_institution and has_action
-
-
-def _canonical_url_from_html(html: str, base_url: str) -> str:
-    for pattern in (
-        r'<link[^>]+rel=["\'][^"\']*canonical[^"\']*["\'][^>]+href=["\']([^"\']+)',
-        r'<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\'][^"\']*canonical[^"\']*["\']',
-        r'<meta[^>]+property=["\']og:url["\'][^>]+content=["\']([^"\']+)',
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:url["\']',
-    ):
-        match = re.search(pattern, html or "", flags=re.IGNORECASE)
-        if match:
-            return urllib.parse.urljoin(base_url, unescape(match.group(1)).strip())
-    return ""
-
-
-def _resolve_google_news_article_url(candidate: dict, session: requests.Session) -> str:
-    original_url = _clean_candidate_url(candidate.get("url", ""))
-    if "news.google.com" not in _domain_from_url(original_url):
-        return original_url if _is_article_level_url(original_url) else ""
-    existing = _clean_candidate_url(candidate.get("resolved_article_url", ""))
-    if _is_article_level_url(existing):
-        return existing
-    started = time.perf_counter()
-    candidate["google_news_original_url"] = original_url
-    try:
-        response = session.get(
-            original_url,
-            timeout=PREFETCH_TIMEOUT_SECONDS,
-            headers={"Accept": "text/html,application/xhtml+xml,*/*"},
-            allow_redirects=True,
-        )
-        candidates = [getattr(response, "url", "")]
-        for hop in getattr(response, "history", []) or []:
-            candidates.append(getattr(hop, "headers", {}).get("Location", ""))
-            candidates.append(getattr(hop, "url", ""))
-        candidates.append(_canonical_url_from_html(getattr(response, "text", ""), getattr(response, "url", original_url)))
-        for value in candidates:
-            resolved = _clean_candidate_url(value)
-            if _is_article_level_url(resolved) and "news.google.com" not in _domain_from_url(resolved):
-                candidate["resolved_article_url"] = resolved
-                candidate["google_news_resolution_status"] = "resolved"
-                candidate["google_news_resolution_error"] = ""
-                candidate["google_news_resolution_elapsed_seconds"] = round(time.perf_counter() - started, 3)
-                candidate["_resolved_article_html"] = getattr(response, "text", "")
-                candidate["_resolved_article_content_type"] = getattr(response, "headers", {}).get("Content-Type", "")
-                return resolved
-        candidate["google_news_resolution_status"] = "unresolved_keep_google_news_url"
-        candidate["google_news_resolution_error"] = "no_article_level_redirect_or_canonical"
-    except Exception as exc:
-        candidate["google_news_resolution_status"] = "unresolved_keep_google_news_url"
-        candidate["google_news_resolution_error"] = str(exc)[:180]
-    candidate["google_news_resolution_elapsed_seconds"] = round(time.perf_counter() - started, 3)
-    return ""
-
-
-def _prefetch_url_for_candidate(candidate: dict, session: requests.Session | None = None) -> str:
-    if session is not None and "news.google.com" in _domain_from_url(candidate.get("url", "")):
-        _resolve_google_news_article_url(candidate, session)
-    for raw_url in (candidate.get("resolved_article_url", ""), candidate.get("source_href", ""), candidate.get("url", "")):
-        url = _clean_candidate_url(raw_url)
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            continue
-        if "news.google.com" in parsed.netloc.casefold():
-            continue
-        if parsed.path in {"", "/"}:
-            continue
-        return url
-    return ""
-
-
-def _extract_prefetch_text(html: str) -> str:
-    html = (html or "")[: PREFETCH_MAX_CHARS * 4]
-    pieces: list[str] = []
-    for pattern in (
-        r'<meta[^>]+(?:name|property)=["\'](?:description|og:description|twitter:description)["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:name|property)=["\'](?:description|og:description|twitter:description)["\']',
-        r"<title[^>]*>(.*?)</title>",
-    ):
-        pieces.extend(re.findall(pattern, html, flags=re.IGNORECASE | re.DOTALL))
-    cleaned_html = re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", html)
-    paragraphs = re.findall(r"(?is)<p[^>]*>(.*?)</p>", cleaned_html)
-    pieces.extend(paragraphs[:10])
-    text = " ".join(_clean_text(unescape(piece)) for piece in pieces)
-    return _shorten(text, PREFETCH_MAX_CHARS)
-
-
-def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> dict:
-    started = time.perf_counter()
-    url = _prefetch_url_for_candidate(candidate, session)
-    if not url:
-        return {"status": "skipped_no_direct_url", "chars": 0, "elapsed_seconds": 0.0, "reason": "no_direct_article_url"}
-    try:
-        resolved_html = candidate.pop("_resolved_article_html", "")
-        resolved_content_type = candidate.pop("_resolved_article_content_type", "").casefold()
-        if resolved_html:
-            article_text = _extract_prefetch_text(resolved_html)
-            if len(article_text) >= 120:
-                candidate["prefetched_text_snippet"] = _shorten(article_text, REPORT_SNIPPET_CHARS)
-                candidate["snippet"] = _shorten(f"{candidate.get('snippet', '')} {article_text}", REPORT_SNIPPET_CHARS)
-                candidate.pop("_selection_text_cache", None)
-                candidate.pop("_selection_text_fingerprint", None)
-                candidate.pop("_score_cache", None)
-                candidate.pop("_score_cache_fingerprint", None)
-                candidate.pop("_analysis_cache", None)
-                candidate.pop("_analysis_cache_fingerprint", None)
-                return {"status": "success", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "resolved_google_news_redirect"}
-            if resolved_content_type and not any(kind in resolved_content_type for kind in ("html", "text", "xml")):
-                return {"status": "skipped_content_type", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": resolved_content_type[:80]}
-        response = session.get(
-            url,
-            timeout=PREFETCH_TIMEOUT_SECONDS,
-            headers={"Accept": "text/html,application/xhtml+xml,text/plain,*/*"},
-        )
-        content_type = response.headers.get("Content-Type", "").casefold()
-        if response.status_code >= 400:
-            return {"status": "failed_http", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": f"http_{response.status_code}"}
-        if content_type and not any(kind in content_type for kind in ("html", "text", "xml")):
-            return {"status": "skipped_content_type", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": content_type[:80]}
-        article_text = _extract_prefetch_text(response.text)
-        if len(article_text) < 120:
-            return {"status": "failed_too_short", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "too_short"}
-        candidate["prefetched_text_snippet"] = _shorten(article_text, REPORT_SNIPPET_CHARS)
-        candidate["snippet"] = _shorten(f"{candidate.get('snippet', '')} {article_text}", REPORT_SNIPPET_CHARS)
-        candidate.pop("_selection_text_cache", None)
-        candidate.pop("_selection_text_fingerprint", None)
-        candidate.pop("_score_cache", None)
-        candidate.pop("_score_cache_fingerprint", None)
-        candidate.pop("_analysis_cache", None)
-        candidate.pop("_analysis_cache_fingerprint", None)
-        return {"status": "success", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": ""}
-    except Exception as exc:
-        return {"status": "failed_exception", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": str(exc)[:160]}
-
-
-def prefetch_candidates_before_filter(candidates: list[dict]) -> dict:
-    limit = _prefetch_limit_for_period(lookback_days)
-    stats = {
-        "limit": limit,
-        "eligible_count": 0,
-        "attempted_count": 0,
-        "success_count": 0,
-        "failed_count": 0,
-        "skipped_limit_count": 0,
-        "elapsed_seconds": 0.0,
-    }
-    started = time.perf_counter()
-    eligible = [candidate for candidate in candidates or [] if _candidate_prefetch_signal(candidate)]
-    stats["eligible_count"] = len(eligible)
-    if not eligible or limit <= 0:
-        stats["elapsed_seconds"] = round(time.perf_counter() - started, 2)
-        return stats
-    session = create_requests_session()
-    for candidate in sorted(
-        eligible,
-        key=lambda item: (
-            _source_tier_rank(item.get("source_tier", "C_media")),
-            _quality_rank(item.get("source_quality", "B")),
-            -_date_sort_key(item),
-        ),
-    ):
-        if stats["attempted_count"] >= limit:
-            candidate["prefetch_status"] = "skipped_limit"
-            stats["skipped_limit_count"] += 1
-            continue
-        stats["attempted_count"] += 1
-        candidate["prefetch_attempted"] = True
-        result = _prefetch_candidate_article(candidate, session)
-        candidate["prefetch_status"] = result.get("status", "")
-        candidate["prefetch_reason"] = result.get("reason", "")
-        candidate["prefetch_chars"] = result.get("chars", 0)
-        candidate["prefetch_elapsed_seconds"] = result.get("elapsed_seconds", 0.0)
-        if result.get("status") == "success":
-            stats["success_count"] += 1
-        else:
-            stats["failed_count"] += 1
-    stats["elapsed_seconds"] = round(time.perf_counter() - started, 2)
-    return stats
-
-
-def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
-    url = candidate.get("url", "")
-    source_href = candidate.get("source_href", "")
-    source = candidate.get("source", "")
-    title = candidate.get("title", "")
-    snippet = candidate.get("snippet", "")
-    text = f"{title} {snippet} {source} {url} {source_href}"
-    text_lower = text.casefold()
-    candidate_region = _canonical_candidate_region(candidate)
-
-    def _reject(reason: str) -> tuple[bool, str]:
-        candidate["preliminary_keep"] = False
-        candidate["preliminary_reject_reason"] = reason
-        candidate.setdefault("date_validation", "")
-        return False, reason
-
-    def _keep() -> tuple[bool, str]:
-        candidate["preliminary_keep"] = True
-        candidate["preliminary_reject_reason"] = ""
-        return True, ""
-
-    if not url:
-        return _reject("沒有 URL")
-
-    is_valid, reason = _is_valid_news_url(url, source_href=source_href)
-    if not is_valid:
-        return _reject(reason)
-
-    date_obj = _candidate_date_obj(candidate.get("date", ""))
-    if not date_obj:
-        date_obj = _date_from_url_path(source_href, url)
-        if date_obj:
-            candidate["date"] = date_obj.isoformat()
-            candidate["date_source"] = "url_path"
-    if not date_obj:
-        candidate["date_validation"] = "invalid_or_missing"
-        return _reject("日期不明或無法判斷")
-    cutoff_date = today - datetime.timedelta(days=max(1, min(int(lookback_days), 365)) + 3)
-    if date_obj < cutoff_date:
-        candidate["date_validation"] = "out_of_range_old"
-        return _reject("日期不符搜尋期間")
-    if date_obj > today + datetime.timedelta(days=1):
-        candidate["date_validation"] = "future_date"
-        return _reject("未來日期不合理")
-    candidate["date_validation"] = "valid_in_range"
-
-    page_type, page_type_reason = _candidate_page_type(candidate)
-    candidate["page_type"] = page_type
-    candidate["page_type_reason"] = page_type_reason
-    if page_type != "news_article":
-        return _reject(page_type_reason)
-
-    if _contains_taiwan_reference(text):
-        return _reject("國內新聞排除")
-
-    if _is_airport_people_mover_only_text(text, source):
-        return _reject("機場/航空 people mover 排除")
-
-    if any(term.casefold() in text_lower for term in LOW_QUALITY_CONTENT_TERMS):
-        return _reject("旅遊/SEO/內容農場")
-
-    information_issue = _information_quality_issue(candidate)
-    if information_issue:
-        return _reject(information_issue)
-    if _is_low_value_long_term_candidate(candidate):
-        return _reject("長期回顧低價值或錯分類候選")
-
-    parsed_url = urlparse(url)
-    path_lower = (parsed_url.path or "").casefold()
-    has_entry_path = any(marker in path_lower for marker in LOW_INFORMATION_PATH_MARKERS)
-    has_entry_terms = any(term.casefold() in text_lower for term in LOW_INFORMATION_PAGE_TERMS)
-    has_technical_detail = (
-        _contains_any_term(text, TECH_NEWS_REQUIRED_TERMS)
-        or _trusted_source_title_technical_signal(candidate)
-    )
-    has_dispute_detail = _contains_any_term(text, [
-        "strike", "fare dispute", "contract dispute", "lawsuit", "delay compensation",
-        "cost overrun", "budget overrun", "service disruption", "public backlash",
-        "罷工", "勞資爭議", "票價爭議", "合約糾紛", "工程延宕", "成本增加", "服務中斷", "民怨",
-    ])
-    has_policy_value = _contains_any_term(text, HIGH_VALUE_POLICY_TERMS) if "HIGH_VALUE_POLICY_TERMS" in globals() else False
-    is_low_value_tier = candidate.get("source_tier") == "D_proxy_low_value"
-    if (has_entry_path or has_entry_terms or is_low_value_tier) and not (
-        has_technical_detail
-        or has_dispute_detail
-        or has_policy_value
-        or _is_standard_update_candidate(text, require_url=True)
-    ):
-        return _reject("入口頁/服務頁/分類頁且缺少明確事件")
-
-    looks_like_standard = _is_standards_source(source) or any(
-        standard.casefold() in text_lower
-        for standards in STANDARDS_WATCHLIST.values()
-        for standard in standards
-    )
-    if looks_like_standard:
-        if "規範更新" not in selected_types:
-            return _reject("規範更新未勾選")
-        if not _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
-            return _reject("規範更新條件不足")
-        return _keep()
-
-    if not is_global_scope:
-        if candidate_region not in active_regions:
-            if candidate_region in {"國際", "國際研究", "未判定"} and _is_allowed_international_candidate(candidate, text, looks_like_standard):
-                candidate["region"] = "國際"
-            else:
-                return _reject("國家/地區不在指定範圍")
-    elif candidate_region in {"國際", "國際研究"} and not _is_allowed_international_candidate(candidate, text, looks_like_standard):
-        candidate["region"] = "未判定"
-
-    if not _is_urban_rail_candidate(text, source):
-        return _reject("非捷運/都市軌道")
-
-    if _is_tech_news_only_mode() and not _is_technical_news_candidate(text, source):
-        return _reject("非技術新知")
-
-    gate_info = evaluate_category_gates(candidate)
-    candidate.update(gate_info)
-    if gate_info.get("primary_category") == "excluded":
-        candidate["classification"] = "excluded"
-        candidate["exclude_reason"] = "no_category_gate"
-        return _reject("no_category_gate")
-    candidate["classification"] = gate_info.get("primary_category", "")
-
-    if candidate.get("source_quality") == "C" and not _contains_any_term(text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS):
-        return _reject("C級來源且主題關聯不足")
-
-    return _keep()
-
-
-def _excluded_candidate_value_reasons(candidate: dict) -> list[str]:
-    reasons: list[str] = []
-    tier = candidate.get("source_tier", "")
-    if tier in {"A_official", "B_professional"}:
-        reasons.append(f"source_tier={tier}")
-    score = int(candidate.get("python_score", 0) or 0)
-    if score >= 55:
-        reasons.append(f"python_score={score}")
-    family = candidate.get("search_family", "")
-    if family in {"technology", "major_accident", "policy", "dispute", "official_investigation"}:
-        reasons.append(f"search_family={family}")
-    flags = candidate.get("candidate_flags", []) or []
-    useful_flags = [
-        flag for flag in flags
-        if flag in {"technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "trusted_title_technical_signal", "operational_dispute_gate"}
-    ]
-    if useful_flags:
-        reasons.append("flags=" + ",".join(useful_flags[:3]))
-    if candidate.get("prefetch_status") == "success":
-        reasons.append("prefetch=success")
-    return reasons
-
-
-def build_top_excluded_valuable_candidates(excluded_candidates: list[dict], limit: int = 20) -> list[dict]:
-    rows: list[dict] = []
-    for candidate in excluded_candidates or []:
-        reasons = _excluded_candidate_value_reasons(candidate)
-        if not reasons:
-            continue
-        score = int(candidate.get("python_score", 0) or 0)
-        tier_bonus = 20 if candidate.get("source_tier") == "A_official" else 12 if candidate.get("source_tier") == "B_professional" else 0
-        family_bonus = 10 if candidate.get("search_family") in {"major_accident", "official_investigation", "technology"} else 0
-        rows.append({
-            "title": candidate.get("title", ""),
-            "source": candidate.get("source_display") or candidate.get("source", ""),
-            "source_tier": candidate.get("source_tier", ""),
-            "search_family": candidate.get("search_family", ""),
-            "search_language": candidate.get("search_language", ""),
-            "python_score": score,
-            "value_reason": "; ".join(reasons),
-            "excluded_reason": candidate.get("final_exclude_reason") or candidate.get("preliminary_reject_reason") or candidate.get("exclude_reason", ""),
-            "prefetch_status": candidate.get("prefetch_status", ""),
-            "url": _effective_source_url(candidate),
-            "_rank": score + tier_bonus + family_bonus,
-        })
-    rows.sort(key=lambda row: (-int(row.get("_rank", 0)), -int(row.get("python_score", 0)), row.get("title", "")))
-    for row in rows:
-        row.pop("_rank", None)
-    return rows[:limit]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def build_pipeline_debug_stats(
@@ -4406,6 +2208,139 @@ def build_pipeline_debug_stats(
             if (item.get("category_gates") or {}).get("major_accident")
         ),
     }
+
+
+_selector_api = build_selector_api(
+    selected_types=selected_types, active_regions=active_regions,
+    lookback_days=lookback_days, lookback_int=lookback_int,
+    fast_mode_enabled=fast_mode_enabled, is_global_scope=is_global_scope, today=today,
+    _search_family_from_query=_search_family_from_query,
+    _search_language_from_query=_search_language_from_query,
+    create_requests_session=create_requests_session,
+    _profile_timing_add=lambda timings, key, elapsed: timings.__setitem__(key, round(timings.get(key, 0.0) + elapsed, 4)) if timings is not None else None,
+)
+_has_high_value_operational_detail = _selector_api["_has_high_value_operational_detail"]
+_has_clear_urban_rail_context = _selector_api["_has_clear_urban_rail_context"]
+_is_airport_people_mover_only_text = _selector_api["_is_airport_people_mover_only_text"]
+_trusted_source_title_technical_signal = _selector_api["_trusted_source_title_technical_signal"]
+_candidate_has_high_value_operational_detail = _selector_api["_candidate_has_high_value_operational_detail"]
+_is_low_value_service_notice_text = _selector_api["_is_low_value_service_notice_text"]
+hard_low_value_candidate_reason = _selector_api["hard_low_value_candidate_reason"]
+_wordish_count = _selector_api["_wordish_count"]
+_information_quality_issue = _selector_api["_information_quality_issue"]
+_is_standards_source = _selector_api["_is_standards_source"]
+_is_standard_update_query = _selector_api["_is_standard_update_query"]
+_is_standard_update_candidate = _selector_api["_is_standard_update_candidate"]
+_is_allowed_international_candidate = _selector_api["_is_allowed_international_candidate"]
+_is_urban_rail_candidate = _selector_api["_is_urban_rail_candidate"]
+_is_tech_news_only_mode = _selector_api["_is_tech_news_only_mode"]
+_is_technical_news_candidate = _selector_api["_is_technical_news_candidate"]
+_compute_candidate_page_type = _selector_api["_compute_candidate_page_type"]
+_candidate_page_type = _selector_api["_candidate_page_type"]
+_prefetch_limit_for_period = _selector_api["_prefetch_limit_for_period"]
+_candidate_prefetch_signal = _selector_api["_candidate_prefetch_signal"]
+prefetch_candidates_before_filter = _selector_api["prefetch_candidates_before_filter"]
+preliminary_filter_candidate = _selector_api["preliminary_filter_candidate"]
+_excluded_candidate_value_reasons = _selector_api["_excluded_candidate_value_reasons"]
+build_top_excluded_valuable_candidates = _selector_api["build_top_excluded_valuable_candidates"]
+_canonical_tags_from_text = _selector_api["_canonical_tags_from_text"]
+_candidate_selection_text = _selector_api["_candidate_selection_text"]
+_candidate_analysis_fingerprint = _selector_api["_candidate_analysis_fingerprint"]
+_candidate_analysis_cache = _selector_api["_candidate_analysis_cache"]
+_cached_candidate_bool = _selector_api["_cached_candidate_bool"]
+_candidate_urban_rail_gate = _selector_api["_candidate_urban_rail_gate"]
+_compute_technical_system_gate = _selector_api["_compute_technical_system_gate"]
+_technical_system_gate = _selector_api["_technical_system_gate"]
+_compute_technical_action_gate = _selector_api["_compute_technical_action_gate"]
+_technical_action_gate = _selector_api["_technical_action_gate"]
+_compute_passes_technical_triad = _selector_api["_compute_passes_technical_triad"]
+_passes_technical_triad = _selector_api["_passes_technical_triad"]
+_candidate_event_fragments = _selector_api["_candidate_event_fragments"]
+_fragment_has_urban_rail_context = _selector_api["_fragment_has_urban_rail_context"]
+_is_single_person_rail_incident = _selector_api["_is_single_person_rail_incident"]
+_has_single_person_incident_exception = _selector_api["_has_single_person_incident_exception"]
+_compute_passes_major_accident_gate = _selector_api["_compute_passes_major_accident_gate"]
+_passes_major_accident_gate = _selector_api["_passes_major_accident_gate"]
+_compute_passes_operational_dispute_gate = _selector_api["_compute_passes_operational_dispute_gate"]
+_passes_operational_dispute_gate = _selector_api["_passes_operational_dispute_gate"]
+_is_short_term_service_notice = _selector_api["_is_short_term_service_notice"]
+_compute_passes_high_value_policy_gate = _selector_api["_compute_passes_high_value_policy_gate"]
+_passes_high_value_policy_gate = _selector_api["_passes_high_value_policy_gate"]
+evaluate_category_gates = _selector_api["evaluate_category_gates"]
+_candidate_level = _selector_api["_candidate_level"]
+_is_accident_signal_text = _selector_api["_is_accident_signal_text"]
+_has_strong_technical_detail_text = _selector_api["_has_strong_technical_detail_text"]
+_has_explicit_technical_system_detail = _selector_api["_has_explicit_technical_system_detail"]
+_has_good_report_signal = _selector_api["_has_good_report_signal"]
+_has_low_value_official_notice = _selector_api["_has_low_value_official_notice"]
+_has_procurement_list_notice = _selector_api["_has_procurement_list_notice"]
+_is_financial_market_candidate = _selector_api["_is_financial_market_candidate"]
+_is_low_value_ceremonial_candidate = _selector_api["_is_low_value_ceremonial_candidate"]
+_is_security_or_crime_candidate = _selector_api["_is_security_or_crime_candidate"]
+_has_major_security_rail_impact = _selector_api["_has_major_security_rail_impact"]
+_has_core_metro_technical_content = _selector_api["_has_core_metro_technical_content"]
+_has_general_rail_exclusion = _selector_api["_has_general_rail_exclusion"]
+_has_substantive_detail_for_low_value_notice = _selector_api["_has_substantive_detail_for_low_value_notice"]
+_has_long_term_report_value = _selector_api["_has_long_term_report_value"]
+_is_low_value_long_term_candidate = _selector_api["_is_low_value_long_term_candidate"]
+_is_technical_news_selection_candidate = _selector_api["_is_technical_news_selection_candidate"]
+get_selection_candidate_limit = _selector_api["get_selection_candidate_limit"]
+get_selection_output_range = _selector_api["get_selection_output_range"]
+infer_preliminary_type = _selector_api["infer_preliminary_type"]
+build_candidate_flags = _selector_api["build_candidate_flags"]
+score_news_candidate = _selector_api["score_news_candidate"]
+_candidate_score_fingerprint = _selector_api["_candidate_score_fingerprint"]
+annotate_candidate_for_scheme_d = _selector_api["annotate_candidate_for_scheme_d"]
+build_candidate_card = _selector_api["build_candidate_card"]
+_is_low_value_policy_candidate = _selector_api["_is_low_value_policy_candidate"]
+rebalance_selected_candidates = _selector_api["rebalance_selected_candidates"]
+_selection_target_range = _selector_api["_selection_target_range"]
+_selection_classification = _selector_api["_selection_classification"]
+_has_source_reference = _selector_api["_has_source_reference"]
+_selection_good_flag_count = _selector_api["_selection_good_flag_count"]
+_selection_bad_flag_count = _selector_api["_selection_bad_flag_count"]
+_candidate_month_key = _selector_api["_candidate_month_key"]
+_candidate_system_theme = _selector_api["_candidate_system_theme"]
+_candidate_operator_key = _selector_api["_candidate_operator_key"]
+_candidate_incident_type = _selector_api["_candidate_incident_type"]
+_candidate_action_key = _selector_api["_candidate_action_key"]
+_canonical_event_geo = _selector_api["_canonical_event_geo"]
+build_event_fingerprint = _selector_api["build_event_fingerprint"]
+_candidate_specific_event_location = _selector_api["_candidate_specific_event_location"]
+_candidate_event_location = _selector_api["_candidate_event_location"]
+_event_date_close = _selector_api["_event_date_close"]
+_event_similarity_text = _selector_api["_event_similarity_text"]
+_is_project_series_candidate = _selector_api["_is_project_series_candidate"]
+_candidate_project_stage = _selector_api["_candidate_project_stage"]
+_same_project_stage_or_unspecified = _selector_api["_same_project_stage_or_unspecified"]
+_duplicate_event_reason = _selector_api["_duplicate_event_reason"]
+_is_same_report_event = _selector_api["_is_same_report_event"]
+_is_duplicate_selected_event = _selector_api["_is_duplicate_selected_event"]
+_python_selection_sort_key = _selector_api["_python_selection_sort_key"]
+_python_selection_dynamic_key = _selector_api["_python_selection_dynamic_key"]
+_long_term_diversity_skip_reason = _selector_api["_long_term_diversity_skip_reason"]
+_python_candidate_allowed_for_scope = _selector_api["_python_candidate_allowed_for_scope"]
+_is_low_value_python_selection_candidate = _selector_api["_is_low_value_python_selection_candidate"]
+_is_strict_technical_candidate = _selector_api["_is_strict_technical_candidate"]
+_event_source_preference_key = _selector_api["_event_source_preference_key"]
+_supplemental_source_record = _selector_api["_supplemental_source_record"]
+_merge_duplicate_event_sources = _selector_api["_merge_duplicate_event_sources"]
+_take_next_python_candidate = _selector_api["_take_next_python_candidate"]
+_is_hard_excluded_for_borderline = _selector_api["_is_hard_excluded_for_borderline"]
+_is_b_level_technical_candidate = _selector_api["_is_b_level_technical_candidate"]
+_is_borderline_report_candidate = _selector_api["_is_borderline_report_candidate"]
+_selection_lower_bound = _selector_api["_selection_lower_bound"]
+_borderline_cap = _selector_api["_borderline_cap"]
+_selection_debug_reset = _selector_api["_selection_debug_reset"]
+_select_from_grouped_pools = _selector_api["_select_from_grouped_pools"]
+_backfill_borderline_candidates = _selector_api["_backfill_borderline_candidates"]
+_service_select_candidates_by_python = _selector_api["select_candidates_by_python"]
+
+def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
+    global LAST_PYTHON_SELECTION_DEBUG
+    selected = _service_select_candidates_by_python(model_candidates)
+    LAST_PYTHON_SELECTION_DEBUG = selector_service.LAST_PYTHON_SELECTION_DEBUG
+    return selected
 
 
 def _profile_timing_add(timings: dict | None, key: str, elapsed: float) -> None:
@@ -4838,305 +2773,31 @@ def _policy_selection_rule() -> str:
 """.strip()
 
 
-LOW_VALUE_POLICY_TERMS = [
-    "holiday service", "weekend service", "weekender", "service advisory",
-    "travel information", "trip result", "route page", "take transit",
-    "RouteNumber", "route number", "minor delay", "detour", "service alert",
-    "trip planner", "schedule change", "planned service change",
-    "bus replacement", "shuttle bus", "customer notice", "service update",
-    "temporary stop closure", "take the ttc", "route information", "public preview",
-    "fare table", "game day", "event traffic", "escalator guide", "escalator information",
-    "station entrance", "station access information", "accessibility policy",
-    "accessibility service", "barrier-free", "construction work",
-    "schedule", "timetable", "bus route", "bus schedule", "anniversary",
-    "celebration", "campaign", "promotion", "promotional",
-    "搭乘資訊", "假日服務", "週末服務", "服務提醒", "旅客資訊更新",
-    "活動搭乘", "旅客資訊", "路線資訊", "票價表", "球賽", "活動交通",
-    "電扶梯導引", "電扶梯資訊", "出入口資訊", "車站出入口",
-    "無障礙政策", "無障礙服務", "施工通知", "工程通知",
-    "時刻表", "班表", "公車路線", "公車班表", "週年", "周年",
-    "紀念活動", "宣傳", "促銷",
-]
-HIGH_VALUE_POLICY_TERMS = [
-    "fare", "afc", "ticketing", "headway", "special train", "extra train",
-    "crowd control", "station control", "passenger information system",
-    "trial operation", "system conversion", "asset renewal", "maintenance",
-    "engineering works", "track renewal", "rail replacement", "signal testing",
-    "system testing", "station equipment", "equipment upgrade",
-    "fare adjustment", "major event", "event service", "station access control",
-    "platform crowding", "passenger flow control",
-    "票價", "票務", "班距", "加班車", "人流管制", "車站管制", "試營運",
-    "系統轉換", "資產更新", "維修", "工程",
-]
 
 
-ACCIDENT_SIGNAL_TERMS = [
-    "derailment", "collision", "fire", "smoke", "power outage", "signal failure",
-    "service suspension", "disruption", "platform screen door", "train door",
-    "death", "fatal", "killed", "injury", "injured", "crash", "hit", "rammed",
-    "suspended", "heat damage", "damage", "barrier", "platform barrier",
-    "entgleist", "Verletzte", "Unfall", "Zusammenstoß",
-    "出軌", "脫軌", "追撞", "火災", "冒煙", "停駛", "供電異常", "號誌異常",
-    "通訊異常", "月臺門", "車門異常", "死亡", "受傷", "撞擊", "營運中斷",
-    "月臺屏障", "設備損壞",
-]
 
-SAFETY_INCIDENT_DETAIL_TERMS = [
-    "derailment", "collision", "death", "fatal", "killed", "injury", "injured",
-    "crash", "hit", "rammed", "disruption", "suspended", "heat damage",
-    "damage", "platform barrier", "entgleist", "Verletzte", "Unfall",
-    "Zusammenstoß", "死亡", "受傷", "撞擊", "出軌", "脫軌", "營運中斷",
-    "停駛", "月臺屏障", "設備損壞",
-]
 
-LOW_VALUE_OFFICIAL_NOTICE_TERMS = [
-    "construction notice", "contract documents holders list", "bid number",
-    "open date", "take the ttc", "match", "stadium", "fireworks",
-    "event service", "public preview", "route information", "travel information",
-    "service advisory", "platform ilaa", "symbol character", "mascot",
-    "character", "fare table", "game day", "event traffic", "escalator guide",
-    "escalator information", "station entrance", "station access information",
-    "accessibility policy", "accessibility service", "barrier-free", "construction work",
-    "schedule", "timetable", "bus route", "bus schedule", "anniversary",
-    "celebration", "campaign", "promotion", "open day",
-    "活動搭乘", "花火大會", "加開列車", "觀賽", "吉祥物", "角色",
-    "標案文件持有人", "施工通知", "旅客資訊", "路線資訊", "票價表",
-    "球賽", "活動交通", "電扶梯導引", "電扶梯資訊", "出入口資訊", "車站出入口",
-    "無障礙政策", "無障礙服務", "工程通知",
-    "時刻表", "班表", "公車路線", "公車班表", "週年", "周年",
-    "紀念活動", "宣傳", "促銷", "開放日",
-]
 
-NON_TECH_NEWS_EXCLUDE_TERMS = [
-    "extra train", "special train", "theme train", "themed train",
-    "character train", "stamp rally", "digital stamp", "passenger event",
-    "anniversary", "celebration", "campaign", "promotion", "promotional",
-    "open day", "schedule", "timetable", "bus route", "bus schedule",
-    "road maintenance", "road works", "road construction", "road accident", "pothole", "bus",
-    "autonomous bus", "self-driving bus", "tunnel boring machine farewell",
-    "tbm farewell", "tbm removal", "tbm demobilization", "mascot", "character",
-    "加開列車", "主題列車", "角色列車", "數位集章", "集章活動",
-    "週年", "周年", "紀念活動", "宣傳", "促銷", "開放日",
-    "時刻表", "班表", "公車路線", "公車班表",
-    "一般旅客活動", "旅客活動", "道路維護", "道路施工", "道路坑洞", "道路事故",
-    "巴士", "公車", "自動駕駛巴士", "吉祥物", "角色",
-    "隧道鑽掘機告別", "潛盾機告別", "潛盾機撤場",
-]
 
-NON_ACCIDENT_CONTEXT_TERMS = [
-    "tunnel boring machine farewell", "tbm farewell", "road maintenance",
-    "tbm removal", "tbm demobilization", "road works", "road construction",
-    "road accident", "traffic accident", "pothole", "strike date",
-    "roadblock", "police roadblock", "law enforcement", "enforcement case",
-    "planned weekend closure", "weekend closure", "maintenance closure",
-    "routine maintenance", "testing progress", "engineering milestone",
-    "strike dates", "strike notice", "罷工日期", "罷工日期公告",
-    "道路維護", "道路施工", "道路坑洞", "道路事故", "一般道路事故",
-    "道路路障", "執法案件", "預定週末封閉", "週末封閉", "例行維修",
-    "一般測試進度", "工程里程碑", "隧道鑽掘機告別", "潛盾機告別", "潛盾機撤場",
-]
 
-URBAN_RAIL_INCIDENT_CONTEXT_TERMS = [
-    "metro", "subway", "underground", "tram", "light rail", "lrt", "mrt",
-    "urban rail", "funicular", "station", "platform", "train", "track", "railcar",
-    "metro train", "subway train", "捷運", "地鐵", "都市軌道", "輕軌",
-    "車站", "月臺", "月台", "列車", "軌道", "軌道車輛",
-]
 
-GENERAL_RAIL_EXCLUDE_TERMS = [
-    "lirr", "long island rail road", "commuter rail", "regional rail",
-    "intercity rail", "amtrak", "national rail",
-]
 
-PROCUREMENT_LIST_NOTICE_TERMS = [
-    "contract documents holders list", "bid number", "open date", "標案文件持有人",
-]
 
-SUBSTANTIVE_POLICY_DETAIL_TERMS = [
-    "headway", "capacity", "crowd control", "station control",
-    "passenger flow control", "afc", "ticketing", "fare gate",
-    "system conversion", "asset renewal", "engineering works",
-    "signal testing", "system testing", "station equipment", "equipment upgrade",
-    "班距", "容量", "人流管制", "車站管制", "旅客流量", "AFC", "票務系統",
-    "票閘", "系統轉換", "資產更新", "號誌測試", "系統測試", "車站設備",
-    "設備更新", "營運規劃",
-]
 
-STRONG_TECHNICAL_DETAIL_TERMS = [
-    "cbtc", "train control", "signalling", "signaling", "signal system",
-    "rolling stock", "trainset", "power supply", "traction power", "substation",
-    "communications", "telecom", "cybersecurity", "api", "data governance",
-    "platform screen door", "platform doors", "psd", "afc", "depot",
-    "maintenance", "condition monitoring", "monitoring equipment",
-    "video analytics", "ai image analysis", "system integration", "testing",
-    "commissioning", "system verification",
-    "號誌", "信號", "列控", "車輛", "供電", "牽引", "變電站", "通訊",
-    "資安", "資料治理", "月臺門", "月台門", "票務系統", "機廠", "維修監測",
-    "AI 影像分析", "影像分析", "系統整合", "測試驗證",
-]
 
-MEDIUM_TECHNICAL_DETAIL_TERMS = [
-    "station equipment", "passenger information", "operations control",
-    "operational control", "control centre", "control center", "maintenance facility",
-    "vehicle introduction", "fleet introduction", "system upgrade", "equipment improvement",
-    "safety management", "asset management", "station systems", "platform equipment",
-    "escalator", "elevator", "air conditioning", "hvac", "passenger information system",
-    "ai", "image analysis", "video analytics", "monitoring center", "safety center",
-    "control room", "operations control center", "maintenance depot",
-    "車站設備", "旅客資訊", "營運監控", "行控", "控制中心", "維修設施",
-    "車輛導入", "系統更新", "設備改善", "營運安全管理", "資產管理",
-    "電扶梯", "電梯", "空調", "月臺設備", "月台設備", "旅客資訊系統",
-    "影像分析", "監控中心", "安全中心", "行控中心", "維修機廠",
-]
 
-WEEKLY_BACKFILL_ALLOWED_TERMS = [
-    "station equipment", "escalator", "elevator", "air conditioning", "hvac",
-    "platform equipment", "passenger information system", "ai", "image analysis",
-    "video analytics", "data", "monitoring", "maintenance support",
-    "operations control center", "control centre", "control center", "safety center",
-    "monitoring center", "maintenance facility", "maintenance depot",
-    "vehicle introduction", "fleet introduction", "rolling stock introduction",
-    "safety management", "operations safety", "operational safety",
-    "車站設備", "電扶梯", "電梯", "空調", "月臺設備", "月台設備",
-    "旅客資訊系統", "AI", "影像", "資料", "監控", "維修輔助",
-    "營運安全", "控制中心", "安全中心", "監控中心", "維修設施",
-    "維修機廠", "車輛導入",
-]
 
-LOW_REPORT_VALUE_TERMS = [
-    "passenger praised", "passenger praises", "traveller praised", "traveler praised",
-    "clean and safe", "low fare", "cheap fare", "social media", "viral video",
-    "youtube", "tiktok", "instagram", "personal experience", "first-time rider",
-    "reviewed the metro", "lost property", "delay certificate", "mascot",
-    "stamp rally", "theme train", "themed train", "road maintenance",
-    "road works", "road construction", "pothole", "travel information",
-    "weekend service", "weekend travel", "tourism information", "tbm farewell",
-    "tbm removal", "tbm demobilization", "contract documents holders list",
-    "旅客稱讚", "乘客稱讚", "乾淨安全", "低票價", "票價便宜", "社群影片",
-    "個人經驗", "旅客心得", "失物招領", "延誤證明", "吉祥物", "數位集章",
-    "主題列車", "道路維護", "道路施工", "道路坑洞", "旅遊資訊",
-    "週末搭乘提醒", "潛盾機告別", "潛盾機撤場", "標案文件持有人",
-    "passengers praise", "riders praise", "rider praised", "commuters praise",
-    "praised the metro", "praises the metro", "lauds metro", "anniversary",
-    "celebration", "campaign", "promotion", "promotional", "tour package",
-    "乘客大讚", "旅客大讚", "大讚捷運", "稱讚捷運", "週年", "周年",
-    "紀念活動", "宣傳", "促銷", "旅遊套票",
-]
 
-FINANCIAL_MARKET_TERMS = [
-    "yahoo finance", "finance.yahoo.com", "stock price", "share price",
-    "stock market", "market cap", "trading", "ticker", "nasdaq", "nyse",
-    "earnings", "quarterly results", "financial results", "investor",
-    "investment analysis", "analyst rating", "price target",
-    "股價", "股票", "股市", "財報", "營收", "投資分析", "投資人",
-    "目標價", "券商", "分析師評級",
-]
 
-PROPERTY_OR_CAMPUS_DEVELOPMENT_TERMS = [
-    "property development", "real estate", "land development", "campus development",
-    "university campus", "commercial development", "shopping mall", "housing development",
-    "white shek kok", "pak shek kok", "station-area development",
-    "土地開發", "物業開發", "車站周邊開發", "校園發展", "校園開發",
-    "白石角", "大學校園", "商場", "住宅開發",
-]
 
-GENERIC_TEST_WITHOUT_TECH_TERMS = [
-    "resume weekend testing", "weekend testing resumes", "testing resumes",
-    "restore weekend testing", "restored weekend testing", "trial runs resume",
-    "恢復週末測試", "週末測試恢復", "恢復測試", "測試恢復", "試運轉恢復",
-]
 
-EQUIPMENT_FAILURE_TERMS = [
-    "signal failure", "signalling failure", "signaling failure", "signal fault",
-    "power failure", "power outage", "communications failure", "communication fault",
-    "platform screen door failure", "platform door fault", "train door failure",
-    "switch failure", "points failure", "afc failure", "ticketing system failure",
-    "equipment failure", "equipment fault",
-    "號誌故障", "號誌異常", "信號故障", "信號異常", "供電故障", "供電異常",
-    "通訊故障", "通訊異常", "月臺門故障", "月台門故障", "車門故障",
-    "轉轍器故障", "道岔故障", "票務系統故障", "自動收費故障", "設備故障",
-]
 
-ENGINEERING_MILESTONE_ONLY_TERMS = [
-    "tunnel boring machine", "tbm", "tbm removal", "tbm demobilization",
-    "tbm breakthrough", "construction milestone", "civil works complete",
-    "construction progress", "site handover", "boring machine leaves",
-    "隧道鑽掘機", "潛盾機", "潛盾機撤場", "潛盾機離場", "隧道鑽掘機離場",
-    "工程里程碑", "施工進度", "土建完工", "工地移交",
-]
 
-SECURITY_OR_CRIME_TERMS = [
-    "knife", "stabbing", "fight", "assault", "attack", "murder", "homicide",
-    "shooting", "pushed", "shoved", "pepper spray", "tear gas", "irritant gas",
-    "security incident", "police incident", "police investigation", "crime",
-    "passenger dispute", "fare evasion", "roadblock", "law enforcement",
-    "刀具", "持刀", "刺傷", "鬥毆", "打架", "攻擊", "謀殺", "兇殺", "槍擊",
-    "推落", "推下", "推擠", "刺激性氣體", "催淚氣體", "治安事件", "警方事件",
-    "警方調查", "刑事案件", "旅客糾紛", "逃票", "道路路障", "執法案件",
-]
 
-MAJOR_SECURITY_RAIL_IMPACT_TERMS = [
-    "hit by train", "struck by train", "train collision", "train collided",
-    "train derailment", "train derailed", "track intrusion", "on the tracks",
-    "signal failure", "signalling failure", "signaling failure", "power failure",
-    "power outage", "train door", "platform screen door", "platform door",
-    "rail fire", "subway fire", "metro fire", "station fire", "train fire",
-    "derailment", "derailed", "collision", "collided", "evacuation", "evacuated",
-    "service suspended", "service suspension", "major disruption", "station evacuated",
-    "train evacuated", "emergency response", "security lockdown",
-    "列車撞擊", "列車碰撞", "列車相撞", "列車出軌", "列車脫軌", "軌道侵入",
-    "號誌故障", "信號故障", "供電故障", "供電中斷", "車門", "月臺門", "月台門",
-    "火災", "出軌", "脫軌", "碰撞", "相撞", "疏散", "停駛", "營運中斷",
-    "重大中斷", "車站疏散", "列車疏散", "緊急應變", "封鎖車站",
-]
 
-CORE_METRO_TECHNICAL_TERMS = [
-    "rolling stock", "railcar", "trainset", "vehicle equipment", "depot equipment",
-    "maintenance equipment", "signalling", "signaling", "signal system", "train control",
-    "cbtc", "ato", "atp", "ats", "operations control", "operation control",
-    "control centre", "control center", "occ", "traction power", "power supply",
-    "substation", "regenerative braking", "energy storage", "energy management",
-    "communications", "telecom", "radio", "wireless", "data transmission",
-    "platform screen door", "platform door", "psd", "afc", "fare gate",
-    "station equipment", "hvac", "air conditioning", "ventilation", "fire system",
-    "environmental control", "escalator", "elevator", "condition monitoring",
-    "fault diagnosis", "predictive maintenance", "video analytics", "image recognition",
-    "ai image", "system integration", "system assurance", "rams", "safety verification",
-    "interface management", "ot security", "ics security", "cybersecurity",
-    "commissioning", "system testing", "technical verification",
-    "電聯車", "車輛設備", "機廠設備", "維修設備", "號誌", "信號", "列車控制",
-    "列控", "行車監控", "行控中心", "牽引供電", "一般電力", "變電站", "再生煞車",
-    "儲能", "能源管理", "通訊系統", "無線通訊", "資料傳輸", "月臺門", "月台門",
-    "自動收費", "票務系統", "票閘", "車站機電", "空調", "通風", "消防",
-    "環境控制", "電扶梯", "電梯", "無障礙機電", "狀態監測", "故障診斷",
-    "預測性維護", "影像辨識", "系統整合", "系統保證", "安全驗證", "介面管理",
-    "資安", "工控資安", "系統測試", "技術驗證", "投入營運",
-]
 
-TECHNICAL_IMPLEMENTATION_TERMS = [
-    "introduce", "introduced", "deploy", "deployed", "roll out", "upgrade",
-    "renewal", "replace", "replacement", "retrofit", "modernisation", "modernization",
-    "commission", "commissioning", "enter service", "entered service", "launch",
-    "trial", "pilot", "test", "testing", "verification", "validated", "validation",
-    "installation", "integrated", "integration", "improvement", "new system",
-    "new equipment", "導入", "啟用", "部署", "升級", "更新", "汰換",
-    "改造", "現代化", "試辦", "試行", "測試", "驗證", "改善", "新系統",
-    "新設備", "安裝", "整合", "投入營運", "正式營運",
-]
 
-LOW_IMPACT_ACCIDENT_TERMS = [
-    "animal on tracks", "dog on tracks", "cat on tracks", "bird on tracks",
-    "passenger dispute", "minor altercation", "trespasser", "small animal",
-    "動物落軌", "犬隻落軌", "貓落軌", "小動物", "旅客糾紛", "輕微衝突",
-]
 
-HIGH_IMPACT_ACCIDENT_TERMS = [
-    "third rail", "power rail", "platform screen door", "platform barrier",
-    "service suspension", "major disruption", "investigation", "safety review",
-    "brake failure", "switch failure", "points failure", "power outage",
-    "第三軌", "供電軌", "月臺門", "月臺屏障", "停駛", "重大中斷",
-    "制度檢討", "安全檢討", "煞車失效", "轉轍器", "供電異常",
-]
 
 REGION_DOMAIN_HINTS = {
     "translink.ca": "加拿大",
@@ -5152,26 +2813,6 @@ REGION_DOMAIN_HINTS = {
     "tfl.gov.uk": "英國",
 }
 
-REPORT_SELECTION_DEBUG_DEFAULT = {
-    "strict_selected_count": 0,
-    "borderline_added_count": 0,
-    "B_added_count": 0,
-    "incident_search_raw_count": 0,
-    "incident_gate_pass_count": 0,
-    "incident_selected_count": 0,
-    "incident_coverage_warning": False,
-    "incident_coverage_reason": "",
-    "borderline_candidates": [],
-    "shortfall_before_backfill": 0,
-    "shortfall_after_backfill": 0,
-    "backfill_reason": "",
-    "B_backfill_triggered": False,
-    "B_backfill_cap": 0,
-    "B_backfill_considered_count": 0,
-    "B_backfill_appended_ids": [],
-    "B_backfill_append_stage": "",
-    "duplicate_event_records": [],
-}
 
 WORK_ZONE_MONITORING_TERMS = [
     "work zone", "speed enforcement", "construction zone", "maintenance safety",
@@ -5184,83 +2825,13 @@ WORK_ZONE_TECH_DETAIL_TERMS = [
     "監測設備", "自動化監測", "後端平台", "通訊", "網路",
 ]
 
-URBAN_RAIL_MODE_TERMS.extend(["metros"])
-URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS.extend(["metros"])
 SOURCE_QUALITY_C_DOMAINS.update(PORTAL_REPOST_DOMAINS | PORTAL_SOCIAL_LOW_VALUE_DOMAINS)
 
-TECH_NEWS_REQUIRED_TERMS.extend([
-    "ato", "atp", "ats", "metro rail", "light rail vehicle", "light rail vehicles", "LRV", "LRVs", "train cars",
-    "fleet renewal", "fleet replacement", "overhaul", "energy storage",
-    "regenerative braking", "power system", "energy management",
-    "automatic fare collection", "contactless payment", "tap to pay",
-    "scan to pay", "tap or scan to pay", "open-loop payment", "open loop payment",
-    "qr payment", "biometric fare payment", "validator", "ticketing system",
-    "handheld inspection device", "payment system integration", "compatibility",
-    "passenger information system", "platform screen door", "accessibility upgrade",
-    "made accessible", "fire protection", "fire safety", "station systems",
-    "ventilation", "fleet life-cycle management", "life-cycle management services",
-    "maintenance services", "track renewal", "lubricator replacement",
-    "track lubrication", "operations and maintenance centre", "operations and maintenance center",
-    "omc", "wheel lathe", "axle counter", "axle counters", "life cycle management", "life cycle management services",
-])
 
-TITLE_TECHNICAL_ACTION_TERMS.extend([
-    "implement", "implemented", "implementation", "activated", "activate",
-    "go into service", "expanded", "expansion", "upgraded", "upgrades",
-    "modernise", "modernize", "modernisation", "modernization", "procure",
-    "procurement", "design services", "life-cycle management services",
-    "life cycle management services", "overhaul",
-    "made accessible", "tap or scan to pay", "unveils", "unveiled",
-    "confirms", "boost capacity", "boosts capacity",
-])
 
-CORE_METRO_TECHNICAL_TERMS.extend([
-    "ato", "atp", "ats", "light rail vehicle", "light rail vehicles", "LRV", "LRVs", "train cars", "new train",
-    "two-car sets", "two car sets", "car sets", "automated metro", "automated metros",
-    "line modernization", "line modernisation", "metro modernization", "metro modernisation",
-    "modernization", "modernisation", "life cycle management", "life cycle management services",
-    "fleet renewal", "fleet replacement", "overhaul", "power system",
-    "energy storage", "regenerative braking", "energy management",
-    "automatic fare collection", "contactless payment", "tap to pay",
-    "scan to pay", "tap or scan to pay", "open-loop payment", "open loop payment",
-    "qr payment", "biometric fare payment", "validator", "ticketing system",
-    "handheld inspection device", "payment system integration", "system interface problem",
-    "ticketing outage", "rollout flaw", "passenger information system",
-    "accessibility upgrade", "made accessible", "fire protection", "fire safety",
-    "station systems", "ventilation", "fleet life-cycle management",
-    "life-cycle management services", "maintenance services", "track renewal",
-    "lubricator replacement", "track lubrication", "operations and maintenance centre",
-    "operations and maintenance center", "omc", "wheel lathe", "axle counter", "axle counters",
-])
 
-TECHNICAL_IMPLEMENTATION_TERMS.extend([
-    "implement", "implemented", "implementation", "activate", "activated",
-    "go into service", "rollout", "expanded", "expansion", "upgraded",
-    "upgrades", "procure", "procurement", "order", "ordered", "design services",
-    "life-cycle management services", "life cycle management services", "overhaul",
-    "made accessible", "tap or scan to pay",
-    "unveils", "unveiled", "confirms", "boost capacity", "boosts capacity",
-])
 
-STRONG_TECHNICAL_DETAIL_TERMS.extend([
-    "automatic fare collection", "contactless payment", "tap to pay",
-    "scan to pay", "tap or scan to pay", "biometric fare payment",
-    "validator", "ticketing system", "fare gate", "handheld inspection device",
-    "payment system integration", "passenger information system",
-    "light rail vehicle", "light rail vehicles", "LRV", "LRVs", "train cars", "two-car sets", "two car sets",
-    "automated metros", "line modernization", "line modernisation",
-    "modernization", "modernisation", "fleet renewal", "fleet replacement",
-    "life-cycle management services", "life cycle management services", "fire protection", "fire safety",
-    "track renewal", "operations and maintenance centre", "operations and maintenance center",
-    "omc", "wheel lathe", "axle counter", "axle counters",
-])
 
-MEDIUM_TECHNICAL_DETAIL_TERMS.extend([
-    "contactless payment", "tap to pay", "scan to pay", "tap or scan to pay",
-    "open-loop payment", "qr payment", "biometric fare payment", "validator",
-    "ticketing system", "fare gate", "accessibility upgrade", "made accessible",
-    "fire protection", "fire safety", "track renewal", "wheel lathe",
-])
 
 STRICT_HIGH_VALUE_POLICY_TEXT_TERMS = [
     "fare reform", "payment policy", "service restructure", "service restructuring",
@@ -5273,1719 +2844,194 @@ STRICT_HIGH_VALUE_POLICY_TEXT_TERMS = [
     "全線封閉", "多站封閉", "無障礙改善計畫", "預算核准", "治理決策",
 ]
 
-MAJOR_ACCIDENT_SEVERITY_TERMS = [
-    "fatal", "death", "died", "killed", "serious injury", "serious injuries",
-    "multiple injuries", "multiple injured", "hospitalized", "hospitalised",
-    "derailment", "derailed", "train-to-train collision", "trains collided",
-    "major fire", "smoke filled", "evacuated", "evacuation", "mass evacuation",
-    "service suspended", "service suspension", "long suspension", "major disruption",
-    "power outage", "signal failure", "signalling failure", "communications failure",
-    "formal investigation", "safety investigation", "investigation launched",
-    "safety review", "systemic failure", "repeated incident",
-    "死亡", "多人重傷", "多人受傷", "多人送醫", "重傷", "送醫", "出軌", "脫軌",
-    "列車碰撞", "列車相撞", "重大火災", "大量疏散", "長時間停駛", "大範圍停駛",
-    "正式調查", "事故調查", "安全調查", "制度檢討", "系統性故障", "反覆發生",
-    "entgleist", "entgleisung", "verletzte", "déraillement", "blessés",
-    "descarrilamiento", "heridos", "сход с рельсов", "пострадал",
-    "脱線", "負傷", "탈선", "부상", "脱轨", "受伤",
-]
-
-SINGLE_PERSON_INCIDENT_TERMS = [
-    "person struck by train", "person hit by train", "struck by a train",
-    "hit by a train", "trespass", "trespasser", "police investigation",
-    "medical emergency", "woman struck", "woman hit", "man struck", "man hit",
-    "passenger struck", "passenger hit", "一人遭列車撞擊", "單一人員",
-    "闖入軌道", "醫療緊急事件", "警方調查",
-]
-
-OFFICIAL_TRANSPORT_SAFETY_INVESTIGATION_TERMS = [
-    "national transportation safety board", "ntsb", "transportation safety board",
-    "transport safety board", "rail accident investigation branch", "raib",
-    "official transport safety investigation", "official railway investigation",
-    "formal rail safety investigation", "運輸安全委員會", "運安會",
-    "官方運輸安全調查", "鐵路事故調查機構",
-]
-
-SHORT_TERM_SERVICE_NOTICE_TERMS = [
-    "shortened operating hours", "operating hours shortened", "shorten operating hours",
-    "reduced operating hours", "service closure",
-    "maintenance advisory", "temporary timetable", "temporary station closure",
-    "station closure", "one-day closure", "one day closure", "service advisory",
-    "temporary service change", "limited service hours", "縮短營運時間",
-    "縮短營業時間", "維修公告", "臨時時刻表", "臨時班表", "臨時封站",
-    "車站臨時關閉", "單日停駛", "短期停駛",
-]
-
-SHORT_TERM_TIME_SIGNALS = [
-    "temporary", "one-day", "one day", "for one day", "this weekend",
-    "weekend", "maintenance", "repair", "repairs", "advisory", "on july",
-    "on monday", "on tuesday", "on wednesday", "on thursday", "on friday",
-    "on saturday", "on sunday", "臨時", "單日", "一天", "本週末", "週末",
-    "維修", "修繕", "公告",
-]
-
-LOW_VALUE_CEREMONIAL_TERMS = [
-    "donation", "donates", "donated", "csr", "corporate social responsibility",
-    "college donation", "award", "awards", "award ceremony", "awards ceremony", "ceremony",
-    "education outreach", "educational outreach", "community outreach",
-    "捐贈", "企業社會責任", "頒獎", "典禮", "教育推廣", "校園推廣",
-]
-
-FORMAL_ENGINEERING_EVENT_TERMS = [
-    "contract awarded", "awarded contract", "awards contract", "award of a contract",
-    "contract signing", "project launch",
-    "installation begins", "installation started", "construction begins",
-    "commissioned", "entered service", "goes into service", "deployed",
-    "system integration", "engineering design", "testing programme",
-    "testing program", "正式工程", "工程開工", "投入營運", "系統整合",
-]
-
-LOW_IMPACT_ROAD_INTERFACE_TERMS = [
-    "one injured", "minor injury", "minor injuries", "slight injury", "slightly injured",
-    "short delay", "brief delay", "no derailment", "no major damage",
-    "一人受傷", "一人輕傷", "輕傷", "短暫延誤", "未出軌", "無重大損壞",
-]
-
-ROAD_INTERFACE_ACCIDENT_TERMS = [
-    "car", "truck", "vehicle", "motorist", "driver", "pedestrian", "cyclist",
-    "intersection", "road", "roadway", "level crossing",
-    "汽車", "卡車", "車輛", "駕駛", "行人", "自行車", "路口", "道路", "平交道",
-]
-
-DISPUTE_SIGNAL_TERMS = [
-    "strike", "industrial action", "union dispute", "labor dispute", "labour dispute",
-    "lawsuit", "court order", "judicial order", "contract dispute", "procurement dispute",
-    "tender dispute", "budget dispute", "cost overrun", "project delay",
-    "organized protest", "organised protest", "service disruption",
-    "罷工", "工業行動", "工會爭議", "勞資爭議", "訴訟", "司法命令",
-    "合約爭議", "採購爭議", "招標爭議", "預算爭議", "成本超支",
-    "工程延誤", "組織性抗議", "服務中斷",
-]
-
-DISPUTE_ACTOR_TERMS = [
-    "union", "workers", "employees", "contractor", "supplier", "procurement authority",
-    "government", "operator", "court", "regulator", "auditor", "council",
-    "protesters", "advocacy group", "工會", "勞工", "員工", "承包商", "供應商",
-    "採購機關", "政府", "營運機構", "法院", "監管機關", "稽核機關", "議會",
-    "抗議團體", "權益團體",
-]
-
-DISPUTE_IMPACT_TERMS = [
-    "service", "delay", "delayed", "disruption", "suspended", "cost", "budget",
-    "contract", "procurement", "project", "construction", "schedule", "governance",
-    "服務", "延誤", "延宕", "中斷", "停駛", "成本", "預算", "合約", "採購",
-    "專案", "工程", "工期", "治理",
-]
-
-HIGH_VALUE_POLICY_GATE_TERMS = STRICT_HIGH_VALUE_POLICY_TEXT_TERMS + [
-    "new line opening", "new system opening", "service begins", "fleet replacement plan",
-    "fleet renewal plan", "station group", "system upgrade", "signal upgrade",
-    "track upgrade", "route restructuring", "major service change",
-    "新線通車", "新系統通車", "服務重整", "重大服務調整", "車隊汰換計畫",
-    "車隊更新計畫", "路線重整", "系統升級", "號誌升級", "軌道升級",
-]
-
-CANONICAL_TAG_PATTERNS: list[tuple[str, list[str]]] = [
-    ("derailment", ["derailment", "derailed", "entgleisung", "entgleist", "déraillement", "descarrilamiento", "сход с рельсов", "脱線", "탈선", "脫軌", "脱轨", "出軌"]),
-    ("collision", ["collision", "collided", "kollision", "colisión", "столкновение", "衝突", "충돌", "碰撞", "相撞"]),
-    ("fire", ["fire", "brand", "incendie", "incendio", "пожар", "火災", "火灾", "화재"]),
-    ("evacuation", ["evacuation", "evacuated", "evakuierung", "évacuation", "evacuación", "эвакуация", "避難", "대피", "疏散"]),
-    ("fatality", ["fatal", "killed", "death", "tote", "morts", "muertos", "погиб", "死亡", "사망"]),
-    ("injury", ["injured", "verletzte", "blessés", "heridos", "пострадал", "負傷", "부상", "受傷", "受伤"]),
-    ("service_suspension", ["shutdown", "service suspended", "service suspension", "betrieb eingestellt", "interruption", "suspensión", "остановка движения", "運休", "운행중단", "停駛", "停驶"]),
-    ("investigation", ["investigation", "inquiry", "untersuchung", "enquête", "investigación", "расследование", "調査", "조사", "調查", "调查"]),
-    ("order", ["ordered", "order", "bestellen", "commande", "pedido", "заказ", "採購", "訂購"]),
-    ("enter service", ["enter service", "entered service", "go into service", "inbetriebnahme", "mise en service", "puesta en servicio", "ввод", "投入營運", "投入运营"]),
-    ("modernization", ["modernization", "modernisation", "modernize", "modernise", "modernized", "modernised", "modernizing", "modernising", "modernisierung", "modernización", "modernização", "modernizzazione", "модернизация", "現代化"]),
-    ("upgrade", ["upgrade", "upgraded", "upgrades", "renewal", "replacement", "升級", "更新", "汰換"]),
-    ("deployment", ["deploy", "deployed", "deployment", "rollout", "roll out", "導入", "部署"]),
-    ("fire protection", ["fire protection", "fire safety", "brandschutz", "protection incendie", "protezione antincendio", "消防"]),
-    ("contactless payment", ["contactless payment", "tap to pay", "scan to pay", "kontaktloses bezahlen", "paiement sans contact", "pago sin contacto", "pagamento sem contacto", "非接触決済", "非接觸支付"]),
-    ("biometric payment", ["biometric payment", "biometric fare", "biometrische zahlung", "биометрическая оплата", "生物辨識支付"]),
-]
-
-
-def _canonical_tags_from_text(text: str) -> list[str]:
-    text_lower = (text or "").casefold()
-    tags: list[str] = []
-    for tag, terms in CANONICAL_TAG_PATTERNS:
-        if any(term.casefold() in text_lower for term in terms):
-            tags.append(tag)
-    return tags
-
-
-def _candidate_selection_text(candidate: dict) -> str:
-    fingerprint = (
-        candidate.get("title", ""),
-        candidate.get("snippet", ""),
-        candidate.get("source", ""),
-        candidate.get("url", ""),
-        candidate.get("source_href", ""),
-    )
-    if candidate.get("_selection_text_fingerprint") == fingerprint and candidate.get("_selection_text_cache"):
-        return candidate["_selection_text_cache"]
-    paths = " ".join(
-        urlparse(candidate.get(key, "") or "").path.replace("/", " ")
-        for key in ("url", "source_href")
-    )
-    base_text = (
-        f"{candidate.get('title', '')} {candidate.get('snippet', '')} "
-        f"{candidate.get('source', '')} "
-        f"{candidate.get('url', '')} {candidate.get('source_href', '')} {paths}"
-    )
-    canonical_tags = " ".join(_canonical_tags_from_text(base_text))
-    text = f"{base_text} {canonical_tags}".strip()
-    candidate["_selection_text_fingerprint"] = fingerprint
-    candidate["_selection_text_cache"] = text
-    return text
-
-
-def _candidate_analysis_fingerprint(candidate: dict) -> tuple:
-    return (
-        candidate.get("title", ""),
-        candidate.get("snippet", ""),
-        candidate.get("date", ""),
-        candidate.get("source", ""),
-        candidate.get("url", ""),
-        candidate.get("source_href", ""),
-        candidate.get("resolved_article_url", ""),
-        candidate.get("source_tier", ""),
-        candidate.get("source_quality", ""),
-        candidate.get("region", ""),
-        candidate.get("classification", ""),
-    )
-
-
-def _candidate_analysis_cache(candidate: dict) -> dict:
-    fingerprint = _candidate_analysis_fingerprint(candidate)
-    if candidate.get("_analysis_cache_fingerprint") != fingerprint:
-        candidate["_analysis_cache_fingerprint"] = fingerprint
-        candidate["_analysis_cache"] = {}
-    return candidate.setdefault("_analysis_cache", {})
-
-
-def _cached_candidate_bool(candidate: dict, key: str, compute) -> bool:
-    cache = _candidate_analysis_cache(candidate)
-    if key not in cache:
-        cache[key] = bool(compute(candidate))
-    return bool(cache[key])
-
-
-def _candidate_urban_rail_gate(candidate: dict) -> bool:
-    return _cached_candidate_bool(
-        candidate,
-        "urban_rail_gate",
-        lambda item: _is_urban_rail_candidate(_candidate_selection_text(item), item.get("source", "")),
-    )
-
-
-def _compute_technical_system_gate(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    has_known_system = _contains_any_term(
-        text,
-        CORE_METRO_TECHNICAL_TERMS
-        + TECH_NEWS_REQUIRED_TERMS
-        + STRONG_TECHNICAL_DETAIL_TERMS
-        + MEDIUM_TECHNICAL_DETAIL_TERMS,
-    )
-    if has_known_system:
-        return True
-    canonical_actions = set(_canonical_tags_from_text(text)).intersection({"enter service", "modernization", "upgrade", "deployment"})
-    title = candidate.get("title", "")
-    return bool(
-        canonical_actions
-        and _contains_any_term(title, ["tram", "streetcar", "light rail vehicle"])
-        and (_contains_any_term(title, ["urbanliner", "new tram", "alstom tram"]) or re.search(r"\b[A-Z][A-Za-z0-9-]+\s+tram\b", title))
-    )
-
-
-def _technical_system_gate(candidate: dict) -> bool:
-    return _cached_candidate_bool(candidate, "technical_system_gate", _compute_technical_system_gate)
-
-
-def _compute_technical_action_gate(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    title = candidate.get("title", "")
-    if set(_canonical_tags_from_text(text)).intersection({"enter service", "modernization", "upgrade", "deployment"}):
-        return True
-    if _contains_any_term(text, TECHNICAL_IMPLEMENTATION_TERMS + TITLE_TECHNICAL_ACTION_TERMS):
-        return True
-    return _trusted_source_title_technical_signal(candidate) or _contains_any_term(
-        title,
-        TECHNICAL_IMPLEMENTATION_TERMS + TITLE_TECHNICAL_ACTION_TERMS,
-    )
-
-
-def _technical_action_gate(candidate: dict) -> bool:
-    return _cached_candidate_bool(candidate, "technical_action_gate", _compute_technical_action_gate)
-
-
-def _compute_passes_technical_triad(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    if _is_financial_market_candidate(candidate):
-        return False
-    if _is_security_or_crime_candidate(candidate):
-        return False
-    if _is_airport_people_mover_only_text(text, candidate.get("source", "")):
-        return False
-    if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS) and not _contains_any_term(
-        text,
-        CORE_METRO_TECHNICAL_TERMS + STRONG_TECHNICAL_DETAIL_TERMS + TECHNICAL_IMPLEMENTATION_TERMS,
-    ):
-        return False
-    if not _candidate_urban_rail_gate(candidate):
-        return False
-    return _technical_system_gate(candidate) and _technical_action_gate(candidate)
-
-
-def _passes_technical_triad(candidate: dict) -> bool:
-    return _cached_candidate_bool(candidate, "passes_technical_triad", _compute_passes_technical_triad)
-
-
-def _candidate_event_fragments(candidate: dict) -> list[str]:
-    fragments: list[str] = []
-    for value in (candidate.get("title", ""), candidate.get("snippet", "")):
-        for fragment in re.split(r"(?:[。！？!?]+|…+|\.\s+(?=[A-Z0-9]))", value or ""):
-            cleaned = re.sub(r"\s+", " ", fragment).strip(" -–—|/、，,")
-            if cleaned:
-                fragments.append(cleaned)
-    return fragments
-
-
-def _fragment_has_urban_rail_context(fragment: str) -> bool:
-    return _contains_any_term(
-        fragment,
-        URBAN_RAIL_INCIDENT_CONTEXT_TERMS + URBAN_RAIL_OPERATOR_TERMS,
-    )
-
-
-def _is_single_person_rail_incident(fragment: str) -> bool:
-    if _contains_any_term(fragment, SINGLE_PERSON_INCIDENT_TERMS):
-        return True
-    return bool(re.search(
-        r"\b(?:person|woman|man|passenger|trespasser)\b.{0,45}"
-        r"\b(?:struck|hit|killed)\b.{0,35}\b(?:train|subway|metro|tram|rail)\b",
-        fragment or "",
-        flags=re.IGNORECASE,
-    ))
-
-
-def _has_single_person_incident_exception(candidate: dict, fragment: str) -> bool:
-    full_text = _candidate_selection_text(candidate)
-    return (
-        _contains_any_term(full_text, OFFICIAL_TRANSPORT_SAFETY_INVESTIGATION_TERMS)
-        or _contains_any_term(full_text, EQUIPMENT_FAILURE_TERMS)
-        or (
-            _contains_any_term(fragment, ["system failure", "system fault", "mechanical failure"])
-            and _contains_any_term(fragment, CORE_METRO_TECHNICAL_TERMS)
-        )
-    )
-
-
-def _compute_passes_major_accident_gate(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    if not _candidate_urban_rail_gate(candidate):
-        return False
-    if _contains_any_term(text, NON_ACCIDENT_CONTEXT_TERMS):
-        return False
-    if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
-        return False
-    for fragment in _candidate_event_fragments(candidate):
-        if not _fragment_has_urban_rail_context(fragment):
-            continue
-        has_accident_context = (
-            _contains_any_term(fragment, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS + EQUIPMENT_FAILURE_TERMS)
-            or _contains_any_term(fragment, ["accident", "incident", "failure", "fault", "事故", "故障", "異常"])
-        )
-        if not has_accident_context:
-            continue
-        has_severity = (
-            _contains_any_term(fragment, MAJOR_ACCIDENT_SEVERITY_TERMS)
-            or (
-                _contains_any_term(fragment, EQUIPMENT_FAILURE_TERMS)
-                and _contains_any_term(fragment, HIGH_IMPACT_ACCIDENT_TERMS)
-            )
-        )
-        if not has_severity:
-            continue
-        if _is_single_person_rail_incident(fragment) and not _has_single_person_incident_exception(candidate, fragment):
-            continue
-        road_interface = _contains_any_term(fragment, ROAD_INTERFACE_ACCIDENT_TERMS)
-        low_impact = _contains_any_term(fragment, LOW_IMPACT_ACCIDENT_TERMS + LOW_IMPACT_ROAD_INTERFACE_TERMS)
-        explicitly_minor_road_interface = road_interface and low_impact and _contains_any_term(fragment, [
-            "no derailment", "not derailed", "without derailment", "no formal investigation",
-            "no investigation", "short delay", "brief delay", "minor injury", "slight injury",
-            "未出軌", "無出軌", "未脫軌", "無正式調查", "短暫延誤", "輕傷",
-        ])
-        if explicitly_minor_road_interface:
-            continue
-        if low_impact and not has_severity:
-            continue
-        if road_interface and not has_severity:
-            continue
-        return True
-    return False
-
-
-def _passes_major_accident_gate(candidate: dict) -> bool:
-    return _cached_candidate_bool(candidate, "passes_major_accident_gate", _compute_passes_major_accident_gate)
-
-
-def _compute_passes_operational_dispute_gate(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    if not _candidate_urban_rail_gate(candidate):
-        return False
-    if _contains_any_term(text, LOW_REPORT_VALUE_TERMS + LOW_QUALITY_CONTENT_TERMS):
-        return False
-    return (
-        _contains_any_term(text, DISPUTE_SIGNAL_TERMS)
-        and _contains_any_term(text, DISPUTE_ACTOR_TERMS)
-        and _contains_any_term(text, DISPUTE_IMPACT_TERMS)
-    )
-
-
-def _passes_operational_dispute_gate(candidate: dict) -> bool:
-    return _cached_candidate_bool(candidate, "passes_operational_dispute_gate", _compute_passes_operational_dispute_gate)
-
-
-def _is_short_term_service_notice(candidate: dict) -> bool:
-    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')}"
-    if not _contains_any_term(text, SHORT_TERM_SERVICE_NOTICE_TERMS):
-        return False
-    has_short_window = (
-        _contains_any_term(text, SHORT_TERM_TIME_SIGNALS)
-        or bool(re.search(r"\b(?:on|for)\s+(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2})\b", text, flags=re.IGNORECASE))
-        or bool(re.search(r"(?:20\d{2}年)?\d{1,2}月\d{1,2}日", text))
-    )
-    return has_short_window
-
-
-def _compute_passes_high_value_policy_gate(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    if not _candidate_urban_rail_gate(candidate):
-        return False
-    if _is_short_term_service_notice(candidate):
-        return False
-    if _passes_technical_triad(candidate) or _passes_major_accident_gate(candidate) or _passes_operational_dispute_gate(candidate):
-        return False
-    if _contains_any_term(text, LOW_REPORT_VALUE_TERMS + LOW_QUALITY_CONTENT_TERMS):
-        return False
-    if _contains_any_term(text, ["fare table", "fare difference table", "ticket price list", "票價表", "車費差額", "票價查詢"]):
-        return False
-    if _contains_any_term(text, ["bus riders", "bus, train", "bus and train", "公車", "巴士"]) and not _contains_any_term(text, ["metro", "subway", "mrt", "lrt", "tram", "light rail"]):
-        return False
-    return _contains_any_term(text, HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS)
-
-
-def _passes_high_value_policy_gate(candidate: dict) -> bool:
-    return _cached_candidate_bool(candidate, "passes_high_value_policy_gate", _compute_passes_high_value_policy_gate)
-
-
-def evaluate_category_gates(candidate: dict) -> dict:
-    analysis_cache = _candidate_analysis_cache(candidate)
-    cached = analysis_cache.get("category_gate_payload")
-    if isinstance(cached, dict):
-        return dict(cached)
-    text = _candidate_selection_text(candidate)
-    canonical_tags = _canonical_tags_from_text(text)
-    gates = {
-        "major_accident": _passes_major_accident_gate(candidate),
-        "technology": _passes_technical_triad(candidate),
-        "operational_dispute": _passes_operational_dispute_gate(candidate),
-        "operational_policy": _passes_high_value_policy_gate(candidate),
-    }
-    reasons: dict[str, str] = {}
-    if gates["major_accident"]:
-        reasons["major_accident"] = "具都市軌道情境、事故/故障訊號及嚴重度。"
-    elif _contains_any_term(text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS):
-        reasons["major_accident"] = "有事故訊號但未達重大事故嚴重度或非都市軌道。"
-    if gates["technology"]:
-        reasons["technology"] = "具都市軌道對象、機電/設備主題及導入/更新/維修行為。"
-    elif _technical_system_gate(candidate) or _technical_action_gate(candidate):
-        reasons["technology"] = "技術三聯條件不完整。"
-    if gates["operational_dispute"]:
-        reasons["operational_dispute"] = "具衝突主體、爭議議題及服務/合約/成本/治理影響。"
-    elif _contains_any_term(text, DISPUTE_SIGNAL_TERMS):
-        reasons["operational_dispute"] = "有爭議詞但缺少明確主體或營運影響。"
-    if gates["operational_policy"]:
-        reasons["operational_policy"] = "具系統、路線、容量或制度層級營運影響。"
-    elif _contains_any_term(text, HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS):
-        reasons["operational_policy"] = "政策訊號不足或被低價值公告排除。"
-
-    primary_category = "excluded"
-    for key, label in (
-        ("major_accident", "重大事故"),
-        ("technology", "技術新知"),
-        ("operational_dispute", "營運爭議"),
-        ("operational_policy", "營運政策"),
-    ):
-        if gates.get(key):
-            primary_category = label
-            break
-    alternatives = [
-        label for key, label in (
-            ("major_accident", "重大事故"),
-            ("technology", "技術新知"),
-            ("operational_dispute", "營運爭議"),
-            ("operational_policy", "營運政策"),
-        )
-        if gates.get(key) and label != primary_category
-    ]
-    if primary_category == "excluded":
-        reasons.setdefault("no_category_gate", "未通過重大事故、技術新知、營運爭議或營運政策 gate。")
-    result = {
-        "category_gates": gates,
-        "category_gate_reasons": reasons,
-        "canonical_tags": canonical_tags,
-        "primary_category": primary_category,
-        "alternative_category_flags": alternatives,
-    }
-    analysis_cache["category_gate_payload"] = dict(result)
-    return result
-
-
-def _candidate_level(candidate: dict, score: int | None = None) -> str:
-    score_value = int(candidate.get("python_score", score or 0) or score or 0)
-    tier = candidate.get("source_tier", "C_media")
-    primary = candidate.get("primary_category") or infer_preliminary_type(candidate)
-    has_date = bool(_candidate_date_obj(candidate.get("date", "")))
-    has_source = _has_source_reference(candidate) if "_has_source_reference" in globals() else bool(candidate.get("source_domain"))
-    if primary == "excluded" or tier == "D_proxy_low_value" or not has_date or not has_source:
-        return "C"
-    if _is_low_value_ceremonial_candidate(candidate):
-        return "B" if tier in {"A_official", "B_professional"} else "C"
-    if primary == "重大事故" and score_value < 62:
-        return "C"
-    if score_value >= 68 and tier in {"A_official", "B_professional", "C_media"}:
-        return "A"
-    if score_value >= (62 if primary == "重大事故" else 58) and tier in {"A_official", "B_professional"}:
-        return "B"
-    return "C"
-
-
-def _is_accident_signal_text(text: str) -> bool:
-    if _contains_any_term(text, NON_ACCIDENT_CONTEXT_TERMS):
-        return False
-    if _contains_any_term(text, SECURITY_OR_CRIME_TERMS) and not _contains_any_term(text, MAJOR_SECURITY_RAIL_IMPACT_TERMS):
-        return False
-    if not _contains_any_term(text, URBAN_RAIL_INCIDENT_CONTEXT_TERMS):
-        return False
-    if _contains_any_term(text, SAFETY_INCIDENT_DETAIL_TERMS):
-        return True
-    equipment_terms = [
-        "platform screen door", "platform doors", "train door", "barrier",
-        "platform barrier", "月臺門", "月台門", "車門", "月臺屏障",
-    ]
-    issue_terms = [
-        "failure", "fault", "damage", "incident", "accident", "review",
-        "safety", "stuck", "broken", "異常", "故障", "損壞", "事故", "檢討", "安全",
-    ]
-    return _contains_any_term(text, equipment_terms) and _contains_any_term(text, issue_terms)
-
-
-def _has_strong_technical_detail_text(text: str) -> bool:
-    return _contains_any_term(text, STRONG_TECHNICAL_DETAIL_TERMS)
-
-
-def _has_explicit_technical_system_detail(candidate: dict) -> bool:
-    flags = set(candidate.get("candidate_flags", []) or [])
-    if "technical_or_system_detail" in flags:
-        return True
-    return _has_strong_technical_detail_text(_candidate_selection_text(candidate))
-
-
-def _has_good_report_signal(candidate: dict) -> bool:
-    flags = set(candidate.get("candidate_flags", []) or [])
-    if flags.intersection({"technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "trusted_title_technical_signal"}):
-        return True
-    text = _candidate_selection_text(candidate)
-    return (
-        _passes_technical_triad(candidate)
-        or _trusted_source_title_technical_signal(candidate)
-        or _passes_major_accident_gate(candidate)
-        or _passes_high_value_policy_gate(candidate)
-        or _passes_operational_dispute_gate(candidate)
-    )
-
-
-def _has_low_value_official_notice(candidate: dict) -> bool:
-    return _contains_any_term(_candidate_selection_text(candidate), LOW_VALUE_OFFICIAL_NOTICE_TERMS)
-
-
-def _has_procurement_list_notice(candidate: dict) -> bool:
-    return _contains_any_term(_candidate_selection_text(candidate), PROCUREMENT_LIST_NOTICE_TERMS)
-
-
-def _is_financial_market_candidate(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    return _contains_any_term(text, FINANCIAL_MARKET_TERMS)
-
-
-def _is_low_value_ceremonial_candidate(candidate: dict) -> bool:
-    title = candidate.get("title", "")
-    text = f"{title} {candidate.get('snippet', '')}"
-    if not _contains_any_term(text, LOW_VALUE_CEREMONIAL_TERMS):
-        return False
-    if _contains_any_term(text, ["award", "awards", "awarded"]) and _contains_any_term(
-        text, ["contract", "procurement", "tender", "採購", "合約", "標案"]
-    ):
-        return False
-    if _contains_any_term(title, FORMAL_ENGINEERING_EVENT_TERMS):
-        return False
-    return not _contains_any_term(text, FORMAL_ENGINEERING_EVENT_TERMS)
-
-
-def _is_security_or_crime_candidate(candidate: dict) -> bool:
-    return _contains_any_term(_candidate_selection_text(candidate), SECURITY_OR_CRIME_TERMS)
-
-
-def _has_major_security_rail_impact(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    return _contains_any_term(text, MAJOR_SECURITY_RAIL_IMPACT_TERMS)
-
-
-def _has_core_metro_technical_content(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS) and not _contains_any_term(text, ["rollout flaw", "system interface problem", "ticketing outage"]):
-        return False
-    if _contains_any_term(text, PROPERTY_OR_CAMPUS_DEVELOPMENT_TERMS) and not _technical_system_gate(candidate):
-        return False
-    if _contains_any_term(text, ENGINEERING_MILESTONE_ONLY_TERMS) and not _technical_system_gate(candidate):
-        return False
-    if _contains_any_term(text, GENERIC_TEST_WITHOUT_TECH_TERMS) and not _technical_system_gate(candidate):
-        return False
-    return _passes_technical_triad(candidate)
-
-
-def _has_general_rail_exclusion(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    if not _contains_any_term(text, GENERAL_RAIL_EXCLUDE_TERMS):
-        return False
-    return not _has_clear_urban_rail_context(text, candidate.get("source", ""))
-
-
-def _has_substantive_detail_for_low_value_notice(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    return (
-        _contains_any_term(text, STRONG_TECHNICAL_DETAIL_TERMS)
-        or _contains_any_term(text, SAFETY_INCIDENT_DETAIL_TERMS)
-        or _contains_any_term(text, SUBSTANTIVE_POLICY_DETAIL_TERMS)
-        or _contains_any_term(text, WEEKLY_BACKFILL_ALLOWED_TERMS)
-    )
-
-
-def _has_long_term_report_value(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    return (
-        _has_good_report_signal(candidate)
-        or _contains_any_term(text, STRONG_TECHNICAL_DETAIL_TERMS)
-        or _contains_any_term(text, SAFETY_INCIDENT_DETAIL_TERMS)
-        or _contains_any_term(text, SUBSTANTIVE_POLICY_DETAIL_TERMS)
-        or _contains_any_term(text, HIGH_IMPACT_ACCIDENT_TERMS)
-    )
-
-
-def _is_low_value_long_term_candidate(candidate: dict) -> bool:
-    lookback_value = int(lookback_int)
-    if lookback_value < 30:
-        return False
-    text = _candidate_selection_text(candidate)
-    classification = candidate.get("classification") or candidate.get("preliminary_type") or infer_preliminary_type(candidate)
-    if _contains_any_term(text, LOW_REPORT_VALUE_TERMS) and not _has_long_term_report_value(candidate):
-        return True
-    if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS) and not _has_long_term_report_value(candidate):
-        return True
-    if _contains_any_term(text, CIVIC_METRO_NAME_ONLY_TERMS) and not _contains_any_term(text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS):
-        return True
-    if lookback_value in ADVANCED_LOOKBACK_OPTIONS and classification == "重大事故" and not _passes_major_accident_gate(candidate):
-        return True
-    return False
-
-
-def _is_technical_news_selection_candidate(candidate: dict) -> bool:
-    if candidate.get("classification") != "技術新知":
-        return False
-    text = _candidate_selection_text(candidate)
-    if _is_financial_market_candidate(candidate):
-        return False
-    if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS):
-        return False
-    if _is_accident_signal_text(text):
-        return False
-    if _is_low_value_ceremonial_candidate(candidate):
-        return False
-    if not _passes_technical_triad(candidate):
-        return False
-    if _has_low_value_official_notice(candidate):
-        return False
-    if candidate.get("source_tier") == "D_proxy_low_value":
-        return False
-    return True
-
-
-def get_selection_candidate_limit(days: int, fast_mode: bool = False) -> int:
-    try:
-        days = int(days)
-    except (TypeError, ValueError):
-        days = 7
-    if fast_mode:
-        if days >= 90:
-            return 100
-        if days >= 30:
-            return 80
-        if days >= 14:
-            return 70
-        return 60
-    if days >= 90:
-        return 150
-    if days >= 30:
-        return 120
-    return 100
-
-
-def get_selection_output_range(days: int) -> str:
-    try:
-        days = int(days)
-    except (TypeError, ValueError):
-        days = 7
-    if days >= 365:
-        return "9～12"
-    if days >= 180:
-        return "9～12"
-    if days >= 90:
-        return "9～12"
-    if days >= 30:
-        return "6～9"
-    if days >= 14:
-        return "6～9"
-    return "3～6"
-
-
-def infer_preliminary_type(candidate: dict) -> str:
-    text = _candidate_selection_text(candidate)
-    if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
-        return "規範更新"
-    gate_info = evaluate_category_gates(candidate)
-    return gate_info.get("primary_category", "excluded")
-
-
-def build_candidate_flags(candidate: dict) -> list[str]:
-    text = _candidate_selection_text(candidate)
-    flags: list[str] = []
-    information_issue = _information_quality_issue(candidate)
-    if candidate.get("source_tier") == "A_official":
-        flags.append("official_source")
-    if candidate.get("source_tier") == "B_professional":
-        flags.append("professional_source")
-    if candidate.get("source_tier") == "D_proxy_low_value":
-        flags.append("low_value_proxy_or_page")
-    if _domain_from_url(_effective_source_url(candidate)):
-        flags.append("source_domain_detected")
-    if "news.google.com" in _domain_from_url(candidate.get("url", "")):
-        flags.append("google_news_proxy")
-        if not (candidate.get("source_domain") or _original_source_domain(
-            candidate.get("source", ""),
-            candidate.get("url", ""),
-            candidate.get("source_href", ""),
-            candidate.get("query", ""),
-        )):
-            flags.append("source_domain_unresolved")
-    if _candidate_date_obj(candidate.get("date", "")):
-        flags.append("date_detected")
-
-    if _candidate_urban_rail_gate(candidate):
-        flags.append("urban_rail")
-    if _technical_system_gate(candidate):
-        flags.append("technical_or_system_detail")
-    if _trusted_source_title_technical_signal(candidate):
-        flags.append("trusted_title_technical_signal")
-    if _passes_technical_triad(candidate):
-        flags.append("core_metro_technical_content")
-    if _passes_major_accident_gate(candidate):
-        flags.append("incident_or_safety_signal")
-    if _passes_high_value_policy_gate(candidate):
-        flags.append("high_value_policy")
-    if _passes_operational_dispute_gate(candidate):
-        flags.append("operational_dispute_gate")
-    if _is_low_value_ceremonial_candidate(candidate):
-        flags.append("low_value_ceremonial")
-    if _contains_any_term(text, LOW_VALUE_POLICY_TERMS) or information_issue in {"日常服務推播", "低價值路線公告"}:
-        flags.append("low_value_service_notice")
-    if _has_low_value_official_notice(candidate):
-        flags.append("low_value_official_notice")
-    if _has_procurement_list_notice(candidate):
-        flags.append("procurement_list_notice")
-    if _is_financial_market_candidate(candidate):
-        flags.append("financial_market_content")
-    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS):
-        flags.append("equipment_failure_not_tech")
-    if _is_security_or_crime_candidate(candidate):
-        flags.append("security_or_crime_context")
-    if _contains_any_term(text, PROPERTY_OR_CAMPUS_DEVELOPMENT_TERMS):
-        flags.append("property_or_campus_development")
-    if _contains_any_term(text, GENERIC_TEST_WITHOUT_TECH_TERMS):
-        flags.append("generic_testing_notice")
-    if _has_general_rail_exclusion(candidate):
-        flags.append("general_rail_exclusion")
-    if information_issue == "摘要資訊不足":
-        flags.append("insufficient_information")
-    if len(candidate.get("title", "")) < 20:
-        flags.append("short_title")
-    if len(candidate.get("snippet", "")) < 80:
-        flags.append("short_snippet")
-    return flags
-
-
-def score_news_candidate(candidate: dict) -> dict:
-    text = _candidate_selection_text(candidate)
-    gate_info = evaluate_category_gates(candidate)
-    primary_category = gate_info.get("primary_category", "excluded")
-    score = 50
-    reasons: list[str] = []
-    tier = candidate.get("source_tier", "C_media")
-    if tier == "A_official":
-        score += 20
-        reasons.append("官方來源 +20")
-    elif tier == "B_professional":
-        score += 14
-        reasons.append("專業鐵道媒體 +14")
-    elif tier == "C_media":
-        score -= 4
-        reasons.append("一般媒體 -4")
-    elif tier == "D_proxy_low_value":
-        score -= 25
-        reasons.append("低價值頁面/代理來源 -25")
-
-    if _candidate_date_obj(candidate.get("date", "")):
-        score += 10
-        reasons.append("明確日期 +10")
-    else:
-        score -= 20
-        reasons.append("日期不明 -20")
-
-    source_url = _effective_source_url(candidate)
-    unresolved_google_proxy = (
-        "news.google.com" in _domain_from_url(candidate.get("url", ""))
-        and "news.google.com" in _domain_from_url(source_url)
-    )
-    if _extract_complete_url(source_url):
-        score += 8
-        reasons.append("完整 URL +8")
-    elif _extract_domain_hint(source_url):
-        score += 4
-        reasons.append("可辨識 domain +4")
-    else:
-        score -= 15
-        reasons.append("URL 不完整 -15")
-
-    if unresolved_google_proxy:
-        score -= 10
-        reasons.append("Google News proxy unresolved original source -10")
-
-    if _candidate_urban_rail_gate(candidate):
-        score += 15
-        reasons.append("都市軌道明確 +15")
-    else:
-        score -= 30
-        reasons.append("都市軌道關聯不足 -30")
-
-    if _technical_system_gate(candidate):
-        score += 15
-        reasons.append("機電/系統技術訊號 +15")
-    if _passes_technical_triad(candidate):
-        score += 10
-        reasons.append("都市軌道+系統設備+技術行為三聯條件 +10")
-    elif _trusted_source_title_technical_signal(candidate):
-        score += 8
-        reasons.append("可信來源標題具系統與技術行為 +8")
-    if _passes_major_accident_gate(candidate):
-        score += 10
-        reasons.append("重大事故嚴重度門檻 +10")
-    if _passes_high_value_policy_gate(candidate):
-        score += 8
-        reasons.append("高價值營運政策門檻 +8")
-    if _passes_operational_dispute_gate(candidate):
-        score += 8
-        reasons.append("營運爭議衝突與影響門檻 +8")
-    if _contains_any_term(text, LOW_VALUE_POLICY_TERMS):
-        score -= 12
-        reasons.append("低價值服務提醒 -12")
-    if _is_low_value_ceremonial_candidate(candidate):
-        score -= 30
-        reasons.append("公益捐贈／典禮／教育推廣且無正式工程內容 -30")
-        if score > 64:
-            score = 64
-            reasons.append("低價值事件僅列 B 級候補，分數上限 64")
-    if _has_low_value_official_notice(candidate) and not _has_explicit_technical_system_detail(candidate):
-        score -= 35
-        reasons.append("低價值官方公告且缺少機電細節 -35")
-    if _has_general_rail_exclusion(candidate):
-        score -= 40
-        reasons.append("一般鐵路/通勤鐵路排除訊號 -40")
-    if _is_financial_market_candidate(candidate):
-        score -= 45
-        reasons.append("股票行情或企業財經分析 -45")
-    if any(marker in urlparse(candidate.get("url", "")).path.casefold() for marker in LOW_INFORMATION_PATH_MARKERS):
-        score -= 18
-        reasons.append("入口/路線/查詢頁路徑 -18")
-    if any(term.casefold() in text.casefold() for term in LOW_QUALITY_CONTENT_TERMS):
-        score -= 15
-        reasons.append("旅遊/SEO/低價值內容 -15")
-    if len(candidate.get("title", "")) < 20:
-        score -= 5
-        reasons.append("標題過短 -5")
-    if len(candidate.get("snippet", "")) < 80:
-        score -= 8
-        reasons.append("摘要過短 -8")
-
-    information_issue = _information_quality_issue(candidate)
-    if information_issue == "日常服務推播":
-        score -= 25
-        reasons.append("日常服務推播 -25")
-    elif information_issue == "低價值路線公告":
-        score -= 30
-        reasons.append("低價值路線公告 -30")
-    elif information_issue == "摘要資訊不足":
-        score -= 18
-        reasons.append("摘要資訊不足 -18")
-
-    flags = build_candidate_flags(candidate)
-    good_flags = {"technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "trusted_title_technical_signal", "operational_dispute_gate"}
-    has_good_flag = bool(set(flags).intersection(good_flags))
-    if not has_good_flag:
-        score_cap = 55 if "short_snippet" in flags else 65
-        if score > score_cap:
-            score = score_cap
-            reasons.append(f"缺少技術/事故/高價值政策旗標，分數上限 {score_cap}")
-    if (tier == "D_proxy_low_value" or "low_value_service_notice" in flags) and not _has_explicit_technical_system_detail(candidate):
-        if score > 50:
-            score = 50
-            reasons.append("低價值來源或服務提醒且無技術細節，分數上限 50")
-    if primary_category == "excluded":
-        score = min(score, 35)
-        reasons.append("未通過類別 gate，分數上限 35")
-    preliminary_type = "規範更新" if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True) else primary_category
-    temp_candidate = dict(candidate, python_score=max(0, min(100, score)), primary_category=primary_category)
-    return {
-        "python_score": max(0, min(100, score)),
-        "score_reason": "；".join(reasons),
-        "candidate_flags": flags,
-        "preliminary_type": preliminary_type,
-        "short_snippet": _shorten(candidate.get("snippet", ""), CANDIDATE_SNIPPET_CHARS),
-        "source_domain": candidate.get("source_domain") or _normalize_source_domain(_domain_from_url(_effective_source_url(candidate))),
-        "source_domain_normalized": candidate.get("source_domain_normalized") or candidate.get("source_domain") or _normalize_source_domain(_domain_from_url(_effective_source_url(candidate))),
-        "source_domain_raw": candidate.get("source_domain_raw") or _domain_from_url(candidate.get("source_href") or candidate.get("url", "")),
-        "category_gates": gate_info.get("category_gates", {}),
-        "category_gate_reasons": gate_info.get("category_gate_reasons", {}),
-        "canonical_tags": gate_info.get("canonical_tags", []),
-        "primary_category": primary_category,
-        "alternative_category_flags": gate_info.get("alternative_category_flags", []),
-        "candidate_level": _candidate_level(temp_candidate, score),
-        "urban_rail_gate": _candidate_urban_rail_gate(candidate),
-        "technical_triplet_status": "pass" if _passes_technical_triad(candidate) else "fail",
-        "accident_severity_score": 80 if _passes_major_accident_gate(candidate) else (35 if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS) else 0),
-    }
-
-
-def _candidate_score_fingerprint(candidate: dict) -> tuple:
-    return (
-        candidate.get("title", ""),
-        candidate.get("snippet", ""),
-        candidate.get("date", ""),
-        candidate.get("source", ""),
-        candidate.get("url", ""),
-        candidate.get("source_href", ""),
-        candidate.get("source_tier", ""),
-        candidate.get("source_quality", ""),
-    )
-
-
-def annotate_candidate_for_scheme_d(candidate: dict, exclude_reason: str = "", profile_timings: dict | None = None) -> dict:
-    enriched = dict(candidate)
-    scoring_started = time.perf_counter()
-    score_fingerprint = _candidate_score_fingerprint(enriched)
-    cached_score = (
-        enriched.get("_score_cache")
-        if enriched.get("_score_cache_fingerprint") == score_fingerprint
-        else None
-    )
-    if cached_score:
-        score_payload = dict(cached_score)
-    else:
-        score_payload = score_news_candidate(enriched)
-        enriched["_score_cache"] = dict(score_payload)
-        enriched["_score_cache_fingerprint"] = score_fingerprint
-    _profile_timing_add(profile_timings, "scoring", time.perf_counter() - scoring_started)
-    enriched.update(score_payload)
-    enriched["exclude_reason"] = exclude_reason
-    enriched["final_exclude_reason"] = exclude_reason or enriched.get("preliminary_reject_reason", "")
-    enriched["candidate_id"] = enriched.get("candidate_id") or enriched.get("id", "")
-    enriched["search_family"] = enriched.get("search_family") or _search_family_from_query(enriched.get("query", ""))
-    enriched["search_query"] = enriched.get("search_query") or enriched.get("query", "")
-    enriched["search_language"] = enriched.get("search_language") or _search_language_from_query(enriched.get("query", ""))
-    enriched["source_domain_normalized"] = enriched.get("source_domain_normalized") or _normalize_source_domain(enriched.get("source_domain", ""))
-    fingerprint_started = time.perf_counter()
-    enriched["event_fingerprint"] = build_event_fingerprint(enriched)
-    _profile_timing_add(profile_timings, "event_fingerprint", time.perf_counter() - fingerprint_started)
-    enriched["duplicate_of"] = enriched.get("duplicate_of", "")
-    enriched["selection_stage"] = enriched.get("selection_stage", "excluded" if exclude_reason else "candidate_pool")
-    return enriched
-
-
-def build_candidate_card(candidate: dict) -> dict:
-    source_url = _effective_source_url(candidate)
-    return {
-        "id": candidate.get("id", ""),
-        "candidate_id": candidate.get("candidate_id", candidate.get("id", "")),
-        "date": candidate.get("date", ""),
-        "title": candidate.get("title", ""),
-        "search_family": candidate.get("search_family", ""),
-        "search_query": candidate.get("search_query", candidate.get("query", "")),
-        "search_language": candidate.get("search_language", ""),
-        "query_region": candidate.get("query_region", ""),
-        "source_display": candidate.get("source_display", candidate.get("source", "")),
-        "source_domain_raw": candidate.get("source_domain_raw", ""),
-        "source_domain_normalized": candidate.get("source_domain_normalized", candidate.get("source_domain", "")),
-        "source_domain": candidate.get("source_domain") or _domain_from_url(source_url),
-        "source_tier": candidate.get("source_tier", ""),
-        "source_type": candidate.get("source_type", ""),
-        "source_verb": candidate.get("source_verb", ""),
-        "region": candidate.get("region", "未判定"),
-        "page_type": candidate.get("page_type", ""),
-        "page_type_reason": candidate.get("page_type_reason", ""),
-        "date_validation": candidate.get("date_validation", ""),
-        "urban_rail_gate": candidate.get("urban_rail_gate", ""),
-        "canonical_tags": candidate.get("canonical_tags", []),
-        "category_gates": candidate.get("category_gates", {}),
-        "category_gate_reasons": candidate.get("category_gate_reasons", {}),
-        "primary_category": candidate.get("primary_category", ""),
-        "alternative_category_flags": candidate.get("alternative_category_flags", []),
-        "accident_severity_score": candidate.get("accident_severity_score", 0),
-        "technical_triplet_status": candidate.get("technical_triplet_status", ""),
-        "candidate_level": candidate.get("candidate_level", ""),
-        "preliminary_type": candidate.get("preliminary_type", infer_preliminary_type(candidate)),
-        "short_snippet": candidate.get("short_snippet", _shorten(candidate.get("snippet", ""), CANDIDATE_SNIPPET_CHARS)),
-        "url": source_url,
-        "python_score": candidate.get("python_score", 0),
-        "score_reason": candidate.get("score_reason", ""),
-        "candidate_flags": candidate.get("candidate_flags", []),
-        "event_fingerprint": candidate.get("event_fingerprint", {}),
-        "supplemental_sources": candidate.get("supplemental_sources", []),
-        "event_source_merge_count": candidate.get("event_source_merge_count", 0),
-        "duplicate_of": candidate.get("duplicate_of", ""),
-        "selection_stage": candidate.get("selection_stage", ""),
-        "final_exclude_reason": candidate.get("final_exclude_reason", ""),
-    }
-
-
-def _is_low_value_policy_candidate(candidate: dict) -> bool:
-    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')}"
-    has_low = _contains_any_term(text, LOW_VALUE_POLICY_TERMS)
-    has_high = _passes_high_value_policy_gate(candidate)
-    return has_low and not has_high
-
-
-def rebalance_selected_candidates(selected: list[dict]) -> list[dict]:
-    if lookback_int != 7 or "營運政策" not in selected_types:
-        return selected
-    balanced: list[dict] = []
-    policy_count = 0
-    for candidate in selected:
-        if candidate.get("classification") != "營運政策":
-            balanced.append(candidate)
-            continue
-        if _is_low_value_policy_candidate(candidate):
-            candidate = dict(candidate)
-            candidate["selected_reason"] = (
-                f"{candidate.get('selected_reason', '')}；因屬一般服務公告，週報中降權。"
-            ).strip("；")
-            if policy_count >= 3:
-                continue
-        if policy_count >= 5:
-            continue
-        policy_count += 1
-        balanced.append(candidate)
-    return balanced
-
-
-def _selection_target_range(days: int) -> tuple[int, int]:
-    try:
-        days = int(days)
-    except (TypeError, ValueError):
-        days = 7
-    if days >= 365:
-        return 9, 12
-    if days >= 180:
-        return 9, 12
-    if days >= 90:
-        return 9, 12
-    if days >= 30:
-        return 6, 9
-    if days >= 14:
-        return 6, 9
-    return 3, 6
-
-
-def _selection_classification(candidate: dict) -> str:
-    if candidate.get("classification") == "excluded" or candidate.get("primary_category") == "excluded":
-        return "excluded"
-    primary_category = candidate.get("primary_category")
-    if primary_category in ADVANCED_TYPES:
-        return primary_category
-    inferred_type = infer_preliminary_type(candidate)
-    if inferred_type in ADVANCED_TYPES:
-        return inferred_type
-    preliminary_type = candidate.get("preliminary_type")
-    if preliminary_type in ADVANCED_TYPES:
-        return preliminary_type
-    return "excluded"
-
-
-def _has_source_reference(candidate: dict) -> bool:
-    source_url = _effective_source_url(candidate)
-    return bool(_extract_complete_url(source_url) or candidate.get("source_domain") or _extract_domain_hint(source_url))
-
-
-def _selection_good_flag_count(candidate: dict) -> int:
-    flags = set(candidate.get("candidate_flags", []) or [])
-    return sum(1 for flag in ("technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "core_metro_technical_content", "operational_dispute_gate") if flag in flags)
-
-
-def _selection_bad_flag_count(candidate: dict) -> int:
-    flags = set(candidate.get("candidate_flags", []) or [])
-    return sum(1 for flag in (
-        "low_value_service_notice", "insufficient_information", "short_snippet",
-        "low_value_official_notice", "procurement_list_notice", "general_rail_exclusion",
-    ) if flag in flags)
-
-
-def _candidate_month_key(candidate: dict) -> str:
-    date_obj = _candidate_date_obj(candidate.get("date", ""))
-    return date_obj.strftime("%Y-%m") if date_obj else "日期未知"
-
-
-def _candidate_system_theme(candidate: dict) -> str:
-    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')}"
-    theme_terms = [
-        ("號誌與列車控制", ["cbtc", "signalling", "signaling", "signal", "train control", "line modernization", "line modernisation", "metro modernization", "metro modernisation", "modernization", "modernisation", "號誌", "信號"]),
-        ("自動化與無人駕駛", ["driverless", "automation", "automated", "unattended train", "自動", "無人"]),
-        ("車輛與車隊更新", ["rolling stock", "fleet", "trainset", "new train", "train cars", "two-car sets", "two car sets", "automated metros", "metro trains", "8000 series trains", "車輛", "列車"]),
-        ("月臺門與車站設備", ["platform screen door", "platform doors", "psd", "elevator", "escalator", "月臺門", "月台門", "電梯", "電扶梯"]),
-        ("供電與能源管理", ["power supply", "traction power", "substation", "third rail", "energy", "供電", "牽引", "變電", "能源"]),
-        ("通訊、資安與資料治理", ["communications", "telecom", "radio", "5g", "lte", "cyber", "data", "通訊", "資安", "資料"]),
-        ("維修監測與影像分析", ["maintenance", "monitoring", "condition monitoring", "video", "camera", "ai", "omc", "overhaul", "life cycle management", "life-cycle management", "維修", "監測", "影像", "AI"]),
-        ("軌道與機廠設備", ["track renewal", "track lubrication", "lubricator", "wheel lathe", "depot", "operations and maintenance centre", "operations and maintenance center", "軌道更新", "機廠"]),
-        ("AFC 與票務系統", ["afc", "ticketing", "fare gate", "fare", "票務", "票閘", "票價"]),
-    ]
-    for label, terms in theme_terms:
-        if _contains_any_term(text, terms):
-            return label
-    return candidate.get("classification") or candidate.get("preliminary_type") or "未分類"
-
-
-OPERATOR_DOMAIN_KEYS = {
-    "mta.info": "mta",
-    "wmata.com": "wmata",
-    "ttc.ca": "ttc",
-    "translink.ca": "translink",
-    "tfl.gov.uk": "tfl",
-    "ratp.fr": "ratp",
-    "lta.gov.sg": "lta",
-    "smrt.com.sg": "smrt",
-    "mtr.com.hk": "mtr",
-    "seoulmetro.co.kr": "seoulmetro",
-    "tokyometro.jp": "tokyometro",
-    "metro.tokyo.lg.jp": "tokyo-metropolitan-government",
-    "metro-madrid.es": "metro-madrid",
-    "tmb.cat": "tmb",
-    "wienerlinien.at": "wiener-linien",
-    "sl.se": "sl",
-    "cph.dk": "copenhagen-metro",
-    "rta.ae": "rta-dubai",
-    "soundtransit.org": "sound-transit",
-}
-
-
-OPERATOR_TEXT_KEYS = [
-    ("tokyometro", ["tokyo metro", "東京メトロ"]),
-    ("seoulmetro", ["seoul metro", "서울교통공사"]),
-    ("mtr", ["mtr", "港鐵"]),
-    ("lta", ["lta"]),
-    ("smrt", ["smrt"]),
-    ("tfl", ["tfl", "transport for london"]),
-    ("ratp", ["ratp"]),
-    ("wmata", ["wmata"]),
-    ("ttc", ["ttc"]),
-    ("translink", ["translink"]),
-    ("mta", ["mta", "nyct"]),
-    ("cta", ["cta"]),
-    ("bart", ["bart"]),
-    ("bvg", ["bvg", "berliner verkehrsbetriebe"]),
-    ("wiener-linien", ["wiener linien"]),
-    ("copenhagen-metro", ["copenhagen metro"]),
-    ("metro-madrid", ["metro de madrid", "madrid metro"]),
-]
-
-
-def _candidate_operator_key(candidate: dict) -> str:
-    source_url = _effective_source_url(candidate)
-    hosts = [
-        candidate.get("source_domain", ""),
-        _domain_from_url(source_url),
-        _domain_from_url(candidate.get("source_href", "")),
-        _domain_from_url(candidate.get("url", "")),
-    ]
-    for host in hosts:
-        for domain, key in OPERATOR_DOMAIN_KEYS.items():
-            if host and _host_matches(host, domain):
-                return key
-    text = _candidate_selection_text(candidate)
-    text_lower = text.casefold()
-    if "toronto subway" in text_lower and re.search(r"\bline\s*2\b", text_lower):
-        return "ttc"
-    for key, terms in OPERATOR_TEXT_KEYS:
-        if _contains_any_term(text, terms):
-            return key
-    return ""
-
-
-def _candidate_incident_type(candidate: dict) -> str:
-    text = _candidate_selection_text(candidate)
-    incident_terms = [
-        ("tram_collision", ["tram", "streetcar", "collision", "crash", "hit", "rammed", "電車", "路面電車", "撞擊", "碰撞"]),
-        ("derailment", ["derailment", "derailed", "entgleist", "出軌", "脫軌"]),
-        ("power_supply", ["power outage", "power failure", "traction power", "third rail", "供電", "牽引", "第三軌"]),
-        ("signal_or_switch", ["signal failure", "signalling", "signaling", "switch failure", "points failure", "號誌", "信號", "轉轍器", "道岔"]),
-        ("platform_door", ["platform screen door", "platform door", "psd", "月臺門", "月台門"]),
-        ("service_disruption", ["service suspension", "disruption", "suspended", "停駛", "營運中斷", "重大中斷"]),
-        ("security", SECURITY_OR_CRIME_TERMS),
-    ]
-    for label, terms in incident_terms:
-        if _contains_any_term(text, terms):
-            return label
-    return _candidate_system_theme(candidate)
-
-
-def _candidate_action_key(candidate: dict) -> str:
-    text = _candidate_selection_text(candidate)
-    if _contains_any_term(text, ["signalling", "signaling", "train control", "號誌", "信號"]) and _contains_any_term(text, [
-        "signalling upgrade", "signaling upgrade", "digital signalling", "digital signaling",
-        "capacity increase", "increase capacity", "boost capacity", "modernise", "modernize",
-        "modernisation", "modernization", "號誌升級", "信號升級",
-    ]):
-        return "signalling_upgrade"
-    action_terms = [
-        ("accident", ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS),
-        ("strike_or_dispute", DISPUTE_SIGNAL_TERMS),
-        ("order", ["order", "ordered", "procurement", "採購", "訂購"]),
-        ("enter_service", ["enter service", "entered service", "go into service", "投入營運"]),
-        ("upgrade", ["upgrade", "modernization", "modernisation", "renewal", "replacement", "升級", "更新", "汰換", "現代化"]),
-        ("testing", ["test", "testing", "trial", "commissioning", "測試", "試運轉"]),
-        ("maintenance", ["maintenance", "overhaul", "life-cycle", "asset management", "維修", "翻修", "資產管理"]),
-        ("opening_or_policy", HIGH_VALUE_POLICY_GATE_TERMS),
-    ]
-    for label, terms in action_terms:
-        if _contains_any_term(text, terms):
-            return label
-    return "event"
-
-
-def _canonical_event_geo(candidate: dict) -> str:
-    specific = _candidate_specific_event_location(candidate)
-    region = _canonical_candidate_region(candidate)
-    country_keys = {
-        "美國": "united-states", "加拿大": "canada", "德國": "germany", "英國": "united-kingdom",
-        "法國": "france", "義大利": "italy", "新加坡": "singapore", "日本": "japan",
-        "韓國": "south-korea", "香港": "hong-kong", "澳洲": "australia", "瑞士": "switzerland",
-    }
-    city_country = {
-        "austin": "united-states", "washington": "united-states", "new york": "united-states",
-        "toronto": "canada", "vancouver": "canada", "berlin": "germany",
-        "berlin-adlershof": "germany", "northern-ireland": "united-kingdom",
-    }
-    if not specific:
-        specific = {
-            "ttc": "toronto",
-            "wmata": "washington",
-            "mta": "new york",
-            "bvg": "berlin",
-        }.get(_candidate_operator_key(candidate), "")
-    if specific:
-        country = city_country.get(specific) or country_keys.get(region, "")
-        return f"{country}/{specific}" if country else specific
-    return country_keys.get(region, str(region or "").casefold())
-
-
-def build_event_fingerprint(candidate: dict) -> dict:
-    analysis_cache = _candidate_analysis_cache(candidate)
-    cached = analysis_cache.get("event_fingerprint")
-    if isinstance(cached, dict):
-        return dict(cached)
-    date_obj = _candidate_date_obj(candidate.get("date", ""))
-    date_bucket = ""
-    if date_obj:
-        bucket_start = date_obj - datetime.timedelta(days=date_obj.toordinal() % 7)
-        date_bucket = bucket_start.isoformat()
-    result = {
-        "operator_key": _candidate_operator_key(candidate),
-        "geo_key": _canonical_event_geo(candidate),
-        "asset_key": _candidate_system_theme(candidate),
-        "action_key": _candidate_action_key(candidate),
-        "category_key": candidate.get("classification") or candidate.get("primary_category") or candidate.get("preliminary_type", ""),
-        "date_bucket": date_bucket,
-    }
-    analysis_cache["event_fingerprint"] = dict(result)
-    return result
-
-
-EVENT_LOCATION_TERMS = [
-    "tokyo", "osaka", "seoul", "singapore", "hong kong", "sydney", "melbourne",
-    "london", "paris", "berlin", "munich", "new york", "washington", "chicago", "austin",
-    "toronto", "vancouver", "houston", "madrid", "barcelona", "amsterdam", "rotterdam",
-    "basel", "zurich", "leipzig", "adlershof", "milan", "rome", "stockholm",
-    "vienna", "copenhagen", "oslo", "northern ireland", "belfast",
-    "東京", "大阪", "首爾", "新加坡", "香港", "雪梨", "悉尼", "墨爾本",
-    "倫敦", "巴黎", "柏林", "慕尼黑", "紐約", "華盛頓", "芝加哥",
-    "多倫多", "溫哥華", "休士頓", "馬德里", "巴塞隆納", "阿姆斯特丹", "鹿特丹",
-    "巴塞爾", "蘇黎世", "萊比錫", "米蘭", "羅馬", "斯德哥爾摩",
-    "維也納", "哥本哈根", "奧斯陸", "北愛爾蘭", "貝爾法斯特",
-]
-
-
-PROJECT_SERIES_TERMS = [
-    "project", "programme", "program", "extension", "line", "station", "construction",
-    "contract", "upgrade", "rollout", "renewal", "trial", "testing", "commissioning",
-    "opening", "launch", "fleet", "trainset", "cbtc", "signalling", "signaling",
-    "platform screen door", "depot", "maintenance facility",
-    "計畫", "專案", "延伸線", "路線", "車站", "工程", "合約", "升級", "更新",
-    "試運轉", "測試", "通車", "啟用", "車隊", "列車", "號誌", "月臺門", "機廠",
-]
-
-PROJECT_STAGE_GROUPS = {
-    "procurement": [
-        "contract", "award", "tender", "bid", "procurement", "合約", "得標", "招標", "採購",
-    ],
-    "construction": [
-        "construction", "works", "tunnel", "tbm", "civil works", "工程", "施工", "隧道", "潛盾",
-    ],
-    "testing": [
-        "testing", "trial", "commissioning", "test run", "試運轉", "測試", "試車", "調試",
-    ],
-    "opening": [
-        "opening", "opens", "launch", "service begins", "starts service", "通車", "啟用", "營運",
-    ],
-    "vehicle": [
-        "trainset", "rolling stock", "fleet", "vehicle", "train arrival", "車輛", "列車", "車隊",
-    ],
-    "systems": [
-        "cbtc", "signalling", "signaling", "platform screen door", "power supply",
-        "號誌", "信號", "月臺門", "月台門", "供電",
-    ],
-}
-
-
-def _candidate_specific_event_location(candidate: dict) -> str:
-    text = _candidate_selection_text(candidate).casefold()
-    priority_locations = [
-        ("austin", ["austin transit partnership", "austin light rail", "austin"]),
-        ("berlin-adlershof", ["adlershof"]),
-        ("basel", ["basel", "巴塞爾"]),
-        ("leipzig", ["leipzig", "萊比錫"]),
-        ("houston", ["houston", "休士頓", "休斯頓"]),
-        ("vancouver", ["vancouver", "broadway subway", "溫哥華"]),
-        ("toronto", ["toronto", "finch west", "多倫多"]),
-        ("northern-ireland", ["northern ireland", "belfast", "北愛爾蘭", "貝爾法斯特"]),
-        ("berlin", ["berlin", "柏林"]),
-    ]
-    for canonical, terms in priority_locations:
-        if any(term.casefold() in text for term in terms):
-            return canonical
-    for term in EVENT_LOCATION_TERMS:
-        if term.casefold() in text:
-            return term.casefold()
-    return ""
-
-
-def _candidate_event_location(candidate: dict) -> str:
-    specific = _candidate_specific_event_location(candidate)
-    if specific:
-        return specific
-    return str(candidate.get("region", "") or "").casefold()
-
-
-def _event_date_close(left: dict, right: dict, days: int = 3) -> bool:
-    left_date = _candidate_date_obj(left.get("date", ""))
-    right_date = _candidate_date_obj(right.get("date", ""))
-    if not left_date or not right_date:
-        return True
-    return abs((left_date - right_date).days) <= days
-
-
-def _event_similarity_text(candidate: dict) -> str:
-    text = _candidate_selection_text(candidate)
-    text = _strip_source_name_noise(text)
-    text = re.sub(r"https?://\S+", " ", text)
-    text = re.sub(r"\b(20\d{2})[-/]\d{1,2}[-/]\d{1,2}\b", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.casefold().strip()
-
-
-def _is_project_series_candidate(candidate: dict) -> bool:
-    return _contains_any_term(_candidate_selection_text(candidate), PROJECT_SERIES_TERMS)
-
-
-def _candidate_project_stage(candidate: dict) -> str:
-    text = _candidate_selection_text(candidate)
-    for stage, terms in PROJECT_STAGE_GROUPS.items():
-        if _contains_any_term(text, terms):
-            return stage
-    return ""
-
-
-def _same_project_stage_or_unspecified(left: dict, right: dict) -> bool:
-    left_stage = _candidate_project_stage(left)
-    right_stage = _candidate_project_stage(right)
-    return not left_stage or not right_stage or left_stage == right_stage
-
-
-def _duplicate_event_reason(candidate: dict, selected_item: dict) -> str:
-    if int(lookback_int) in ADVANCED_LOOKBACK_OPTIONS and _is_project_series_candidate(candidate) and _is_project_series_candidate(selected_item):
-        return "同一城市/地點、相同系統主題與相近專案階段，長期回顧視為同一專案系列。"
-    if candidate.get("classification") == "重大事故":
-        return "同一城市/地點、相近日期與相同事故/安全主題，事件級重複排除。"
-    return "相同城市/地點、相近日期與相同系統主題，事件級重複排除。"
-
-
-def _is_same_report_event(candidate: dict, selected_item: dict) -> bool:
-    candidate_fp = build_event_fingerprint(candidate)
-    selected_fp = build_event_fingerprint(selected_item)
-    candidate_operator = candidate_fp.get("operator_key", "")
-    selected_operator = selected_fp.get("operator_key", "")
-    if candidate_operator and selected_operator and candidate_operator != selected_operator:
-        return False
-    candidate_geo = candidate_fp.get("geo_key", "")
-    selected_geo = selected_fp.get("geo_key", "")
-    if candidate_geo and selected_geo and candidate_geo != selected_geo:
-        return False
-    candidate_asset = candidate_fp.get("asset_key", "")
-    selected_asset = selected_fp.get("asset_key", "")
-    if candidate_asset and selected_asset and candidate_asset != selected_asset:
-        return False
-    candidate_lines = _dedupe_route_line_tokens(candidate)
-    selected_lines = _dedupe_route_line_tokens(selected_item)
-    if candidate_lines and selected_lines and candidate_lines.isdisjoint(selected_lines):
-        return False
-
-    is_accident = "重大事故" in {
-        candidate.get("classification"), selected_item.get("classification"),
-        candidate.get("primary_category"), selected_item.get("primary_category"),
-    }
-    date_close = _event_date_close(candidate, selected_item, days=7 if is_accident else 3)
-    if (
-        date_close
-        and candidate_geo
-        and candidate_geo == selected_geo
-        and candidate_asset
-        and candidate_asset == selected_asset
-        and candidate_fp.get("action_key") == selected_fp.get("action_key")
-        and (candidate_operator == selected_operator or not candidate_operator or not selected_operator)
-    ):
-        return True
-
-    if _dedupe_titles_conflict_on_entities(candidate, selected_item):
-        return False
-    candidate_location = _candidate_event_location(candidate)
-    selected_location = _candidate_event_location(selected_item)
-    similarity = difflib.SequenceMatcher(
-        None,
-        _event_similarity_text(candidate),
-        _event_similarity_text(selected_item),
-    ).ratio()
-    candidate_specific_location = _candidate_specific_event_location(candidate)
-    selected_specific_location = _candidate_specific_event_location(selected_item)
-    same_specific_location = bool(candidate_specific_location and selected_specific_location and candidate_specific_location == selected_specific_location)
-    if candidate_specific_location and selected_specific_location and candidate_specific_location != selected_specific_location:
-        return False
-    if int(lookback_int) in ADVANCED_LOOKBACK_OPTIONS and same_specific_location:
-        if is_accident and (date_close or similarity >= 0.70):
-            return True
-        if _is_project_series_candidate(candidate) and _is_project_series_candidate(selected_item) and _same_project_stage_or_unspecified(candidate, selected_item):
-            return True
-        if similarity >= 0.76:
-            return True
-    if not date_close:
-        return False
-    if same_specific_location:
-        return True
-    return similarity >= 0.62
-
-
-def _is_duplicate_selected_event(candidate: dict, selected: list[dict]) -> bool:
-    return any(_is_same_report_event(candidate, item) for item in selected)
-
-
-def _python_selection_sort_key(candidate: dict) -> tuple:
-    return (
-        -int(candidate.get("python_score", 0) or 0),
-        _source_tier_rank(candidate.get("source_tier", "C_media")),
-        -_date_sort_key(candidate),
-        -int(_has_source_reference(candidate)),
-        -_selection_good_flag_count(candidate),
-        _selection_bad_flag_count(candidate),
-        int(candidate.get("id", 0) or 0),
-    )
-
-
-def _python_selection_dynamic_key(candidate: dict, selected: list[dict]) -> tuple:
-    base_key = _python_selection_sort_key(candidate)
-    if int(lookback_int) not in ADVANCED_LOOKBACK_OPTIONS:
-        return base_key
-    selected_locations = [_candidate_specific_event_location(item) or _candidate_event_location(item) for item in selected]
-    selected_regions = [item.get("region", "") for item in selected]
-    selected_months = [_candidate_month_key(item) for item in selected]
-    selected_themes = [_candidate_system_theme(item) for item in selected]
-    selected_incidents = [_candidate_incident_type(item) for item in selected]
-    selected_operators = [_candidate_operator_key(item) for item in selected if _candidate_operator_key(item)]
-    candidate_location = _candidate_specific_event_location(candidate) or _candidate_event_location(candidate)
-    candidate_operator = _candidate_operator_key(candidate)
-    operator_penalty = selected_operators.count(candidate_operator) if int(lookback_int) >= 365 and candidate_operator else 0
-    diversity_penalty = (
-        operator_penalty,
-        selected_locations.count(candidate_location),
-        selected_regions.count(candidate.get("region", "")),
-        selected_incidents.count(_candidate_incident_type(candidate)),
-        selected_months.count(_candidate_month_key(candidate)),
-        selected_themes.count(_candidate_system_theme(candidate)),
-    )
-    return base_key[:2] + diversity_penalty + base_key[2:]
-
-
-def _long_term_diversity_skip_reason(candidate: dict, selected: list[dict]) -> str:
-    if int(lookback_int) not in ADVANCED_LOOKBACK_OPTIONS or len(selected) < 6:
-        return ""
-    classification = _selection_classification(candidate)
-    location = _candidate_specific_event_location(candidate) or _candidate_event_location(candidate)
-    region = candidate.get("region", "")
-    theme = _candidate_system_theme(candidate)
-    incident_type = _candidate_incident_type(candidate)
-    operator = _candidate_operator_key(candidate)
-    same_location_count = sum(
-        1 for item in selected
-        if (_candidate_specific_event_location(item) or _candidate_event_location(item)) == location
-        and _selection_classification(item) == classification
-    )
-    same_region_incident_count = sum(
-        1 for item in selected
-        if item.get("region", "") == region
-        and _candidate_incident_type(item) == incident_type
-        and _selection_classification(item) == classification
-    )
-    same_theme_count = sum(
-        1 for item in selected
-        if _candidate_system_theme(item) == theme
-        and _selection_classification(item) == classification
-    )
-    same_operator_count = sum(
-        1 for item in selected
-        if operator and _candidate_operator_key(item) == operator
-    )
-    same_operator_theme_count = sum(
-        1 for item in selected
-        if operator
-        and _candidate_operator_key(item) == operator
-        and _candidate_system_theme(item) == theme
-    )
-    if int(lookback_int) >= 365 and operator:
-        if theme and same_operator_theme_count >= 1:
-            return "年度代表性限制：同一營運機構相同設備/系統主題已入選，避免相似設備案件重複占用篇幅。"
-        if same_operator_count >= 2:
-            return "年度代表性限制：同一營運機構已達 2 則，避免年度回顧過度集中於單一營運者。"
-    if int(lookback_int) >= 365 and theme and same_theme_count >= 3:
-        return "年度代表性限制：相似設備/系統主題已達 3 則，候選不足時可少列。"
-    if classification == "重大事故":
-        if location and same_location_count >= 2:
-            return "長期代表性限制：同一城市/地點重大事故已達 2 則，避免年度回顧過度集中。"
-        if region and incident_type and same_region_incident_count >= 2:
-            return "長期代表性限制：同一國家/地區相同事故型態已達 2 則，避免單一事故類型過度占用篇幅。"
-        if theme and same_theme_count >= 4:
-            return "長期代表性限制：相同系統主題重大事故已達 4 則，候選不足時可少列。"
-    if _is_project_series_candidate(candidate) and location and theme:
-        same_project_theme_count = sum(
-            1 for item in selected
-            if (_candidate_specific_event_location(item) or _candidate_event_location(item)) == location
-            and _candidate_system_theme(item) == theme
-            and _is_project_series_candidate(item)
-        )
-        if same_project_theme_count >= 2:
-            return "長期代表性限制：同一城市/系統專案系列已達 2 則，避免宣傳稿或相近里程碑重複占用篇幅。"
-    return ""
-
-
-def _python_candidate_allowed_for_scope(candidate: dict) -> bool:
-    if is_global_scope:
-        return True
-    region = _canonical_candidate_region(candidate)
-    if region in active_regions:
-        return True
-    text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
-    looks_like_standard = candidate.get("classification") == "規範更新" or _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True)
-    if region in {"國際", "國際研究", "未判定"} and _is_allowed_international_candidate(candidate, text, looks_like_standard):
-        candidate["region"] = "國際"
-        return True
-    return False
-
-
-def _is_low_value_python_selection_candidate(candidate: dict) -> bool:
-    flags = set(candidate.get("candidate_flags", []) or [])
-    score = int(candidate.get("python_score", 0) or 0)
-    has_good_signal = _has_good_report_signal(candidate)
-    has_technical_detail = _has_explicit_technical_system_detail(candidate)
-    text = _candidate_selection_text(candidate)
-    classification = _selection_classification(candidate)
-    if classification == "excluded":
-        return True
-    if _is_financial_market_candidate(candidate):
-        return True
-    if candidate.get("source_tier") == "D_proxy_low_value":
-        return True
-    if classification == "技術新知" and not _passes_technical_triad(dict(candidate, classification="技術新知")):
-        return True
-    if classification == "重大事故" and not _passes_major_accident_gate(dict(candidate, classification="重大事故")):
-        return True
-    if classification == "營運政策" and not _passes_high_value_policy_gate(dict(candidate, classification="營運政策")):
-        return True
-    if classification == "營運爭議" and not _passes_operational_dispute_gate(dict(candidate, classification="營運爭議")):
-        return True
-    if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
-        return True
-    if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS) and classification == "技術新知":
-        return True
-    if _is_low_value_long_term_candidate(candidate):
-        return True
-    if "general_rail_exclusion" in flags or _has_general_rail_exclusion(candidate):
-        return True
-    if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS) and not _has_substantive_detail_for_low_value_notice(candidate):
-        return True
-    if _has_procurement_list_notice(candidate):
-        return True
-    if _has_low_value_official_notice(candidate) and not _has_substantive_detail_for_low_value_notice(candidate):
-        return True
-    if "low_value_service_notice" in flags and not has_good_signal:
-        return True
-    if "low_value_proxy_or_page" in flags and not has_technical_detail:
-        return True
-    if candidate.get("source_tier") == "D_proxy_low_value" and not has_technical_detail:
-        return True
-    if "insufficient_information" in flags and not has_good_signal:
-        return True
-    return score < 45
-
-
-def _is_strict_technical_candidate(candidate: dict) -> bool:
-    return _is_technical_news_selection_candidate(candidate)
-
-
-def _event_source_preference_key(candidate: dict) -> tuple:
-    return (
-        _source_tier_rank(candidate.get("source_tier", "C_media")),
-        _quality_rank(candidate.get("source_quality", "B")),
-        1 if "news.google.com" in _domain_from_url(_effective_source_url(candidate)) else 0,
-        -int(candidate.get("python_score", 0) or 0),
-    )
-
-
-def _supplemental_source_record(candidate: dict) -> dict:
-    return {
-        "title": candidate.get("title", ""),
-        "source_display": candidate.get("source_display") or candidate.get("source", ""),
-        "source_tier": candidate.get("source_tier", ""),
-        "url": _effective_source_url(candidate),
-    }
-
-
-def _merge_duplicate_event_sources(selected_item: dict, candidate: dict) -> bool:
-    incoming_is_preferred = _event_source_preference_key(candidate) < _event_source_preference_key(selected_item)
-    existing_copy = dict(selected_item)
-    primary = candidate if incoming_is_preferred else selected_item
-    supplement = existing_copy if incoming_is_preferred else candidate
-    supplemental_sources = list(primary.get("supplemental_sources", []) or [])
-    supplemental_sources.extend(supplement.get("supplemental_sources", []) or [])
-    supplemental_sources.append(_supplemental_source_record(supplement))
-    unique_sources: list[dict] = []
-    seen: set[tuple[str, str]] = set()
-    for source_row in supplemental_sources:
-        key = (str(source_row.get("url", "") or ""), str(source_row.get("title", "") or ""))
-        if key not in seen:
-            seen.add(key)
-            unique_sources.append(source_row)
-    if incoming_is_preferred:
-        selection_state = {
-            key: existing_copy.get(key)
-            for key in ("include_in_report", "selected_reason", "selection_stage")
-            if key in existing_copy
-        }
-        selected_item.clear()
-        selected_item.update(candidate)
-        selected_item.update(selection_state)
-    selected_item["supplemental_sources"] = unique_sources
-    selected_item["event_source_merge_count"] = len(unique_sources)
-    return incoming_is_preferred
-
-
-def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict | None:
-    while pool:
-        candidate = min(pool, key=lambda item: _python_selection_dynamic_key(item, selected))
-        pool.remove(candidate)
-        duplicate_of = next((item for item in selected if _is_same_report_event(candidate, item)), None)
-        if duplicate_of:
-            source_replaced = _merge_duplicate_event_sources(duplicate_of, candidate)
-            candidate["duplicate_of"] = duplicate_of.get("id", "")
-            candidate["selection_stage"] = "duplicate_suppressed"
-            try:
-                LAST_PYTHON_SELECTION_DEBUG.setdefault("duplicate_event_records", []).append({
-                    "candidate_id": candidate.get("id", ""),
-                    "candidate_title": candidate.get("title", ""),
-                    "duplicate_of_id": duplicate_of.get("id", ""),
-                    "duplicate_of_title": duplicate_of.get("title", ""),
-                    "duplicate_event_reason": _duplicate_event_reason(candidate, duplicate_of),
-                    "candidate_location": _candidate_specific_event_location(candidate) or _candidate_event_location(candidate),
-                    "duplicate_of_location": _candidate_specific_event_location(duplicate_of) or _candidate_event_location(duplicate_of),
-                    "candidate_date": candidate.get("date", ""),
-                    "duplicate_of_date": duplicate_of.get("date", ""),
-                    "candidate_theme": _candidate_system_theme(candidate),
-                    "duplicate_of_theme": _candidate_system_theme(duplicate_of),
-                    "candidate_fingerprint": build_event_fingerprint(candidate),
-                    "duplicate_of_fingerprint": build_event_fingerprint(duplicate_of),
-                    "kept_primary_source": duplicate_of.get("source_display") or duplicate_of.get("source", ""),
-                    "source_replaced_by_higher_priority": source_replaced,
-                    "supplemental_source_count": len(duplicate_of.get("supplemental_sources", []) or []),
-                })
-            except Exception:
-                pass
-            continue
-        diversity_reason = _long_term_diversity_skip_reason(candidate, selected)
-        if diversity_reason:
-            try:
-                LAST_PYTHON_SELECTION_DEBUG.setdefault("duplicate_event_records", []).append({
-                    "candidate_id": candidate.get("id", ""),
-                    "candidate_title": candidate.get("title", ""),
-                    "duplicate_of_id": "",
-                    "duplicate_of_title": "",
-                    "duplicate_event_reason": diversity_reason,
-                    "candidate_location": _candidate_specific_event_location(candidate) or _candidate_event_location(candidate),
-                    "duplicate_of_location": "",
-                    "candidate_date": candidate.get("date", ""),
-                    "duplicate_of_date": "",
-                    "candidate_theme": _candidate_system_theme(candidate),
-                    "duplicate_of_theme": "",
-                    "candidate_incident_type": _candidate_incident_type(candidate),
-                    "candidate_fingerprint": build_event_fingerprint(candidate),
-                })
-            except Exception:
-                pass
-            continue
-        return candidate
-    return None
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -6993,281 +3039,21 @@ def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict 
 LAST_PYTHON_SELECTION_DEBUG: dict = dict(REPORT_SELECTION_DEBUG_DEFAULT)
 
 
-def _is_hard_excluded_for_borderline(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    if _is_financial_market_candidate(candidate):
-        return True
-    if candidate.get("source_tier") == "D_proxy_low_value":
-        return True
-    classification = _selection_classification(candidate)
-    if classification == "excluded":
-        return True
-    if classification == "技術新知" and not _passes_technical_triad(dict(candidate, classification="技術新知")):
-        return True
-    if classification == "重大事故" and not _passes_major_accident_gate(dict(candidate, classification="重大事故")):
-        return True
-    if classification == "營運政策" and not _passes_high_value_policy_gate(dict(candidate, classification="營運政策")):
-        return True
-    if classification == "營運爭議" and not _passes_operational_dispute_gate(dict(candidate, classification="營運爭議")):
-        return True
-    if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
-        return True
-    if _is_low_value_long_term_candidate(candidate):
-        return True
-    if _has_general_rail_exclusion(candidate):
-        return True
-    if _has_procurement_list_notice(candidate):
-        return True
-    if _is_airport_people_mover_only_text(text, candidate.get("source", "")):
-        return True
-    if _contains_any_term(text, GENERAL_RAIL_EXCLUDE_TERMS):
-        return True
-    if _contains_any_term(text, LOW_REPORT_VALUE_TERMS):
-        return True
-    if _contains_any_term(text, NON_URBAN_HARD_EXCLUDE_TERMS) and not _contains_any_term(text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS):
-        return True
-    if _contains_any_term(text, [
-        "lost property", "delay certificate", "route page", "trip result",
-        "contract documents holders list", "mtr e-store", "product page",
-        "失物招領", "延誤證明", "標案文件持有人", "商品", "旅遊攻略",
-    ]):
-        return True
-    return False
 
 
-def _is_b_level_technical_candidate(candidate: dict) -> bool:
-    text = _candidate_selection_text(candidate)
-    if candidate.get("classification") != "技術新知":
-        return False
-    if _is_hard_excluded_for_borderline(candidate):
-        return False
-    if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS):
-        return False
-    if _is_accident_signal_text(text):
-        return False
-    if not _candidate_date_obj(candidate.get("date", "")):
-        return False
-    if not _has_source_reference(candidate):
-        return False
-    if not _candidate_urban_rail_gate(candidate):
-        return False
-    if not _passes_technical_triad(candidate):
-        return False
-    if candidate.get("source_tier") in {"A_official", "B_professional"}:
-        return True
-    return _contains_any_term(text, MEDIUM_TECHNICAL_DETAIL_TERMS + WEEKLY_BACKFILL_ALLOWED_TERMS)
 
 
-def _is_borderline_report_candidate(candidate: dict) -> tuple[bool, str]:
-    classification = candidate.get("classification") or _selection_classification(candidate)
-    candidate["classification"] = classification
-    if classification not in selected_types:
-        return False, "類型未勾選"
-    if not _python_candidate_allowed_for_scope(candidate):
-        return False, "國家/地區不在指定範圍"
-    if _is_hard_excluded_for_borderline(candidate):
-        return False, "硬排除項"
-    flags = set(candidate.get("candidate_flags", []) or [])
-    text = _candidate_selection_text(candidate)
-    if not _candidate_date_obj(candidate.get("date", "")):
-        return False, "日期不明"
-    if not _has_source_reference(candidate):
-        return False, "來源/URL 不明"
-    score = int(candidate.get("python_score", 0) or 0)
-    if classification == "重大事故" and score < 62:
-        return False, "重大事故候補分數低於 62"
-    if classification != "重大事故" and score < 58:
-        return False, "B級候補分數低於 58"
-    if candidate.get("source_tier") == "C_media" and score < 70:
-        return False, "一般媒體候補需較完整內容與較高分數"
-    if classification == "技術新知":
-        if _is_strict_technical_candidate(candidate):
-            return True, "A級技術新知"
-        if _is_b_level_technical_candidate(candidate):
-            return True, "B級技術新知候補"
-        return False, "技術門檻不足"
-    if classification == "重大事故":
-        if _passes_major_accident_gate(candidate):
-            return True, "重大事故嚴重度門檻明確"
-        return False, "事故價值不足"
-    if classification == "營運政策":
-        if _passes_high_value_policy_gate(candidate):
-            return True, "具捷運專屬性與系統/路線層級影響"
-        return False, "營運政策價值不足"
-    if classification == "營運爭議":
-        if _passes_operational_dispute_gate(candidate):
-            return True, "具明確衝突主體與營運影響"
-        return False, "營運爭議衝突或影響不足"
-    if classification == "規範更新":
-        if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
-            return True, "規範更新條件完整"
-        return False, "規範更新條件不足"
-    return False, "未符合候補條件"
 
 
-def _selection_lower_bound(days: int) -> int:
-    lower, _ = _selection_target_range(days)
-    return lower
 
 
-def _borderline_cap(days: int) -> int:
-    try:
-        days = int(days)
-    except (TypeError, ValueError):
-        days = 7
-    if days >= 365:
-        return 4
-    if days >= 30:
-        return 3
-    return 2
 
 
-def _selection_debug_reset() -> dict:
-    debug = dict(REPORT_SELECTION_DEBUG_DEFAULT)
-    debug["duplicate_event_records"] = []
-    debug["borderline_candidates"] = []
-    debug["B_backfill_appended_ids"] = []
-    debug["backfill_reason"] = ""
-    return debug
 
 
-def _select_from_grouped_pools(grouped: dict[str, list[dict]], max_items: int) -> list[dict]:
-    selected: list[dict] = []
-    if len(selected_types) <= 1:
-        only_type = selected_types[0] if selected_types else ""
-        while len(selected) < max_items:
-            candidate = _take_next_python_candidate(grouped.get(only_type, []), selected)
-            if not candidate:
-                break
-            selected.append(candidate)
-        return selected
-
-    for category in selected_types:
-        if len(selected) >= max_items:
-            break
-        candidate = _take_next_python_candidate(grouped.get(category, []), selected)
-        if candidate:
-            selected.append(candidate)
-
-    while len(selected) < max_items:
-        added = False
-        for category in selected_types:
-            if len(selected) >= max_items:
-                break
-            candidate = _take_next_python_candidate(grouped.get(category, []), selected)
-            if candidate:
-                selected.append(candidate)
-                added = True
-        if not added:
-            break
-    return selected
 
 
-def _backfill_borderline_candidates(
-    selected: list[dict],
-    model_candidates: list[dict],
-    min_items: int,
-    max_items: int,
-    debug: dict,
-) -> list[dict]:
-    selected_ids = {int(item.get("id", 0) or 0) for item in selected}
-    shortfall_before = max(0, min_items - len(selected))
-    borderline_cap = _borderline_cap(lookback_int)
-    debug["shortfall_before_backfill"] = shortfall_before
-    debug["B_backfill_triggered"] = shortfall_before > 0
-    debug["B_backfill_cap"] = borderline_cap
-    debug["B_backfill_append_stage"] = "after_strict_selection_before_rebalance"
-    debug["B_backfill_considered_count"] = 0
-    debug["B_backfill_appended_ids"] = []
-    if shortfall_before <= 0:
-        debug["shortfall_after_backfill"] = 0
-        debug["backfill_reason"] = "嚴格入選已達目標下限，無需候補。"
-        return selected
 
-    borderline_pool: list[dict] = []
-    for raw_candidate in model_candidates or []:
-        candidate_id = int(raw_candidate.get("id", 0) or 0)
-        if candidate_id in selected_ids:
-            continue
-        candidate = dict(raw_candidate)
-        classification = _selection_classification(candidate)
-        candidate["classification"] = classification
-        allowed, reason = _is_borderline_report_candidate(candidate)
-        if not allowed:
-            continue
-        candidate["selected_reason"] = (
-            f"Python 合格候補：{reason}；score={candidate.get('python_score', 0)}；"
-            f"tier={candidate.get('source_tier', '')}；flags={','.join(candidate.get('candidate_flags', []) or [])}"
-        )
-        candidate["include_in_report"] = True
-        candidate["borderline_reason"] = reason
-        candidate["selection_stage"] = "B_backfill_candidate"
-        candidate["candidate_level"] = "B"
-        borderline_pool.append(candidate)
-
-    borderline_pool = sorted(borderline_pool, key=_python_selection_sort_key)
-    debug["B_backfill_considered_count"] = len(borderline_pool)
-    while borderline_pool and len(selected) < min_items and len(selected) < max_items:
-        if len(debug["borderline_candidates"]) >= borderline_cap:
-            debug["backfill_reason"] = f"B級候補已達本期上限 {borderline_cap} 則。"
-            break
-        candidate = _take_next_python_candidate(borderline_pool, selected)
-        if not candidate:
-            break
-        selected.append(candidate)
-        candidate["selection_stage"] = "B_backfilled_selected"
-        selected_ids.add(int(candidate.get("id", 0) or 0))
-        debug["B_backfill_appended_ids"].append(int(candidate.get("id", 0) or 0))
-        if len(debug["borderline_candidates"]) < 20:
-            debug["borderline_candidates"].append(build_candidate_card(candidate) | {"borderline_reason": candidate.get("borderline_reason", "")})
-
-    debug["borderline_added_count"] = len(debug["B_backfill_appended_ids"])
-    debug["B_added_count"] = debug["borderline_added_count"]
-    debug["shortfall_after_backfill"] = max(0, min_items - len(selected))
-    if debug["borderline_added_count"]:
-        debug["backfill_reason"] = f"嚴格入選不足 {shortfall_before} 則，已補入合格候補 {debug['borderline_added_count']} 則。"
-    elif debug["shortfall_after_backfill"]:
-        debug["backfill_reason"] = "嚴格入選不足，且未找到符合日期、來源、都市軌道與報告價值門檻之合格候補。"
-    else:
-        debug["backfill_reason"] = "候補後已達目標下限。"
-    return selected
-
-def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
-    global LAST_PYTHON_SELECTION_DEBUG
-    LAST_PYTHON_SELECTION_DEBUG = _selection_debug_reset()
-    min_items, max_items = _selection_target_range(lookback_int)
-    grouped: dict[str, list[dict]] = {category: [] for category in selected_types}
-    for raw_candidate in model_candidates or []:
-        candidate = dict(raw_candidate)
-        classification = _selection_classification(candidate)
-        candidate["classification"] = classification
-        if classification not in selected_types:
-            continue
-        if classification == "技術新知" and not _is_strict_technical_candidate(candidate):
-            continue
-        if not _python_candidate_allowed_for_scope(candidate):
-            continue
-        if _is_low_value_python_selection_candidate(candidate):
-            continue
-        candidate["selected_reason"] = (
-            f"Python 嚴格規則選題：score={candidate.get('python_score', 0)}；"
-            f"tier={candidate.get('source_tier', '')}；flags={','.join(candidate.get('candidate_flags', []) or [])}"
-        )
-        candidate["include_in_report"] = True
-        candidate["selection_stage"] = "A_strict_selected"
-        candidate["candidate_level"] = "A"
-        grouped.setdefault(classification, []).append(candidate)
-
-    for category in grouped:
-        grouped[category] = sorted(grouped[category], key=_python_selection_sort_key)
-
-    selected = _select_from_grouped_pools(grouped, max_items)
-    LAST_PYTHON_SELECTION_DEBUG["strict_selected_count"] = len(selected)
-    selected = _backfill_borderline_candidates(selected, model_candidates or [], min_items, max_items, LAST_PYTHON_SELECTION_DEBUG)
-    LAST_PYTHON_SELECTION_DEBUG["final_selected_count"] = len(selected)
-    LAST_PYTHON_SELECTION_DEBUG["incident_selected_count"] = sum(1 for item in selected if item.get("classification") == "重大事故")
-    LAST_PYTHON_SELECTION_DEBUG["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("borderline_added_count", 0)
-    return rebalance_selected_candidates(selected)
 
 
 def build_selection_prompt(candidates: list[dict]) -> str:
@@ -7524,16 +3310,7 @@ def format_report_candidate(candidate: dict) -> str:
     return json.dumps(prompt_item, ensure_ascii=False)
 
 
-def ensure_selected_candidate_ids(selected_candidates: list[dict]) -> list[dict]:
-    """Freeze each selected item to its Python-assigned candidate ID."""
-    seen: set[int] = set()
-    for candidate in selected_candidates or []:
-        candidate_id = int(candidate.get("candidate_id") or candidate.get("id") or 0)
-        if candidate_id <= 0 or candidate_id in seen:
-            raise ValueError(f"selected candidate_id 無效或重複：{candidate_id}")
-        seen.add(candidate_id)
-        candidate["candidate_id"] = candidate_id
-    return selected_candidates
+ensure_selected_candidate_ids = service_ensure_selected_candidate_ids
 
 
 def _journal_year(item: dict) -> str:
@@ -8165,97 +3942,14 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 正式正文禁止出現「資料未提供」、「候選資料未提供」、「原始資料未提供」、「資料來源未載明」等缺漏說明。資訊不足時直接縮短內容，不得列舉缺少的規格、時程、金額、測試內容、設備項目或其他未提供資料。
 """.strip()
 
-def _extract_maiagent_text(data) -> str:
-    """寬鬆解析 MaiAgent 不同版本可能回傳的文字欄位。"""
-    if isinstance(data, str):
-        return data.strip()
-
-    if isinstance(data, dict):
-        for key in ("content", "text", "answer", "output", "response"):
-            value = data.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-
-        message = data.get("message")
-        if isinstance(message, dict):
-            for key in ("content", "text", "answer"):
-                value = message.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-
-        content_payload = data.get("contentPayload") or data.get("content_payload")
-        if isinstance(content_payload, dict):
-            for key in ("content", "text", "answer"):
-                value = content_payload.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-
-            items = content_payload.get("items")
-            if isinstance(items, list):
-                texts = []
-                for item in items:
-                    if isinstance(item, dict):
-                        value = item.get("text") or item.get("content") or item.get("answer")
-                        if value:
-                            texts.append(str(value))
-                if texts:
-                    return "\n".join(texts).strip()
-
-        # 常見巢狀結果欄位 fallback
-        for key in ("result", "data"):
-            nested = data.get(key)
-            if isinstance(nested, (dict, str)):
-                nested_text = _extract_maiagent_text(nested)
-                if nested_text and nested_text != str(nested):
-                    return nested_text
-
-    text = str(data).strip()
-    if text:
-        return text
-    raise ValueError("MaiAgent 回應無文字內容")
+_extract_maiagent_text = extract_maiagent_text
 
 
 def call_maiagent_cloud(prompt: str) -> str:
-    """呼叫 MaiAgent 雲端 Chatbot completions API 產生報告。"""
-    if not maiagent_api_key:
-        raise RuntimeError("未設定 MAIAGENT_API_KEY")
-    if not maiagent_chatbot_id:
-        raise RuntimeError("未設定 MAIAGENT_CHATBOT_ID")
-
-    base_url = maiagent_api_base.rstrip("/")
-    endpoint = f"{base_url}/api/chatbots/{maiagent_chatbot_id}/completions"
-    v1_endpoint = f"{base_url}/api/v1/chatbots/{maiagent_chatbot_id}/completions"
-    headers = {
-        "Authorization": f"Api-Key {maiagent_api_key}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-    payloads = [
-        {"message": {"content": prompt}, "isStreaming": False},
-        {"message": {"content": prompt}, "is_streaming": False},
-    ]
-    endpoints = [endpoint + "/", endpoint, v1_endpoint + "/", v1_endpoint]
-    last_error = None
-
-    for url in endpoints:
-        for payload in payloads:
-            try:
-                response = requests.post(url, headers=headers, json=payload, timeout=240)
-                if response.status_code in (400, 404, 422):
-                    last_error = RuntimeError(f"MaiAgent API 回應 {response.status_code}: {response.text[:500]}")
-                    continue
-                response.raise_for_status()
-                try:
-                    data = response.json()
-                except ValueError:
-                    return response.text.strip()
-                return _extract_maiagent_text(data)
-            except Exception as exc:
-                last_error = exc
-                continue
-
-    raise RuntimeError(f"MaiAgent API 呼叫失敗：{last_error}")
+    return call_maiagent_service(
+        prompt, api_key=maiagent_api_key, chatbot_id=maiagent_chatbot_id,
+        api_base=maiagent_api_base,
+    )
 
 
 def markdown_to_html(md: str) -> str:
@@ -8273,27 +3967,10 @@ def short_url_label(url: str) -> str:
     return f"來源連結（{host}）"
 
 
-def _extract_complete_url(text: str) -> str:
-    match = re.search(r"https?://[^\s\)\]）＞>，,；;。]+", text or "")
-    if not match:
-        return ""
-    return match.group(0).rstrip("。；;,，)")
 
 
-def _extract_complete_urls(text: str) -> list[str]:
-    return [
-        match.group(0).rstrip("。；;,，)")
-        for match in re.finditer(r"https?://[^\s\)\]）＞>，,；;。]+", text or "")
-    ]
 
 
-def _extract_domain_hint(text: str) -> str:
-    text = text or ""
-    url = _extract_complete_url(text)
-    if url:
-        return _domain_from_url(url)
-    match = re.search(r"\b(?:[a-z0-9-]+\.)+(?:com|org|net|gov|edu|info|co|jp|kr|sg|hk|uk|fr|de|au|ca|tw)\b", text, flags=re.IGNORECASE)
-    return match.group(0).lower() if match else ""
 
 
 def _normalize_report_date_text(text: str) -> str:
@@ -10008,43 +5685,17 @@ def repair_generic_report_titles(report_md: str, selected_candidates: list[dict]
     return "".join(output)
 
 
-REPORT_CANDIDATE_ID_PATTERN = re.compile(
-    r"<!--\s*candidate_id\s*:\s*(\d+)\s*-->",
-    flags=re.IGNORECASE,
-)
-REPORT_ESCAPED_CANDIDATE_ID_PATTERN = re.compile(
-    r"&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;",
-    flags=re.IGNORECASE,
-)
-INTERNAL_CANDIDATE_MARKER_PATTERN = re.compile(
-    r"<!--\s*candidate\\?_id\s*:\s*[^>]*-->",
-    flags=re.IGNORECASE,
-)
-ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN = re.compile(
-    r"&lt;!--\s*candidate\\?_id\s*:\s*.*?--&gt;",
-    flags=re.IGNORECASE,
-)
+REPORT_CANDIDATE_ID_PATTERN = SERVICE_REPORT_CANDIDATE_ID_PATTERN
+REPORT_ESCAPED_CANDIDATE_ID_PATTERN = SERVICE_REPORT_ESCAPED_CANDIDATE_ID_PATTERN
+INTERNAL_CANDIDATE_MARKER_PATTERN = SERVICE_INTERNAL_CANDIDATE_MARKER_PATTERN
+ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN = SERVICE_ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN
 LAST_REPORT_ID_VALIDATION: dict = {}
 
 
-def extract_report_candidate_ids(text: str) -> list[int]:
-    """Parse literal or HTML-escaped internal IDs before public-output cleanup."""
-    matches = [
-        (match.start(), int(match.group(1)))
-        for pattern in (REPORT_CANDIDATE_ID_PATTERN, REPORT_ESCAPED_CANDIDATE_ID_PATTERN)
-        for match in pattern.finditer(text or "")
-    ]
-    return [candidate_id for _, candidate_id in sorted(matches)]
+extract_report_candidate_ids = service_extract_report_candidate_ids
 
 
-def remove_internal_candidate_markers(text: str) -> str:
-    """Remove literal and HTML-escaped internal markers from public report text."""
-    if not text:
-        return ""
-    cleaned = INTERNAL_CANDIDATE_MARKER_PATTERN.sub("", text)
-    cleaned = ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN.sub("", cleaned)
-    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
-    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+remove_internal_candidate_markers = service_remove_internal_candidate_markers
 
 
 def strip_candidate_id_markers(text: str) -> str:
@@ -10052,39 +5703,10 @@ def strip_candidate_id_markers(text: str) -> str:
     return remove_internal_candidate_markers(text)
 
 
-def validate_report_candidate_ids(report_md: str, selected_candidates: list[dict]) -> dict:
-    expected_ids = [int(item.get("candidate_id") or item.get("id") or 0) for item in selected_candidates or []]
-    found_ids = extract_report_candidate_ids(report_md)
-    expected_set = set(expected_ids)
-    found_set = set(found_ids)
-    duplicate_ids = sorted({value for value in found_ids if found_ids.count(value) > 1})
-    return {
-        "expected_ids": expected_ids,
-        "found_ids": found_ids,
-        "missing_ids": [value for value in expected_ids if value not in found_set],
-        "unknown_ids": sorted(found_set - expected_set),
-        "duplicate_ids": duplicate_ids,
-        "valid": found_set == expected_set and not duplicate_ids and len(found_ids) == len(expected_ids),
-    }
+validate_report_candidate_ids = service_validate_report_candidate_ids
 
 
-def build_report_retry_prompt(
-    original_prompt: str,
-    previous_response: str,
-    validation: dict,
-) -> str:
-    return f"""{original_prompt}
-
-## 輸出完整性重試
-上一次輸出未通過 candidate_id 驗證。
-- 缺少 ID：{validation.get('missing_ids', [])}
-- 未知 ID：{validation.get('unknown_ids', [])}
-- 重複 ID：{validation.get('duplicate_ids', [])}
-請重新輸出完整報告。每個 expected candidate_id 必須且只能出現一次，標記格式必須是 `<!-- candidate_id: N -->`，並緊接在該則正式新聞標題前。不得只補局部段落。
-
-上一次輸出僅供修正格式參考：
-{previous_response}
-""".strip()
+build_report_retry_prompt = service_build_report_retry_prompt
 
 
 def _extract_marked_candidate_blocks(report_md: str) -> tuple[dict[int, str], list[int]]:
