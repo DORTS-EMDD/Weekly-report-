@@ -56,17 +56,17 @@ def extract_maiagent_text(data) -> str:
     raise ValueError("MaiAgent 回應無文字內容")
 
 
-def build_maiagent_request_attempts(prompt: str, api_key: str, chatbot_id: str, api_base: str):
-    """Return the exact V19.4 endpoint/header/payload attempt sequence."""
+def build_maiagent_request(prompt: str, api_key: str, chatbot_id: str, api_base: str):
+    """Return the single request required by the MaiAgent v1 completions API."""
     base_url = api_base.rstrip("/")
-    endpoint = f"{base_url}/api/chatbots/{chatbot_id}/completions"
-    v1_endpoint = f"{base_url}/api/v1/chatbots/{chatbot_id}/completions"
+    endpoint = f"{base_url}/api/v1/chatbots/{chatbot_id}/completions/"
     headers = {"Authorization": f"Api-Key {api_key}", "Content-Type": "application/json", "Accept": "application/json"}
-    payloads = [
-        {"message": {"content": prompt}, "isStreaming": False},
-        {"message": {"content": prompt}, "is_streaming": False},
-    ]
-    return [endpoint + "/", endpoint, v1_endpoint + "/", v1_endpoint], headers, payloads
+    payload = {
+        "conversation": None,
+        "message": {"content": prompt, "attachments": []},
+        "is_streaming": False,
+    }
+    return endpoint, headers, payload
 
 
 def call_maiagent_cloud(prompt: str, *, api_key: str, chatbot_id: str, api_base: str, http_client=requests) -> str:
@@ -75,25 +75,25 @@ def call_maiagent_cloud(prompt: str, *, api_key: str, chatbot_id: str, api_base:
         raise RuntimeError("未設定 MAIAGENT_API_KEY")
     if not chatbot_id:
         raise RuntimeError("未設定 MAIAGENT_CHATBOT_ID")
-    endpoints, headers, payloads = build_maiagent_request_attempts(prompt, api_key, chatbot_id, api_base)
-    last_error = None
-    for url in endpoints:
-        for payload in payloads:
-            try:
-                response = http_client.post(url, headers=headers, json=payload, timeout=240)
-                if response.status_code in (400, 404, 422):
-                    last_error = RuntimeError(f"MaiAgent API 回應 {response.status_code}: {response.text[:500]}")
-                    continue
-                response.raise_for_status()
-                try:
-                    data = response.json()
-                except ValueError:
-                    return response.text.strip()
-                return extract_maiagent_text(data)
-            except Exception as exc:
-                last_error = exc
-                continue
-    raise RuntimeError(f"MaiAgent API 呼叫失敗：{last_error}")
+    url, headers, payload = build_maiagent_request(prompt, api_key, chatbot_id, api_base)
+    try:
+        response = http_client.post(url, headers=headers, json=payload, timeout=240)
+    except Exception as exc:
+        raise RuntimeError(f"MaiAgent API 呼叫失敗：{exc}") from exc
+
+    if not 200 <= response.status_code < 300:
+        location = response.headers.get("Location", "")
+        allow = response.headers.get("Allow", "")
+        raise RuntimeError(
+            f"MaiAgent API 回應 {response.status_code}: "
+            f"body={response.text}; Location={location}; Allow={allow}"
+        )
+
+    try:
+        data = response.json()
+    except ValueError:
+        return response.text.strip()
+    return extract_maiagent_text(data)
 
 
 def ensure_selected_candidate_ids(selected_candidates: list[dict]) -> list[dict]:
