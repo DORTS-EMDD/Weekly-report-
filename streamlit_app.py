@@ -39,6 +39,29 @@ from pdf_exporter import (
     _soft_wrap_long_tokens as shared_soft_wrap_long_tokens,
 )
 from email_service import send_streamlit_email
+from search_service import (
+    FeedFetchError as ServiceFeedFetchError,
+    google_news_search_url as service_google_news_search_url,
+    google_news_site_proxy_url as service_google_news_site_proxy_url,
+    compact_query as service_compact_query,
+    ddgs_timelimit_for_lookback as service_ddgs_timelimit_for_lookback,
+    create_requests_session as service_create_requests_session,
+    fetch_feed as service_fetch_feed,
+    execute_ddgs_query as service_execute_ddgs_query,
+)
+from maiagent_service import (
+    call_maiagent_cloud as call_maiagent_service,
+    extract_maiagent_text,
+    ensure_selected_candidate_ids as service_ensure_selected_candidate_ids,
+    extract_report_candidate_ids as service_extract_report_candidate_ids,
+    remove_internal_candidate_markers as service_remove_internal_candidate_markers,
+    validate_report_candidate_ids as service_validate_report_candidate_ids,
+    build_report_retry_prompt as service_build_report_retry_prompt,
+    REPORT_CANDIDATE_ID_PATTERN as SERVICE_REPORT_CANDIDATE_ID_PATTERN,
+    REPORT_ESCAPED_CANDIDATE_ID_PATTERN as SERVICE_REPORT_ESCAPED_CANDIDATE_ID_PATTERN,
+    INTERNAL_CANDIDATE_MARKER_PATTERN as SERVICE_INTERNAL_CANDIDATE_MARKER_PATTERN,
+    ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN as SERVICE_ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN,
+)
 
 try:
     from ddgs import DDGS
@@ -1528,22 +1551,11 @@ def build_report_download_filename(prefix: str, extension: str, run_config: dict
 
 
 def google_news_search_url(query: str, hl: str = "en-US", gl: str = "US", ceid_lang: str = "en") -> str:
-    return (
-        "https://news.google.com/rss/search?q="
-        f"{urllib.parse.quote(query)}&hl={hl}&gl={gl}&ceid={gl}:{ceid_lang}"
-    )
+    return service_google_news_search_url(query, hl=hl, gl=gl, ceid_lang=ceid_lang)
 
 
-def google_news_site_proxy_url(
-    domain: str,
-    days: int,
-    keywords: str = TRANSIT_NEWS_TERMS,
-    hl: str = "en-US",
-    gl: str = "US",
-    ceid_lang: str = "en",
-) -> str:
-    query = f"site:{domain} {keywords} when:{max(1, min(int(days), 365))}d"
-    return google_news_search_url(query, hl=hl, gl=gl, ceid_lang=ceid_lang)
+def google_news_site_proxy_url(domain: str, days: int, keywords: str = TRANSIT_NEWS_TERMS, hl: str = "en-US", gl: str = "US", ceid_lang: str = "en") -> str:
+    return service_google_news_site_proxy_url(domain, days, keywords, hl=hl, gl=gl, ceid_lang=ceid_lang)
 
 
 # ═══════════════════════════════════════════════════════
@@ -1973,32 +1985,10 @@ def _is_recent(pub_str: str, cutoff: datetime.datetime) -> bool:
         return True
 
 
-class FeedFetchError(Exception):
-    def __init__(self, status: str, message: str):
-        super().__init__(message)
-        self.status = status
-        self.message = message
+FeedFetchError = ServiceFeedFetchError
 
 
-def create_requests_session() -> requests.Session:
-    session = requests.Session()
-    retry = Retry(
-        total=2,
-        connect=2,
-        read=2,
-        backoff_factor=0.8,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset(["GET"]),
-        raise_on_status=False,
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (compatible; TaipeiMetroAIWeekly/5.0; +https://www.dorts.gov.taipei/)",
-        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
-    })
-    return session
+create_requests_session = service_create_requests_session
 
 
 def _source_tuple(source) -> tuple[str, str]:
@@ -2541,26 +2531,7 @@ def _entry_pub_str(entry) -> str:
 
 
 def _fetch_feed(session: requests.Session, url: str):
-    if feedparser is None:
-        raise FeedFetchError("parse error", "feedparser 套件未安裝")
-    try:
-        response = session.get(url, timeout=15)
-    except requests.exceptions.Timeout as exc:
-        raise FeedFetchError("timeout", str(exc)) from exc
-    except requests.exceptions.RequestException as exc:
-        raise FeedFetchError("parse error", str(exc)) from exc
-
-    if response.status_code == 403:
-        raise FeedFetchError("403", "HTTP 403 Forbidden")
-    if response.status_code in (404, 405):
-        raise FeedFetchError(str(response.status_code), f"HTTP {response.status_code}")
-    if response.status_code >= 400:
-        raise FeedFetchError("parse error", f"HTTP {response.status_code}")
-
-    parsed = feedparser.parse(response.content)
-    if getattr(parsed, "bozo", False) and not getattr(parsed, "entries", []):
-        raise FeedFetchError("parse error", str(getattr(parsed, "bozo_exception", "RSS/Atom parse error")))
-    return parsed
+    return service_fetch_feed(session, url, feedparser)
 
 
 def _items_from_parsed_feed(
@@ -2845,25 +2816,10 @@ def _search_family_from_query(query: str) -> str:
 
 
 def _compact_query(query: str, limit: int = DDGS_QUERY_CHAR_LIMIT) -> str:
-    q = re.sub(r"\s+", " ", (query or "").strip())
-    if len(q) <= limit:
-        return q
-    words = q.split(" ")
-    kept: list[str] = []
-    for word in words:
-        candidate = " ".join(kept + [word])
-        if len(candidate) > limit:
-            break
-        kept.append(word)
-    return " ".join(kept).strip() or q[:limit].rstrip()
+    return service_compact_query(query, limit)
 
 
-def _ddgs_timelimit_for_lookback(days: int) -> str:
-    if int(days) <= 7:
-        return "w"
-    if int(days) <= 31:
-        return "m"
-    return "y"
+_ddgs_timelimit_for_lookback = service_ddgs_timelimit_for_lookback
 
 
 def _query_with_period(query: str) -> str:
@@ -3207,22 +3163,11 @@ def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -
         final_backend = backend
         for attempt in range(1, 3):
             try:
-                with DDGS() as ddgs:
-                    if use_news:
-                        results = ddgs.news(
-                            query,
-                            max_results=status_row["requested_max_results"],
-                            timelimit=status_row["timelimit"],
-                            backend=backend,
-                        )
-                    else:
-                        results = ddgs.text(
-                            query,
-                            max_results=status_row["requested_max_results"],
-                            timelimit=status_row["timelimit"],
-                            backend=backend,
-                        )
-                result_list = list(results or [])
+                result_list = service_execute_ddgs_query(
+                    DDGS, query, use_news=use_news,
+                    max_results=status_row["requested_max_results"],
+                    timelimit=status_row["timelimit"], backend=backend,
+                )
                 received_response = True
                 status_row["returned_count"] = len(result_list)
                 if not result_list:
@@ -7524,16 +7469,7 @@ def format_report_candidate(candidate: dict) -> str:
     return json.dumps(prompt_item, ensure_ascii=False)
 
 
-def ensure_selected_candidate_ids(selected_candidates: list[dict]) -> list[dict]:
-    """Freeze each selected item to its Python-assigned candidate ID."""
-    seen: set[int] = set()
-    for candidate in selected_candidates or []:
-        candidate_id = int(candidate.get("candidate_id") or candidate.get("id") or 0)
-        if candidate_id <= 0 or candidate_id in seen:
-            raise ValueError(f"selected candidate_id 無效或重複：{candidate_id}")
-        seen.add(candidate_id)
-        candidate["candidate_id"] = candidate_id
-    return selected_candidates
+ensure_selected_candidate_ids = service_ensure_selected_candidate_ids
 
 
 def _journal_year(item: dict) -> str:
@@ -8165,97 +8101,14 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 正式正文禁止出現「資料未提供」、「候選資料未提供」、「原始資料未提供」、「資料來源未載明」等缺漏說明。資訊不足時直接縮短內容，不得列舉缺少的規格、時程、金額、測試內容、設備項目或其他未提供資料。
 """.strip()
 
-def _extract_maiagent_text(data) -> str:
-    """寬鬆解析 MaiAgent 不同版本可能回傳的文字欄位。"""
-    if isinstance(data, str):
-        return data.strip()
-
-    if isinstance(data, dict):
-        for key in ("content", "text", "answer", "output", "response"):
-            value = data.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-
-        message = data.get("message")
-        if isinstance(message, dict):
-            for key in ("content", "text", "answer"):
-                value = message.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-
-        content_payload = data.get("contentPayload") or data.get("content_payload")
-        if isinstance(content_payload, dict):
-            for key in ("content", "text", "answer"):
-                value = content_payload.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-
-            items = content_payload.get("items")
-            if isinstance(items, list):
-                texts = []
-                for item in items:
-                    if isinstance(item, dict):
-                        value = item.get("text") or item.get("content") or item.get("answer")
-                        if value:
-                            texts.append(str(value))
-                if texts:
-                    return "\n".join(texts).strip()
-
-        # 常見巢狀結果欄位 fallback
-        for key in ("result", "data"):
-            nested = data.get(key)
-            if isinstance(nested, (dict, str)):
-                nested_text = _extract_maiagent_text(nested)
-                if nested_text and nested_text != str(nested):
-                    return nested_text
-
-    text = str(data).strip()
-    if text:
-        return text
-    raise ValueError("MaiAgent 回應無文字內容")
+_extract_maiagent_text = extract_maiagent_text
 
 
 def call_maiagent_cloud(prompt: str) -> str:
-    """呼叫 MaiAgent 雲端 Chatbot completions API 產生報告。"""
-    if not maiagent_api_key:
-        raise RuntimeError("未設定 MAIAGENT_API_KEY")
-    if not maiagent_chatbot_id:
-        raise RuntimeError("未設定 MAIAGENT_CHATBOT_ID")
-
-    base_url = maiagent_api_base.rstrip("/")
-    endpoint = f"{base_url}/api/chatbots/{maiagent_chatbot_id}/completions"
-    v1_endpoint = f"{base_url}/api/v1/chatbots/{maiagent_chatbot_id}/completions"
-    headers = {
-        "Authorization": f"Api-Key {maiagent_api_key}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-    payloads = [
-        {"message": {"content": prompt}, "isStreaming": False},
-        {"message": {"content": prompt}, "is_streaming": False},
-    ]
-    endpoints = [endpoint + "/", endpoint, v1_endpoint + "/", v1_endpoint]
-    last_error = None
-
-    for url in endpoints:
-        for payload in payloads:
-            try:
-                response = requests.post(url, headers=headers, json=payload, timeout=240)
-                if response.status_code in (400, 404, 422):
-                    last_error = RuntimeError(f"MaiAgent API 回應 {response.status_code}: {response.text[:500]}")
-                    continue
-                response.raise_for_status()
-                try:
-                    data = response.json()
-                except ValueError:
-                    return response.text.strip()
-                return _extract_maiagent_text(data)
-            except Exception as exc:
-                last_error = exc
-                continue
-
-    raise RuntimeError(f"MaiAgent API 呼叫失敗：{last_error}")
+    return call_maiagent_service(
+        prompt, api_key=maiagent_api_key, chatbot_id=maiagent_chatbot_id,
+        api_base=maiagent_api_base,
+    )
 
 
 def markdown_to_html(md: str) -> str:
@@ -10008,43 +9861,17 @@ def repair_generic_report_titles(report_md: str, selected_candidates: list[dict]
     return "".join(output)
 
 
-REPORT_CANDIDATE_ID_PATTERN = re.compile(
-    r"<!--\s*candidate_id\s*:\s*(\d+)\s*-->",
-    flags=re.IGNORECASE,
-)
-REPORT_ESCAPED_CANDIDATE_ID_PATTERN = re.compile(
-    r"&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;",
-    flags=re.IGNORECASE,
-)
-INTERNAL_CANDIDATE_MARKER_PATTERN = re.compile(
-    r"<!--\s*candidate\\?_id\s*:\s*[^>]*-->",
-    flags=re.IGNORECASE,
-)
-ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN = re.compile(
-    r"&lt;!--\s*candidate\\?_id\s*:\s*.*?--&gt;",
-    flags=re.IGNORECASE,
-)
+REPORT_CANDIDATE_ID_PATTERN = SERVICE_REPORT_CANDIDATE_ID_PATTERN
+REPORT_ESCAPED_CANDIDATE_ID_PATTERN = SERVICE_REPORT_ESCAPED_CANDIDATE_ID_PATTERN
+INTERNAL_CANDIDATE_MARKER_PATTERN = SERVICE_INTERNAL_CANDIDATE_MARKER_PATTERN
+ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN = SERVICE_ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN
 LAST_REPORT_ID_VALIDATION: dict = {}
 
 
-def extract_report_candidate_ids(text: str) -> list[int]:
-    """Parse literal or HTML-escaped internal IDs before public-output cleanup."""
-    matches = [
-        (match.start(), int(match.group(1)))
-        for pattern in (REPORT_CANDIDATE_ID_PATTERN, REPORT_ESCAPED_CANDIDATE_ID_PATTERN)
-        for match in pattern.finditer(text or "")
-    ]
-    return [candidate_id for _, candidate_id in sorted(matches)]
+extract_report_candidate_ids = service_extract_report_candidate_ids
 
 
-def remove_internal_candidate_markers(text: str) -> str:
-    """Remove literal and HTML-escaped internal markers from public report text."""
-    if not text:
-        return ""
-    cleaned = INTERNAL_CANDIDATE_MARKER_PATTERN.sub("", text)
-    cleaned = ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN.sub("", cleaned)
-    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
-    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+remove_internal_candidate_markers = service_remove_internal_candidate_markers
 
 
 def strip_candidate_id_markers(text: str) -> str:
@@ -10052,39 +9879,10 @@ def strip_candidate_id_markers(text: str) -> str:
     return remove_internal_candidate_markers(text)
 
 
-def validate_report_candidate_ids(report_md: str, selected_candidates: list[dict]) -> dict:
-    expected_ids = [int(item.get("candidate_id") or item.get("id") or 0) for item in selected_candidates or []]
-    found_ids = extract_report_candidate_ids(report_md)
-    expected_set = set(expected_ids)
-    found_set = set(found_ids)
-    duplicate_ids = sorted({value for value in found_ids if found_ids.count(value) > 1})
-    return {
-        "expected_ids": expected_ids,
-        "found_ids": found_ids,
-        "missing_ids": [value for value in expected_ids if value not in found_set],
-        "unknown_ids": sorted(found_set - expected_set),
-        "duplicate_ids": duplicate_ids,
-        "valid": found_set == expected_set and not duplicate_ids and len(found_ids) == len(expected_ids),
-    }
+validate_report_candidate_ids = service_validate_report_candidate_ids
 
 
-def build_report_retry_prompt(
-    original_prompt: str,
-    previous_response: str,
-    validation: dict,
-) -> str:
-    return f"""{original_prompt}
-
-## 輸出完整性重試
-上一次輸出未通過 candidate_id 驗證。
-- 缺少 ID：{validation.get('missing_ids', [])}
-- 未知 ID：{validation.get('unknown_ids', [])}
-- 重複 ID：{validation.get('duplicate_ids', [])}
-請重新輸出完整報告。每個 expected candidate_id 必須且只能出現一次，標記格式必須是 `<!-- candidate_id: N -->`，並緊接在該則正式新聞標題前。不得只補局部段落。
-
-上一次輸出僅供修正格式參考：
-{previous_response}
-""".strip()
+build_report_retry_prompt = service_build_report_retry_prompt
 
 
 def _extract_marked_candidate_blocks(report_md: str) -> tuple[dict[int, str], list[int]]:
