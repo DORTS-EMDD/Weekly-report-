@@ -29,6 +29,40 @@ import streamlit as st
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from report_formatter import (
+    streamlit_markdown_to_html as streamlit_html_renderer,
+    markdown_fragment_to_html as shared_fragment_renderer,
+)
+from pdf_exporter import (
+    streamlit_markdown_to_pdf_bytes as streamlit_pdf_renderer,
+    pdf_rich_text as shared_pdf_rich_text,
+    _soft_wrap_long_tokens as shared_soft_wrap_long_tokens,
+)
+from email_service import send_streamlit_email
+from search_service import (
+    FeedFetchError as ServiceFeedFetchError,
+    google_news_search_url as service_google_news_search_url,
+    google_news_site_proxy_url as service_google_news_site_proxy_url,
+    compact_query as service_compact_query,
+    ddgs_timelimit_for_lookback as service_ddgs_timelimit_for_lookback,
+    create_requests_session as service_create_requests_session,
+    fetch_feed as service_fetch_feed,
+    execute_ddgs_query as service_execute_ddgs_query,
+)
+from maiagent_service import (
+    call_maiagent_cloud as call_maiagent_service,
+    extract_maiagent_text,
+    ensure_selected_candidate_ids as service_ensure_selected_candidate_ids,
+    extract_report_candidate_ids as service_extract_report_candidate_ids,
+    remove_internal_candidate_markers as service_remove_internal_candidate_markers,
+    validate_report_candidate_ids as service_validate_report_candidate_ids,
+    build_report_retry_prompt as service_build_report_retry_prompt,
+    REPORT_CANDIDATE_ID_PATTERN as SERVICE_REPORT_CANDIDATE_ID_PATTERN,
+    REPORT_ESCAPED_CANDIDATE_ID_PATTERN as SERVICE_REPORT_ESCAPED_CANDIDATE_ID_PATTERN,
+    INTERNAL_CANDIDATE_MARKER_PATTERN as SERVICE_INTERNAL_CANDIDATE_MARKER_PATTERN,
+    ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN as SERVICE_ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN,
+)
+
 try:
     from ddgs import DDGS
 except ModuleNotFoundError:
@@ -1517,22 +1551,11 @@ def build_report_download_filename(prefix: str, extension: str, run_config: dict
 
 
 def google_news_search_url(query: str, hl: str = "en-US", gl: str = "US", ceid_lang: str = "en") -> str:
-    return (
-        "https://news.google.com/rss/search?q="
-        f"{urllib.parse.quote(query)}&hl={hl}&gl={gl}&ceid={gl}:{ceid_lang}"
-    )
+    return service_google_news_search_url(query, hl=hl, gl=gl, ceid_lang=ceid_lang)
 
 
-def google_news_site_proxy_url(
-    domain: str,
-    days: int,
-    keywords: str = TRANSIT_NEWS_TERMS,
-    hl: str = "en-US",
-    gl: str = "US",
-    ceid_lang: str = "en",
-) -> str:
-    query = f"site:{domain} {keywords} when:{max(1, min(int(days), 365))}d"
-    return google_news_search_url(query, hl=hl, gl=gl, ceid_lang=ceid_lang)
+def google_news_site_proxy_url(domain: str, days: int, keywords: str = TRANSIT_NEWS_TERMS, hl: str = "en-US", gl: str = "US", ceid_lang: str = "en") -> str:
+    return service_google_news_site_proxy_url(domain, days, keywords, hl=hl, gl=gl, ceid_lang=ceid_lang)
 
 
 # ═══════════════════════════════════════════════════════
@@ -1962,32 +1985,10 @@ def _is_recent(pub_str: str, cutoff: datetime.datetime) -> bool:
         return True
 
 
-class FeedFetchError(Exception):
-    def __init__(self, status: str, message: str):
-        super().__init__(message)
-        self.status = status
-        self.message = message
+FeedFetchError = ServiceFeedFetchError
 
 
-def create_requests_session() -> requests.Session:
-    session = requests.Session()
-    retry = Retry(
-        total=2,
-        connect=2,
-        read=2,
-        backoff_factor=0.8,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset(["GET"]),
-        raise_on_status=False,
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (compatible; TaipeiMetroAIWeekly/5.0; +https://www.dorts.gov.taipei/)",
-        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
-    })
-    return session
+create_requests_session = service_create_requests_session
 
 
 def _source_tuple(source) -> tuple[str, str]:
@@ -2530,26 +2531,7 @@ def _entry_pub_str(entry) -> str:
 
 
 def _fetch_feed(session: requests.Session, url: str):
-    if feedparser is None:
-        raise FeedFetchError("parse error", "feedparser 套件未安裝")
-    try:
-        response = session.get(url, timeout=15)
-    except requests.exceptions.Timeout as exc:
-        raise FeedFetchError("timeout", str(exc)) from exc
-    except requests.exceptions.RequestException as exc:
-        raise FeedFetchError("parse error", str(exc)) from exc
-
-    if response.status_code == 403:
-        raise FeedFetchError("403", "HTTP 403 Forbidden")
-    if response.status_code in (404, 405):
-        raise FeedFetchError(str(response.status_code), f"HTTP {response.status_code}")
-    if response.status_code >= 400:
-        raise FeedFetchError("parse error", f"HTTP {response.status_code}")
-
-    parsed = feedparser.parse(response.content)
-    if getattr(parsed, "bozo", False) and not getattr(parsed, "entries", []):
-        raise FeedFetchError("parse error", str(getattr(parsed, "bozo_exception", "RSS/Atom parse error")))
-    return parsed
+    return service_fetch_feed(session, url, feedparser)
 
 
 def _items_from_parsed_feed(
@@ -2834,25 +2816,10 @@ def _search_family_from_query(query: str) -> str:
 
 
 def _compact_query(query: str, limit: int = DDGS_QUERY_CHAR_LIMIT) -> str:
-    q = re.sub(r"\s+", " ", (query or "").strip())
-    if len(q) <= limit:
-        return q
-    words = q.split(" ")
-    kept: list[str] = []
-    for word in words:
-        candidate = " ".join(kept + [word])
-        if len(candidate) > limit:
-            break
-        kept.append(word)
-    return " ".join(kept).strip() or q[:limit].rstrip()
+    return service_compact_query(query, limit)
 
 
-def _ddgs_timelimit_for_lookback(days: int) -> str:
-    if int(days) <= 7:
-        return "w"
-    if int(days) <= 31:
-        return "m"
-    return "y"
+_ddgs_timelimit_for_lookback = service_ddgs_timelimit_for_lookback
 
 
 def _query_with_period(query: str) -> str:
@@ -3196,22 +3163,11 @@ def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -
         final_backend = backend
         for attempt in range(1, 3):
             try:
-                with DDGS() as ddgs:
-                    if use_news:
-                        results = ddgs.news(
-                            query,
-                            max_results=status_row["requested_max_results"],
-                            timelimit=status_row["timelimit"],
-                            backend=backend,
-                        )
-                    else:
-                        results = ddgs.text(
-                            query,
-                            max_results=status_row["requested_max_results"],
-                            timelimit=status_row["timelimit"],
-                            backend=backend,
-                        )
-                result_list = list(results or [])
+                result_list = service_execute_ddgs_query(
+                    DDGS, query, use_news=use_news,
+                    max_results=status_row["requested_max_results"],
+                    timelimit=status_row["timelimit"], backend=backend,
+                )
                 received_response = True
                 status_row["returned_count"] = len(result_list)
                 if not result_list:
@@ -7513,16 +7469,7 @@ def format_report_candidate(candidate: dict) -> str:
     return json.dumps(prompt_item, ensure_ascii=False)
 
 
-def ensure_selected_candidate_ids(selected_candidates: list[dict]) -> list[dict]:
-    """Freeze each selected item to its Python-assigned candidate ID."""
-    seen: set[int] = set()
-    for candidate in selected_candidates or []:
-        candidate_id = int(candidate.get("candidate_id") or candidate.get("id") or 0)
-        if candidate_id <= 0 or candidate_id in seen:
-            raise ValueError(f"selected candidate_id 無效或重複：{candidate_id}")
-        seen.add(candidate_id)
-        candidate["candidate_id"] = candidate_id
-    return selected_candidates
+ensure_selected_candidate_ids = service_ensure_selected_candidate_ids
 
 
 def _journal_year(item: dict) -> str:
@@ -8154,150 +8101,22 @@ def build_report_prompt(selected_candidates: list[dict], journal_candidates: lis
 正式正文禁止出現「資料未提供」、「候選資料未提供」、「原始資料未提供」、「資料來源未載明」等缺漏說明。資訊不足時直接縮短內容，不得列舉缺少的規格、時程、金額、測試內容、設備項目或其他未提供資料。
 """.strip()
 
-def _extract_maiagent_text(data) -> str:
-    """寬鬆解析 MaiAgent 不同版本可能回傳的文字欄位。"""
-    if isinstance(data, str):
-        return data.strip()
-
-    if isinstance(data, dict):
-        for key in ("content", "text", "answer", "output", "response"):
-            value = data.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-
-        message = data.get("message")
-        if isinstance(message, dict):
-            for key in ("content", "text", "answer"):
-                value = message.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-
-        content_payload = data.get("contentPayload") or data.get("content_payload")
-        if isinstance(content_payload, dict):
-            for key in ("content", "text", "answer"):
-                value = content_payload.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-
-            items = content_payload.get("items")
-            if isinstance(items, list):
-                texts = []
-                for item in items:
-                    if isinstance(item, dict):
-                        value = item.get("text") or item.get("content") or item.get("answer")
-                        if value:
-                            texts.append(str(value))
-                if texts:
-                    return "\n".join(texts).strip()
-
-        # 常見巢狀結果欄位 fallback
-        for key in ("result", "data"):
-            nested = data.get(key)
-            if isinstance(nested, (dict, str)):
-                nested_text = _extract_maiagent_text(nested)
-                if nested_text and nested_text != str(nested):
-                    return nested_text
-
-    text = str(data).strip()
-    if text:
-        return text
-    raise ValueError("MaiAgent 回應無文字內容")
+_extract_maiagent_text = extract_maiagent_text
 
 
 def call_maiagent_cloud(prompt: str) -> str:
-    """呼叫 MaiAgent 雲端 Chatbot completions API 產生報告。"""
-    if not maiagent_api_key:
-        raise RuntimeError("未設定 MAIAGENT_API_KEY")
-    if not maiagent_chatbot_id:
-        raise RuntimeError("未設定 MAIAGENT_CHATBOT_ID")
-
-    base_url = maiagent_api_base.rstrip("/")
-    endpoint = f"{base_url}/api/chatbots/{maiagent_chatbot_id}/completions"
-    v1_endpoint = f"{base_url}/api/v1/chatbots/{maiagent_chatbot_id}/completions"
-    headers = {
-        "Authorization": f"Api-Key {maiagent_api_key}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-    payloads = [
-        {"message": {"content": prompt}, "isStreaming": False},
-        {"message": {"content": prompt}, "is_streaming": False},
-    ]
-    endpoints = [endpoint + "/", endpoint, v1_endpoint + "/", v1_endpoint]
-    last_error = None
-
-    for url in endpoints:
-        for payload in payloads:
-            try:
-                response = requests.post(url, headers=headers, json=payload, timeout=240)
-                if response.status_code in (400, 404, 422):
-                    last_error = RuntimeError(f"MaiAgent API 回應 {response.status_code}: {response.text[:500]}")
-                    continue
-                response.raise_for_status()
-                try:
-                    data = response.json()
-                except ValueError:
-                    return response.text.strip()
-                return _extract_maiagent_text(data)
-            except Exception as exc:
-                last_error = exc
-                continue
-
-    raise RuntimeError(f"MaiAgent API 呼叫失敗：{last_error}")
+    return call_maiagent_service(
+        prompt, api_key=maiagent_api_key, chatbot_id=maiagent_chatbot_id,
+        api_base=maiagent_api_base,
+    )
 
 
 def markdown_to_html(md: str) -> str:
-    h = remove_internal_candidate_markers(md)
-    h = re.sub(r'^# (.+)$',   r'<h1>\1</h1>', h, flags=re.MULTILINE)
-    h = re.sub(r'^## (.+)$',  r'<h2>\1</h2>', h, flags=re.MULTILINE)
-    h = re.sub(r'^### (.+)$', r'<h3>\1</h3>', h, flags=re.MULTILINE)
-    h = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', h)
-    h = re.sub(r'\[(.+?)\]\((https?://[^\)]+)\)', r'<a href="\2" target="_blank">\1</a>', h)
-    h = re.sub(r'^> (.+)$',  r'<blockquote>\1</blockquote>', h, flags=re.MULTILINE)
-    h = re.sub(r'^\* (.+)$', r'<li>\1</li>', h, flags=re.MULTILINE)
-    h = re.sub(r'^- (.+)$',  r'<li>\1</li>', h, flags=re.MULTILINE)
-    h = re.sub(r'^---$', r'<hr>', h, flags=re.MULTILINE)
-    h = h.replace('\n\n', '</p><p>').replace('\n', '<br>')
-    return f"""<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8">
-<style>
-  body{{font-family:'Noto Sans TC',Arial,sans-serif;line-height:1.8;
-       max-width:820px;margin:0 auto;padding:24px;color:#333}}
-  h1{{color:#1a3a5c;border-bottom:3px solid #1a3a5c;padding-bottom:8px}}
-  h2{{color:#2c5f8a}} h3{{color:#1a6e4a;background:#f0f8f4;padding:8px 12px;
-      border-left:4px solid #1a6e4a;border-radius:0 4px 4px 0}}
-  blockquote{{background:#f5f5f5;border-left:4px solid #ccc;margin:0;padding:8px 16px;color:#666}}
-  li{{margin:4px 0}} a{{color:#2c5f8a}}
-  hr{{border:none;border-top:1px solid #ddd;margin:24px 0}}
-  strong{{color:#1a3a5c}}
-  .footer{{background:#f5f8fc;padding:12px;border-radius:6px;margin-top:24px;font-size:.9em;color:#666}}
-</style></head><body><p>{h}</p>
-<div class="footer">📧 AI 自動產生 | 僅供參考，請交叉驗證原始來源</div>
-</body></html>"""
+    return streamlit_html_renderer(md, remove_internal_candidate_markers)
 
 
 def markdown_fragment_to_html(md: str) -> str:
-    md = compact_report_urls(remove_internal_candidate_markers(md))
-
-    def _inline(line: str) -> str:
-        h = escape(line)
-        h = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", h)
-        h = re.sub(r"\[(.+?)\]\((https?://[^\s\)]+)\)", r'<a href="\2" target="_blank">\1</a>', h)
-        return h
-
-    rows = []
-    for raw_line in md.splitlines():
-        line = raw_line.strip()
-        if not line or line == "---":
-            rows.append('<div class="report-spacer"></div>')
-            continue
-        if line.startswith(("- ", "* ")):
-            rows.append(f'<div class="report-line list">• {_inline(line[2:].strip())}</div>')
-        elif line.startswith("> "):
-            rows.append(f'<div class="report-line meta">{_inline(line[2:].strip())}</div>')
-        else:
-            rows.append(f'<div class="report-line">{_inline(line)}</div>')
-    return "".join(rows)
+    return shared_fragment_renderer(md, remove_internal_candidate_markers, compact_report_urls)
 
 
 def short_url_label(url: str) -> str:
@@ -10042,43 +9861,17 @@ def repair_generic_report_titles(report_md: str, selected_candidates: list[dict]
     return "".join(output)
 
 
-REPORT_CANDIDATE_ID_PATTERN = re.compile(
-    r"<!--\s*candidate_id\s*:\s*(\d+)\s*-->",
-    flags=re.IGNORECASE,
-)
-REPORT_ESCAPED_CANDIDATE_ID_PATTERN = re.compile(
-    r"&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;",
-    flags=re.IGNORECASE,
-)
-INTERNAL_CANDIDATE_MARKER_PATTERN = re.compile(
-    r"<!--\s*candidate\\?_id\s*:\s*[^>]*-->",
-    flags=re.IGNORECASE,
-)
-ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN = re.compile(
-    r"&lt;!--\s*candidate\\?_id\s*:\s*.*?--&gt;",
-    flags=re.IGNORECASE,
-)
+REPORT_CANDIDATE_ID_PATTERN = SERVICE_REPORT_CANDIDATE_ID_PATTERN
+REPORT_ESCAPED_CANDIDATE_ID_PATTERN = SERVICE_REPORT_ESCAPED_CANDIDATE_ID_PATTERN
+INTERNAL_CANDIDATE_MARKER_PATTERN = SERVICE_INTERNAL_CANDIDATE_MARKER_PATTERN
+ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN = SERVICE_ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN
 LAST_REPORT_ID_VALIDATION: dict = {}
 
 
-def extract_report_candidate_ids(text: str) -> list[int]:
-    """Parse literal or HTML-escaped internal IDs before public-output cleanup."""
-    matches = [
-        (match.start(), int(match.group(1)))
-        for pattern in (REPORT_CANDIDATE_ID_PATTERN, REPORT_ESCAPED_CANDIDATE_ID_PATTERN)
-        for match in pattern.finditer(text or "")
-    ]
-    return [candidate_id for _, candidate_id in sorted(matches)]
+extract_report_candidate_ids = service_extract_report_candidate_ids
 
 
-def remove_internal_candidate_markers(text: str) -> str:
-    """Remove literal and HTML-escaped internal markers from public report text."""
-    if not text:
-        return ""
-    cleaned = INTERNAL_CANDIDATE_MARKER_PATTERN.sub("", text)
-    cleaned = ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN.sub("", cleaned)
-    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
-    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+remove_internal_candidate_markers = service_remove_internal_candidate_markers
 
 
 def strip_candidate_id_markers(text: str) -> str:
@@ -10086,39 +9879,10 @@ def strip_candidate_id_markers(text: str) -> str:
     return remove_internal_candidate_markers(text)
 
 
-def validate_report_candidate_ids(report_md: str, selected_candidates: list[dict]) -> dict:
-    expected_ids = [int(item.get("candidate_id") or item.get("id") or 0) for item in selected_candidates or []]
-    found_ids = extract_report_candidate_ids(report_md)
-    expected_set = set(expected_ids)
-    found_set = set(found_ids)
-    duplicate_ids = sorted({value for value in found_ids if found_ids.count(value) > 1})
-    return {
-        "expected_ids": expected_ids,
-        "found_ids": found_ids,
-        "missing_ids": [value for value in expected_ids if value not in found_set],
-        "unknown_ids": sorted(found_set - expected_set),
-        "duplicate_ids": duplicate_ids,
-        "valid": found_set == expected_set and not duplicate_ids and len(found_ids) == len(expected_ids),
-    }
+validate_report_candidate_ids = service_validate_report_candidate_ids
 
 
-def build_report_retry_prompt(
-    original_prompt: str,
-    previous_response: str,
-    validation: dict,
-) -> str:
-    return f"""{original_prompt}
-
-## 輸出完整性重試
-上一次輸出未通過 candidate_id 驗證。
-- 缺少 ID：{validation.get('missing_ids', [])}
-- 未知 ID：{validation.get('unknown_ids', [])}
-- 重複 ID：{validation.get('duplicate_ids', [])}
-請重新輸出完整報告。每個 expected candidate_id 必須且只能出現一次，標記格式必須是 `<!-- candidate_id: N -->`，並緊接在該則正式新聞標題前。不得只補局部段落。
-
-上一次輸出僅供修正格式參考：
-{previous_response}
-""".strip()
+build_report_retry_prompt = service_build_report_retry_prompt
 
 
 def _extract_marked_candidate_blocks(report_md: str) -> tuple[dict[int, str], list[int]]:
@@ -10358,31 +10122,7 @@ def register_pdf_fonts() -> tuple[str, str]:
     )
 
 
-def pdf_rich_text(text: str, cjk_font: str, latin_font: str) -> str:
-    prepared = (
-        (text or "")
-        .replace("🔹", "◆")
-        .replace("📊", "【統計】")
-        .replace("⏰", "【時間】")
-        .replace("🔍", "【搜尋】")
-        .replace("🚇", "")
-        .replace("📧", "")
-    )
-    links: list[tuple[str, str]] = []
-
-    def _protect_link(match: re.Match) -> str:
-        links.append((match.group(1), match.group(2)))
-        return f"__PDF_LINK_{len(links) - 1}__"
-
-    prepared = re.sub(r"\[([^\]]+)\]\((https?://[^\)]+)\)", _protect_link, prepared)
-    safe = escape(prepared, quote=False)
-    for idx, (label, url) in enumerate(links):
-        link_markup = (
-            f'<link href="{escape(url, quote=True)}" color="#1f5f8b">'
-            f'{escape(label, quote=False)}</link>'
-        )
-        safe = safe.replace(f"__PDF_LINK_{idx}__", link_markup)
-    return f'<font name="{cjk_font}">{safe}</font>'
+pdf_rich_text = shared_pdf_rich_text
 
 
 def category_badge_class(category: str) -> str:
@@ -10567,108 +10307,15 @@ def render_report_cards(report_md: str) -> None:
 
 
 def markdown_to_pdf_bytes(md: str) -> bytes:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, KeepTogether
-
-    md = remove_internal_candidate_markers(md)
-    cjk_font, latin_font = register_pdf_fonts()
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36,
+    return streamlit_pdf_renderer(
+        md, marker_cleaner=remove_internal_candidate_markers,
+        font_registrar=register_pdf_fonts, line_compactor=compact_report_line_for_pdf,
+        rich_text_renderer=pdf_rich_text, token_wrapper=_soft_wrap_long_tokens,
+        candidate_id_pattern=REPORT_CANDIDATE_ID_PATTERN,
     )
-    styles = getSampleStyleSheet()
-    for style_name in ("Title", "Heading1", "Heading2", "Heading3", "BodyText"):
-        styles[style_name].fontName = cjk_font
-        styles[style_name].leading = max(styles[style_name].leading, 14)
-        styles[style_name].wordWrap = "CJK"
-        styles[style_name].splitLongWords = 1
-    styles["BodyText"].fontSize = 10.2
-    styles["BodyText"].leading = 15
-    styles["Title"].fontSize = 15
-    styles["Title"].leading = 20
-    styles["Heading2"].fontSize = 12.5
-    styles["Heading2"].leading = 17
-    styles["Heading3"].fontSize = 11.2
-    styles["Heading3"].leading = 16
-    styles.add(ParagraphStyle(
-        name="ReportBullet",
-        parent=styles["BodyText"],
-        leftIndent=14,
-        firstLineIndent=-8,
-        spaceBefore=1,
-        spaceAfter=1,
-        wordWrap="CJK",
-        splitLongWords=1,
-    ))
-    styles.add(ParagraphStyle(
-        name="CompactReportTitle",
-        parent=styles["Title"],
-        fontName=cjk_font,
-        fontSize=13.5,
-        leading=18,
-        wordWrap="CJK",
-        splitLongWords=1,
-    ))
-
-    story = []
-    raw_lines = md.splitlines()
-    idx = 0
-    while idx < len(raw_lines):
-        raw_line = raw_lines[idx]
-        line = raw_line.strip()
-        if REPORT_CANDIDATE_ID_PATTERN.fullmatch(line):
-            idx += 1
-            continue
-        if not line or line == "---":
-            story.append(Spacer(1, 4))
-            idx += 1
-            continue
-        if line.startswith("📊") and idx + 1 < len(raw_lines):
-            next_idx = idx + 1
-            while next_idx < len(raw_lines) and not raw_lines[next_idx].strip():
-                next_idx += 1
-            next_line = raw_lines[next_idx].strip() if next_idx < len(raw_lines) else ""
-            if next_line.startswith("⏰"):
-                story.append(KeepTogether([
-                    Paragraph(pdf_rich_text(compact_report_line_for_pdf(line), cjk_font, latin_font), styles["BodyText"]),
-                    Spacer(1, 4),
-                    Paragraph(pdf_rich_text(compact_report_line_for_pdf(next_line), cjk_font, latin_font), styles["BodyText"]),
-                ]))
-                idx = next_idx + 1
-                continue
-        if line.startswith("# "):
-            title_text = line[2:]
-            title_style = styles["CompactReportTitle"] if len(title_text) >= 28 else styles["Title"]
-            story.append(Paragraph(pdf_rich_text(title_text, cjk_font, latin_font), title_style))
-        elif line.startswith("## "):
-            story.append(Paragraph(pdf_rich_text(line[3:], cjk_font, latin_font), styles["Heading2"]))
-        elif line.startswith("### "):
-            story.append(Paragraph(pdf_rich_text(line[4:], cjk_font, latin_font), styles["Heading3"]))
-        elif line.startswith(("- ", "• ")):
-            line = compact_report_line_for_pdf(line)
-            story.append(Paragraph(pdf_rich_text(_soft_wrap_long_tokens(line, 48), cjk_font, latin_font), styles["ReportBullet"]))
-        else:
-            line = compact_report_line_for_pdf(line)
-            story.append(Paragraph(pdf_rich_text(_soft_wrap_long_tokens(line, 56), cjk_font, latin_font), styles["BodyText"]))
-        idx += 1
-    doc.build(story)
-    return buffer.getvalue()
 
 
-def _soft_wrap_long_tokens(text: str, chunk: int = 45) -> str:
-    """在超長無空白字串（如 Google News 長網址）中每隔 chunk 字元插入零寬空白，
-    讓 reportlab 能夠換行、不會爆出版面；零寬空白不影響複製貼上後的文字內容。"""
-    words = text.split(" ")
-    out = []
-    for w in words:
-        has_cjk = re.search(r"[\u3400-\u9fff]", w) is not None
-        looks_like_url_or_ascii_token = re.search(r"https?://|[A-Za-z0-9]{24,}", w) is not None
-        if len(w) > chunk and looks_like_url_or_ascii_token and not has_cjk:
-            w = "\u200b".join(w[i:i + chunk] for i in range(0, len(w), chunk))
-        out.append(w)
-    return " ".join(out)
+_soft_wrap_long_tokens = shared_soft_wrap_long_tokens
 
 
 def try_markdown_to_pdf_bytes(md: str) -> bytes | None:
@@ -10775,30 +10422,15 @@ def load_demo_report_cache() -> tuple[str, bytes | None, dict]:
 
 def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: str) -> bool:
     text = remove_internal_candidate_markers(text)
-    msg = MIMEMultipart("alternative")
     email_run_config = st.session_state.get("latest_run_config", current_run_config)
-    msg["Subject"] = email_run_config.get("report_title", report_title)
-    msg["From"]    = gmail_user
-    msg["To"]      = ", ".join(recipients)
-    msg.attach(MIMEText(text, "plain", "utf-8"))
-    msg.attach(MIMEText(markdown_to_html(text), "html", "utf-8"))
-    pdf_bytes = try_markdown_to_pdf_bytes(text)
-    if pdf_bytes:
-        pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")
-        pdf_part.add_header(
-            "Content-Disposition",
-            "attachment",
-            filename=build_report_download_filename("metro_report", "pdf", email_run_config),
-        )
-        msg.attach(pdf_part)
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-            s.login(gmail_user, gmail_pass)
-            s.sendmail(gmail_user, recipients, msg.as_string())
-        return True
-    except Exception as e:
-        st.error(f"寄信失敗：{e}")
-        return False
+    return send_streamlit_email(
+        text, recipients,
+        subject=email_run_config.get("report_title", report_title),
+        sender=gmail_user, password=gmail_pass,
+        html_renderer=markdown_to_html, pdf_renderer=try_markdown_to_pdf_bytes,
+        pdf_filename=build_report_download_filename("metro_report", "pdf", email_run_config),
+        on_error=st.error,
+    )
 
 
 def send_current_report_email(report_md: str, status_target=None, progress_target=None) -> bool:
