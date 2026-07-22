@@ -8248,7 +8248,7 @@ def call_maiagent_cloud(prompt: str) -> str:
 
 
 def markdown_to_html(md: str) -> str:
-    h = md
+    h = remove_internal_candidate_markers(md)
     h = re.sub(r'^# (.+)$',   r'<h1>\1</h1>', h, flags=re.MULTILINE)
     h = re.sub(r'^## (.+)$',  r'<h2>\1</h2>', h, flags=re.MULTILINE)
     h = re.sub(r'^### (.+)$', r'<h3>\1</h3>', h, flags=re.MULTILINE)
@@ -8277,7 +8277,7 @@ def markdown_to_html(md: str) -> str:
 
 
 def markdown_fragment_to_html(md: str) -> str:
-    md = compact_report_urls(md)
+    md = compact_report_urls(remove_internal_candidate_markers(md))
 
     def _inline(line: str) -> str:
         h = escape(line)
@@ -10046,12 +10046,49 @@ REPORT_CANDIDATE_ID_PATTERN = re.compile(
     r"<!--\s*candidate_id\s*:\s*(\d+)\s*-->",
     flags=re.IGNORECASE,
 )
+REPORT_ESCAPED_CANDIDATE_ID_PATTERN = re.compile(
+    r"&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;",
+    flags=re.IGNORECASE,
+)
+INTERNAL_CANDIDATE_MARKER_PATTERN = re.compile(
+    r"<!--\s*candidate\\?_id\s*:\s*[^>]*-->",
+    flags=re.IGNORECASE,
+)
+ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN = re.compile(
+    r"&lt;!--\s*candidate\\?_id\s*:\s*.*?--&gt;",
+    flags=re.IGNORECASE,
+)
 LAST_REPORT_ID_VALIDATION: dict = {}
+
+
+def extract_report_candidate_ids(text: str) -> list[int]:
+    """Parse literal or HTML-escaped internal IDs before public-output cleanup."""
+    matches = [
+        (match.start(), int(match.group(1)))
+        for pattern in (REPORT_CANDIDATE_ID_PATTERN, REPORT_ESCAPED_CANDIDATE_ID_PATTERN)
+        for match in pattern.finditer(text or "")
+    ]
+    return [candidate_id for _, candidate_id in sorted(matches)]
+
+
+def remove_internal_candidate_markers(text: str) -> str:
+    """Remove literal and HTML-escaped internal markers from public report text."""
+    if not text:
+        return ""
+    cleaned = INTERNAL_CANDIDATE_MARKER_PATTERN.sub("", text)
+    cleaned = ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN.sub("", cleaned)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def strip_candidate_id_markers(text: str) -> str:
+    """Backward-compatible alias for public-output cleanup."""
+    return remove_internal_candidate_markers(text)
 
 
 def validate_report_candidate_ids(report_md: str, selected_candidates: list[dict]) -> dict:
     expected_ids = [int(item.get("candidate_id") or item.get("id") or 0) for item in selected_candidates or []]
-    found_ids = [int(value) for value in REPORT_CANDIDATE_ID_PATTERN.findall(report_md or "")]
+    found_ids = extract_report_candidate_ids(report_md)
     expected_set = set(expected_ids)
     found_set = set(found_ids)
     duplicate_ids = sorted({value for value in found_ids if found_ids.count(value) > 1})
@@ -10243,7 +10280,7 @@ def restore_missing_selected_report_items(report_md: str, selected_candidates: l
 
 
 def compact_report_line_for_pdf(line: str) -> str:
-    line = normalize_source_line(line)
+    line = normalize_source_line(remove_internal_candidate_markers(line))
     line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
     if "資料來源" in line:
         line = re.sub(
@@ -10255,7 +10292,7 @@ def compact_report_line_for_pdf(line: str) -> str:
 
 
 def display_report_markdown(md: str) -> str:
-    display_md = compact_report_urls(md)
+    display_md = compact_report_urls(remove_internal_candidate_markers(md))
     return re.sub(r"(?m)^#\s+(.+)$", r"### \1", display_md, count=1)
 
 
@@ -10535,6 +10572,7 @@ def markdown_to_pdf_bytes(md: str) -> bytes:
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, KeepTogether
 
+    md = remove_internal_candidate_markers(md)
     cjk_font, latin_font = register_pdf_fonts()
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -10716,7 +10754,7 @@ def load_demo_report_cache() -> tuple[str, bytes | None, dict]:
         else:
             report_text = _builtin_demo_report_text()
 
-    report_text = sanitize_report_text(report_text)
+    report_text = remove_internal_candidate_markers(sanitize_report_text(report_text))
     report_text = enforce_research_section(report_text, [])
     report_text = normalize_final_report_md(report_text)
     report_text = apply_final_report_footer(report_text, [])
@@ -10736,6 +10774,7 @@ def load_demo_report_cache() -> tuple[str, bytes | None, dict]:
 
 
 def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: str) -> bool:
+    text = remove_internal_candidate_markers(text)
     msg = MIMEMultipart("alternative")
     email_run_config = st.session_state.get("latest_run_config", current_run_config)
     msg["Subject"] = email_run_config.get("report_title", report_title)
@@ -10763,6 +10802,7 @@ def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: st
 
 
 def send_current_report_email(report_md: str, status_target=None, progress_target=None) -> bool:
+    report_md = remove_internal_candidate_markers(report_md)
     recipients = [r.strip() for r in recipient_input.splitlines() if r.strip()]
     if not report_md:
         if status_target:
@@ -11037,57 +11077,72 @@ if generate_btn:
             status_text.text("正在進行報告撰寫")
             report_prompt = build_report_prompt(selected_candidates, journal_candidates, search_count)
             stage_start = time.perf_counter()
-            report_response = call_maiagent_cloud(report_prompt)
-            initial_report_response = report_response
-            report_id_validation_before_retry = validate_report_candidate_ids(report_response, selected_candidates)
+            raw_report = call_maiagent_cloud(report_prompt)
+            initial_raw_report = raw_report
+            report_id_validation_before_retry = validate_report_candidate_ids(raw_report, selected_candidates)
             report_retry_attempted = False
             if not report_id_validation_before_retry.get("valid"):
                 report_retry_attempted = True
                 retry_prompt = build_report_retry_prompt(
                     report_prompt,
-                    report_response,
+                    raw_report,
                     report_id_validation_before_retry,
                 )
-                report_response = call_maiagent_cloud(retry_prompt)
+                raw_report = call_maiagent_cloud(retry_prompt)
                 maiagent_call_count += 1
-            report_id_validation_after_retry = validate_report_candidate_ids(report_response, selected_candidates)
-            maiagent_report_response_count = count_report_items(report_response)
+            report_id_validation_after_retry = validate_report_candidate_ids(raw_report, selected_candidates)
+            raw_report_candidate_ids = extract_report_candidate_ids(raw_report)
+            maiagent_report_response_count = count_report_items(raw_report)
             timings["elapsed_seconds_report"] = round(time.perf_counter() - stage_start, 2)
             maiagent_call_count += 1
             progress_bar.progress(0.88)
 
             status_text.text("正在進行報告撰寫")
             pdf_stage_start = time.perf_counter()
-            report_text = report_response
-            report_text = sanitize_report_text(report_text)
-            report_text = enforce_research_section(report_text, journal_candidates)
-            report_text = ensure_journal_summary_conclusion(report_text, journal_candidates)
-            report_text = normalize_final_report_md(report_text)
-            report_text = repair_journal_dates_in_report(report_text, journal_candidates)
-            report_text = normalize_journal_section_format(report_text, journal_candidates)
-            report_text, dropped_selected_candidates = restore_missing_selected_report_items(report_text, selected_candidates)
-            report_text = repair_report_region_lines(report_text, selected_candidates)
-            report_text = repair_generic_report_titles(report_text, selected_candidates)
-            report_text = merge_operational_report_sections(report_text)
-            report_text = normalize_report_section_numbering(report_text)
-            report_text = ensure_supplemental_sources_in_report(report_text, selected_candidates)
-            report_text = remove_missing_data_disclaimers(report_text)
-            report_text = insert_annual_observation_section(report_text)
-            report_text = normalize_formal_report_title(report_text)
-            report_text = apply_final_report_footer(report_text, journal_candidates)
-            long_term_coverage = build_final_report_coverage_warning(report_text, lookback_int, today)
-            pdf_bytes = try_markdown_to_pdf_bytes(report_text)
+            validated_report = sanitize_report_text(raw_report)
+            validated_report = enforce_research_section(validated_report, journal_candidates)
+            validated_report = ensure_journal_summary_conclusion(validated_report, journal_candidates)
+            validated_report = normalize_final_report_md(validated_report)
+            validated_report = repair_journal_dates_in_report(validated_report, journal_candidates)
+            validated_report = normalize_journal_section_format(validated_report, journal_candidates)
+            validated_report, dropped_selected_candidates = restore_missing_selected_report_items(
+                validated_report, selected_candidates
+            )
+            validated_report = repair_report_region_lines(validated_report, selected_candidates)
+            validated_report = repair_generic_report_titles(validated_report, selected_candidates)
+            validated_report = merge_operational_report_sections(validated_report)
+            validated_report = normalize_report_section_numbering(validated_report)
+            validated_report = ensure_supplemental_sources_in_report(validated_report, selected_candidates)
+            validated_report = remove_missing_data_disclaimers(validated_report)
+            validated_report = insert_annual_observation_section(validated_report)
+
+            # Internal IDs remain available through reconciliation and count validation.
+            report_id_validation_before_clean = validate_report_candidate_ids(
+                validated_report, selected_candidates
+            )
+            validated_report_count = count_report_items(validated_report)
+            selected_final_count_validation_passed = bool(
+                report_id_validation_before_clean.get("valid")
+                and validated_report_count == len(selected_candidates)
+            )
+
+            # Everything below this boundary is public report content.
+            clean_report = remove_internal_candidate_markers(validated_report)
+            clean_report = normalize_formal_report_title(clean_report)
+            clean_report = apply_final_report_footer(clean_report, journal_candidates)
+            long_term_coverage = build_final_report_coverage_warning(clean_report, lookback_int, today)
+            pdf_bytes = try_markdown_to_pdf_bytes(clean_report)
             dropped_selected_ids = [int(item.get("id", 0) or 0) for item in dropped_selected_candidates]
             dropped_selected_titles = [item.get("title", "") for item in dropped_selected_candidates]
             dropped_selected_reasons = [
                 "MaiAgent 重試後仍未輸出該 candidate_id；已依原始候選資料產生保守 fallback。"
                 for _ in dropped_selected_candidates
             ]
-            formal_count = count_report_items(report_text)
+            formal_count = count_report_items(clean_report)
             postprocess_news_count_delta = formal_count - maiagent_report_response_count
-            category_counts = count_report_items_by_category(report_text)
+            category_counts = count_report_items_by_category(clean_report)
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
-                re.search(r"(?m)^🔹\s*\[規範更新\]", report_text)
+                re.search(r"(?m)^🔹\s*\[規範更新\]", clean_report)
             )
             prompt_chars = len(report_prompt)
             raw_chars = len(rss_results) + len(ddg_results)
@@ -11099,8 +11154,8 @@ if generate_btn:
             pipeline_debug_stats["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("B_added_count", 0)
             incident_coverage = build_final_incident_coverage_debug(
                 selected_candidates,
-                report_response,
-                report_text,
+                raw_report,
+                clean_report,
                 global_scope=is_global_scope,
                 report_days=lookback_int,
                 incident_enabled="重大事故" in selected_types,
@@ -11117,9 +11172,9 @@ if generate_btn:
 
             os.makedirs("reports", exist_ok=True)
             with open("reports/latest.md", "w", encoding="utf-8") as f:
-                f.write(report_text)
+                f.write(clean_report)
             with open(f"reports/report_{today.strftime('%Y%m%d')}.md", "w", encoding="utf-8") as f:
-                f.write(report_text)
+                f.write(clean_report)
 
             report_stats = {
                 "raw_count": candidate_pool["raw_count"],
@@ -11130,10 +11185,14 @@ if generate_btn:
                 "maiagent_report_response_count": maiagent_report_response_count,
                 "postprocess_news_count_delta": postprocess_news_count_delta,
                 "postprocess_news_count_invariant_passed": formal_count == len(selected_candidates),
-                "selected_final_count_invariant_passed": formal_count == len(selected_candidates),
+                "selected_final_count_invariant_passed": selected_final_count_validation_passed,
                 "report_retry_attempted": report_retry_attempted,
                 "report_id_validation_before_retry": report_id_validation_before_retry,
                 "report_id_validation_after_retry": report_id_validation_after_retry,
+                "report_id_validation_before_clean": report_id_validation_before_clean,
+                "raw_report_candidate_ids": raw_report_candidate_ids,
+                "validated_report_count": validated_report_count,
+                "clean_report_marker_count": len(extract_report_candidate_ids(clean_report)),
                 "report_id_reconciliation": LAST_REPORT_ID_VALIDATION,
                 "prompt_chars": prompt_chars,
                 "raw_chars": raw_chars,
@@ -11200,7 +11259,7 @@ if generate_btn:
                 "journal_selected_count": len(journal_candidates),
                 "journal_exclusion_stats": _journal_exclusion_stats(journal_excluded_candidates),
                 "journal_shortfall_reason": _journal_shortfall_reason(len(journal_candidates), get_journal_target_count(research_supplement_lookback_days)[0], journal_excluded_candidates) if include_research_supplement else "",
-                "journal_summary_conclusion_chars": count_journal_summary_conclusion_chars(report_text),
+                "journal_summary_conclusion_chars": count_journal_summary_conclusion_chars(clean_report),
                 "selection_method": "python_score_rules",
                 "long_term_coverage": long_term_coverage,
                 "demo_cache_mode": False,
@@ -11208,8 +11267,8 @@ if generate_btn:
                 "research_supplement_period": run_config.get("research_supplement_period", {}),
                 "run_config": run_config,
             }
-            st.session_state["latest_report_md"] = report_text
-            st.session_state["latest_report"] = report_text
+            st.session_state["latest_report_md"] = clean_report
+            st.session_state["latest_report"] = clean_report
             st.session_state["latest_pdf"] = pdf_bytes
             st.session_state["latest_report_summary"] = {
                 "formal_count": formal_count,
@@ -11239,7 +11298,7 @@ if generate_btn:
                 "journal_target_count": get_journal_target_count(research_supplement_lookback_days)[0] if include_research_supplement else 0,
                 "journal_selected_count": len(journal_candidates),
                 "journal_shortfall_reason": _journal_shortfall_reason(len(journal_candidates), get_journal_target_count(research_supplement_lookback_days)[0], journal_excluded_candidates) if include_research_supplement else "",
-                "journal_summary_conclusion_chars": count_journal_summary_conclusion_chars(report_text),
+                "journal_summary_conclusion_chars": count_journal_summary_conclusion_chars(clean_report),
                 "selection_debug": LAST_PYTHON_SELECTION_DEBUG,
                 "pipeline_debug_stats": pipeline_debug_stats,
                 "candidate_pool_timings": candidate_pool.get("candidate_pool_timings", {}),
@@ -11261,12 +11320,16 @@ if generate_btn:
                 "ai_selection_response": "",
                 "python_unselected_stats": python_unselected_stats,
                 "report_prompt": report_prompt,
-                "initial_report_response": initial_report_response,
-                "report_response": report_response,
+                "initial_raw_report": initial_raw_report,
+                "raw_report": raw_report,
+                "initial_report_response": initial_raw_report,
+                "report_response": raw_report,
+                "raw_report_candidate_ids": raw_report_candidate_ids,
                 "report_id_validation_before_retry": report_id_validation_before_retry,
                 "report_id_validation_after_retry": report_id_validation_after_retry,
+                "report_id_validation_before_clean": report_id_validation_before_clean,
                 "report_id_reconciliation": LAST_REPORT_ID_VALIDATION,
-                "latest_report_md": report_text,
+                "latest_report_md": clean_report,
                 "ai_unselected_stats": ai_unselected_stats,
                 "dedupe_stats": candidate_pool["dedupe_stats"],
                 "exclusion_stats": candidate_pool["exclusion_stats"],
@@ -11324,11 +11387,26 @@ report_matches_current_app = (
 st.markdown(f'<div class="section-title">正式{display_report_label}</div>', unsafe_allow_html=True)
 
 report_stats = st.session_state.get("latest_report_stats", {})
-latest_report_md = st.session_state.get("latest_report_md", "")
-report_to_show = (latest_report_md or st.session_state.get("latest_report", "")) if report_matches_current_app else ""
+stored_latest_report_md = st.session_state.get("latest_report_md", "")
+stored_latest_report = st.session_state.get("latest_report", "")
+latest_report_md = remove_internal_candidate_markers(stored_latest_report_md)
+legacy_latest_report = remove_internal_candidate_markers(stored_latest_report)
+marker_cleanup_changed = (
+    latest_report_md != stored_latest_report_md
+    or legacy_latest_report != stored_latest_report
+)
+if marker_cleanup_changed:
+    st.session_state["latest_pdf"] = None
+if stored_latest_report_md or stored_latest_report:
+    clean_session_report = latest_report_md or legacy_latest_report
+    st.session_state["latest_report_md"] = clean_session_report
+    st.session_state["latest_report"] = clean_session_report
+    latest_report_md = clean_session_report
+report_to_show = (latest_report_md or legacy_latest_report) if report_matches_current_app else ""
 if report_to_show and not latest_report_md:
-    report_to_show = normalize_final_report_md(report_to_show)
+    report_to_show = remove_internal_candidate_markers(normalize_final_report_md(report_to_show))
     st.session_state["latest_report_md"] = report_to_show
+    st.session_state["latest_report"] = report_to_show
     latest_report_md = report_to_show
 
 if report_to_show:
@@ -11636,6 +11714,9 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
             "selection_response": debug_info.get("selection_response", "") if debug_info else "",
             "ai_selection_response": debug_info.get("ai_selection_response", "") if debug_info else "",
             "report_prompt": debug_info.get("report_prompt", "") if debug_info else "",
+            "initial_raw_report": debug_info.get("initial_raw_report", "") if debug_info else "",
+            "raw_report": debug_info.get("raw_report", "") if debug_info else "",
+            "raw_report_candidate_ids": debug_info.get("raw_report_candidate_ids", []) if debug_info else [],
             "initial_report_response": debug_info.get("initial_report_response", "") if debug_info else "",
             "report_response": debug_info.get("report_response", "") if debug_info else "",
         },
@@ -11643,7 +11724,12 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
         "ai_selection_response": debug_info.get("ai_selection_response", "") if debug_info else "",
         "report_prompt": debug_info.get("report_prompt", "") if debug_info else "",
         "report_response": debug_info.get("report_response", "") if debug_info else "",
-        "final_report_md": debug_info.get("latest_report_md", st.session_state.get("latest_report_md", "")) if debug_info else st.session_state.get("latest_report_md", ""),
+        "raw_report_candidate_ids": debug_info.get("raw_report_candidate_ids", []) if debug_info else [],
+        "report_id_validation_before_clean": debug_info.get("report_id_validation_before_clean", {}) if debug_info else {},
+        "final_report_md": remove_internal_candidate_markers(
+            debug_info.get("latest_report_md", st.session_state.get("latest_report_md", ""))
+            if debug_info else st.session_state.get("latest_report_md", "")
+        ),
     })
 
 
