@@ -7,10 +7,11 @@ import time
 import urllib.parse
 import requests
 from html import unescape
-from urllib.parse import parse_qs, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote, urlparse, urlunparse
 from email.utils import parsedate_to_datetime
 
 from config import *
+from search_queries import FORMAL_SOURCE_PROXY_LABELS
 
 def _parse_pub_date(pub_str: str) -> str:
     if not pub_str:
@@ -98,6 +99,51 @@ def _is_domestic_taiwan_host(host: str) -> bool:
     return any(host.endswith(suffix) for suffix in DOMESTIC_EXCLUDED_DOMAINS)
 
 
+def _is_allowed_host(host: str) -> bool:
+    if not ALLOWED_NEWS_DOMAINS:
+        return True
+    return any(_host_matches(host, domain) for domain in ALLOWED_NEWS_DOMAINS)
+
+
+def _is_valid_news_url(url: str, source_href: str = "") -> tuple[bool, str]:
+    if not url or not url.strip():
+        return False, "空網址"
+    url = url.strip()
+    if url.startswith("/") or "/clev" in url.lower():
+        return False, "相對網址或 Google /clev 轉址"
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return False, "非 http/https 網址"
+    if parsed.path in ("", "/") and "news.google.com" not in parsed.netloc:
+        return False, "首頁連結"
+
+    lower_url = url.lower()
+    blocked_markers = [
+        "/login", "/signin", "/sign-in", "/subscribe", "subscription",
+        "membership", "/member", "/account", "/advertis", "/sponsor",
+        "/privacy", "/terms", "/cookie", "/jobs", "/careers",
+    ]
+    if any(marker in lower_url for marker in blocked_markers):
+        return False, "廣告、會員或非新聞頁"
+
+    safety_url = source_href or url
+    host = _domain_from_url(safety_url)
+    url_host = _domain_from_url(url)
+    if any(
+        candidate_host and _host_matches(candidate_host, domain)
+        for candidate_host in (host, url_host)
+        for domain in LOW_VALUE_EXCLUDED_HOSTS
+    ):
+        return False, "低價值來源或子網域"
+    if _is_blocked_host(host):
+        return False, "被安全規則排除"
+    if _is_domestic_taiwan_host(host):
+        return False, "範圍排除"
+    if not _is_allowed_host(host):
+        return False, "不在來源白名單"
+    return True, ""
+
+
 def _contains_taiwan_reference(text: str) -> bool:
     text_lower = (text or "").casefold()
     return any(term.casefold() in text_lower for term in DOMESTIC_EXCLUDED_TERMS)
@@ -153,6 +199,32 @@ def _strip_source_name_noise(text: str) -> str:
     for term in SOURCE_NAME_NOISE_TERMS:
         cleaned = re.sub(re.escape(term), " ", cleaned, flags=re.IGNORECASE)
     return cleaned
+
+
+def clean_source_name_for_ui(source_name: str) -> str:
+    """只清理前台顯示名稱；debug 仍保留原始 source_name/method。"""
+    cleaned = str(source_name or "")
+    cleaned = re.sub(r"[（(]\s*fallback\s*Google\s*News\s*[）)]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"（\s*Google\s*News\s*代理\s*）", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\(\s*Google\s*News\s*proxy\s*\)", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"由\s*Google\s*News\s*代理", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"Google\s*News\s*地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"Google\s*News\s*代理", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bfallback\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"（\s*）|\(\s*\)", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" －-_/|：:")
+    return cleaned or str(source_name or "").strip()
+
+
+def _is_query_proxy_source_label(source_name: str) -> bool:
+    raw = str(source_name or "").strip()
+    cleaned = clean_source_name_for_ui(raw).strip()
+    raw_lower = raw.casefold()
+    cleaned_lower = cleaned.casefold()
+    if "google news" in raw_lower or "代理" in raw_lower:
+        return True
+    return any(cleaned_lower == label.casefold() for label in FORMAL_SOURCE_PROXY_LABELS)
 
 
 def _candidate_region_text(candidate: dict) -> str:

@@ -4,7 +4,9 @@ import datetime
 import difflib
 import json
 import re
+import time
 import urllib.parse
+from urllib.parse import urlparse
 
 from config import *
 from article_processor import (
@@ -21,6 +23,7 @@ from article_processor import (
     _extract_complete_url,
     _extract_domain_hint,
     _host_matches,
+    _is_valid_news_url,
     _normalize_source_domain,
     _original_source_domain,
     _prefetch_candidate_article,

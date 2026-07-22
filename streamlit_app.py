@@ -45,9 +45,10 @@ from article_selector import build_selector_api, REPORT_SELECTION_DEBUG_DEFAULT
 from article_processor import (
     _parse_pub_date, _is_recent, _source_tuple, _host_matches, _domain_from_url,
     _normalize_source_domain, _extract_site_domain_from_google_news, _is_blocked_host,
-    _is_domestic_taiwan_host, _contains_taiwan_reference, _contains_any_term,
+    _is_domestic_taiwan_host, _is_valid_news_url, _contains_taiwan_reference, _contains_any_term,
     _domain_hint_from_source_label, _original_source_domain, _strict_source_domain,
-    _strip_source_name_noise, _candidate_region_text, _region_from_domain_hints,
+    _strip_source_name_noise, clean_source_name_for_ui, _is_query_proxy_source_label,
+    _candidate_region_text, _region_from_domain_hints,
     _region_guess_from_candidate, _canonical_candidate_region, _normalize_title,
     _dedupe_url, _entry_source_href, _entry_pub_str, _clean_text, _shorten,
     _is_article_level_url, _effective_source_url, _clean_candidate_url, _quality_rank,
@@ -1029,34 +1030,6 @@ def build_run_news_sources(
 
 
 
-def clean_source_name_for_ui(source_name: str) -> str:
-    """只清理前台顯示名稱；debug 仍保留原始 source_name/method。"""
-    cleaned = str(source_name or "")
-    cleaned = re.sub(r"[（(]\s*fallback\s*Google\s*News\s*[）)]", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"（\s*Google\s*News\s*代理\s*）", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\(\s*Google\s*News\s*proxy\s*\)", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"由\s*Google\s*News\s*代理", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"Google\s*News\s*地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"Google\s*News\s*代理", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\bfallback\b", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"（\s*）|\(\s*\)", "", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" －-_/|：:")
-    return cleaned or str(source_name or "").strip()
-
-
-
-
-def _is_query_proxy_source_label(source_name: str) -> bool:
-    raw = str(source_name or "").strip()
-    cleaned = clean_source_name_for_ui(raw).strip()
-    raw_lower = raw.casefold()
-    cleaned_lower = cleaned.casefold()
-    if "google news" in raw_lower or "代理" in raw_lower:
-        return True
-    return any(cleaned_lower == label.casefold() for label in FORMAL_SOURCE_PROXY_LABELS)
-
-
 def _clean_formal_source_proxy_label(label: str) -> str:
     cleaned = str(label or "").strip()
     cleaned = re.sub(r"Google\s*News\s*地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
@@ -1225,59 +1198,6 @@ def _fallback_google_news_url(source_url: str) -> str | None:
 
 
 
-
-
-
-
-
-
-
-
-
-
-def _is_allowed_host(host: str) -> bool:
-    if not ALLOWED_NEWS_DOMAINS:
-        return True
-    return any(_host_matches(host, domain) for domain in ALLOWED_NEWS_DOMAINS)
-
-
-def _is_valid_news_url(url: str, source_href: str = "") -> tuple[bool, str]:
-    if not url or not url.strip():
-        return False, "空網址"
-    url = url.strip()
-    if url.startswith("/") or "/clev" in url.lower():
-        return False, "相對網址或 Google /clev 轉址"
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        return False, "非 http/https 網址"
-    if parsed.path in ("", "/") and "news.google.com" not in parsed.netloc:
-        return False, "首頁連結"
-
-    lower_url = url.lower()
-    blocked_markers = [
-        "/login", "/signin", "/sign-in", "/subscribe", "subscription",
-        "membership", "/member", "/account", "/advertis", "/sponsor",
-        "/privacy", "/terms", "/cookie", "/jobs", "/careers",
-    ]
-    if any(marker in lower_url for marker in blocked_markers):
-        return False, "廣告、會員或非新聞頁"
-
-    safety_url = source_href or url
-    host = _domain_from_url(safety_url)
-    url_host = _domain_from_url(url)
-    if any(
-        candidate_host and _host_matches(candidate_host, domain)
-        for candidate_host in (host, url_host)
-        for domain in LOW_VALUE_EXCLUDED_HOSTS
-    ):
-        return False, "低價值來源或子網域"
-    if _is_blocked_host(host):
-        return False, "被安全規則排除"
-    if _is_domestic_taiwan_host(host):
-        return False, "範圍排除"
-    if not _is_allowed_host(host):
-        return False, "不在來源白名單"
-    return True, ""
 
 
 
@@ -2079,15 +1999,6 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
 
 
 
-EVENT_REGION_PRIORITY_HINTS: list[tuple[str, list[str]]] = [
-    ("瑞士", ["basel", "basel tram", "bvb", "zürich", "zurich", "lausanne", "瑞士", "巴塞爾", "蘇黎世", "洛桑"]),
-    ("美國", ["austin transit partnership", "austin light rail", "houston", "metrorail", "houston metrorail", "metro rail houston", "wmata", "washington metro", "mta", "nyct", "new york subway", "休士頓", "休斯頓"]),
-    ("加拿大", ["vancouver", "translink vancouver", "vancouver translink", "broadway subway", "toronto", "toronto subway", "finch west", "finch west lrt", "metrolinx", "ttc", "skytrain", "溫哥華", "多倫多"]),
-    ("英國", ["northern ireland", "belfast", "translink ni", "translink northern ireland", "北愛爾蘭", "貝爾法斯特"]),
-    ("德國", ["bvg", "berlin", "adlershof", "leipzig", "munich", "hamburg", "u-bahn", "柏林", "萊比錫", "慕尼黑", "漢堡"]),
-]
-
-
 
 
 
@@ -2797,21 +2708,6 @@ def _policy_selection_rule() -> str:
 
 
 
-
-
-REGION_DOMAIN_HINTS = {
-    "translink.ca": "加拿大",
-    "ttc.ca": "加拿大",
-    "mta.info": "美國",
-    "wmata.com": "美國",
-    "soundtransit.org": "美國",
-    "tokyometro.jp": "日本",
-    "mtr.com.hk": "香港",
-    "lta.gov.sg": "新加坡",
-    "smrt.com.sg": "新加坡",
-    "ratp.fr": "法國",
-    "tfl.gov.uk": "英國",
-}
 
 
 WORK_ZONE_MONITORING_TERMS = [

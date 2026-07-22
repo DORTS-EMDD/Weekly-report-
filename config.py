@@ -131,6 +131,28 @@ REGION_SEARCH_TERMS = {
     "印度": "India Delhi Metro Mumbai Metro Bengaluru Metro metro rail",
 }
 
+EVENT_REGION_PRIORITY_HINTS: list[tuple[str, list[str]]] = [
+    ("瑞士", ["basel", "basel tram", "bvb", "zürich", "zurich", "lausanne", "瑞士", "巴塞爾", "蘇黎世", "洛桑"]),
+    ("美國", ["austin transit partnership", "austin light rail", "houston", "metrorail", "houston metrorail", "metro rail houston", "wmata", "washington metro", "mta", "nyct", "new york subway", "休士頓", "休斯頓"]),
+    ("加拿大", ["vancouver", "translink vancouver", "vancouver translink", "broadway subway", "toronto", "toronto subway", "finch west", "finch west lrt", "metrolinx", "ttc", "skytrain", "溫哥華", "多倫多"]),
+    ("英國", ["northern ireland", "belfast", "translink ni", "translink northern ireland", "北愛爾蘭", "貝爾法斯特"]),
+    ("德國", ["bvg", "berlin", "adlershof", "leipzig", "munich", "hamburg", "u-bahn", "柏林", "萊比錫", "慕尼黑", "漢堡"]),
+]
+
+REGION_DOMAIN_HINTS = {
+    "translink.ca": "加拿大",
+    "ttc.ca": "加拿大",
+    "mta.info": "美國",
+    "wmata.com": "美國",
+    "soundtransit.org": "美國",
+    "tokyometro.jp": "日本",
+    "mtr.com.hk": "香港",
+    "lta.gov.sg": "新加坡",
+    "smrt.com.sg": "新加坡",
+    "ratp.fr": "法國",
+    "tfl.gov.uk": "英國",
+}
+
 STANDARDS_WATCHLIST = {
     "碰撞/出軌類": ["EN 50126", "EN 50128", "EN 50129", "IEEE 1474.1", "EN 13674-1", "UIC 860-0", "IEC 61373"],
     "觸電/電弧爆炸類": ["EN 50122", "EN 50122-2", "EN 50327", "EN 50328", "EN 50329", "IEC 62271-100", "IEC 62271-102", "IEC 60947-1", "IEC 60850"],
