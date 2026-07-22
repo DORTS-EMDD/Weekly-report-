@@ -2112,7 +2112,10 @@ def build_pipeline_debug_stats(
         "incident_search_raw_count": sum(
             1 for item in raw_candidates or []
             if item.get("search_family") in {"major_accident", "official_investigation"}
-            or _contains_any_term(_candidate_selection_text(item), ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS)
+            or _contains_any_term(
+                _candidate_selection_text(item),
+                selector_service.ACCIDENT_SIGNAL_TERMS + selector_service.SAFETY_INCIDENT_DETAIL_TERMS,
+            )
         ),
         "incident_gate_pass_count": sum(
             1 for item in filtered_candidates or []
