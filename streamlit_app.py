@@ -29,6 +29,17 @@ import streamlit as st
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from report_formatter import (
+    streamlit_markdown_to_html as streamlit_html_renderer,
+    markdown_fragment_to_html as shared_fragment_renderer,
+)
+from pdf_exporter import (
+    streamlit_markdown_to_pdf_bytes as streamlit_pdf_renderer,
+    pdf_rich_text as shared_pdf_rich_text,
+    _soft_wrap_long_tokens as shared_soft_wrap_long_tokens,
+)
+from email_service import send_streamlit_email
+
 try:
     from ddgs import DDGS
 except ModuleNotFoundError:
@@ -8248,56 +8259,11 @@ def call_maiagent_cloud(prompt: str) -> str:
 
 
 def markdown_to_html(md: str) -> str:
-    h = remove_internal_candidate_markers(md)
-    h = re.sub(r'^# (.+)$',   r'<h1>\1</h1>', h, flags=re.MULTILINE)
-    h = re.sub(r'^## (.+)$',  r'<h2>\1</h2>', h, flags=re.MULTILINE)
-    h = re.sub(r'^### (.+)$', r'<h3>\1</h3>', h, flags=re.MULTILINE)
-    h = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', h)
-    h = re.sub(r'\[(.+?)\]\((https?://[^\)]+)\)', r'<a href="\2" target="_blank">\1</a>', h)
-    h = re.sub(r'^> (.+)$',  r'<blockquote>\1</blockquote>', h, flags=re.MULTILINE)
-    h = re.sub(r'^\* (.+)$', r'<li>\1</li>', h, flags=re.MULTILINE)
-    h = re.sub(r'^- (.+)$',  r'<li>\1</li>', h, flags=re.MULTILINE)
-    h = re.sub(r'^---$', r'<hr>', h, flags=re.MULTILINE)
-    h = h.replace('\n\n', '</p><p>').replace('\n', '<br>')
-    return f"""<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8">
-<style>
-  body{{font-family:'Noto Sans TC',Arial,sans-serif;line-height:1.8;
-       max-width:820px;margin:0 auto;padding:24px;color:#333}}
-  h1{{color:#1a3a5c;border-bottom:3px solid #1a3a5c;padding-bottom:8px}}
-  h2{{color:#2c5f8a}} h3{{color:#1a6e4a;background:#f0f8f4;padding:8px 12px;
-      border-left:4px solid #1a6e4a;border-radius:0 4px 4px 0}}
-  blockquote{{background:#f5f5f5;border-left:4px solid #ccc;margin:0;padding:8px 16px;color:#666}}
-  li{{margin:4px 0}} a{{color:#2c5f8a}}
-  hr{{border:none;border-top:1px solid #ddd;margin:24px 0}}
-  strong{{color:#1a3a5c}}
-  .footer{{background:#f5f8fc;padding:12px;border-radius:6px;margin-top:24px;font-size:.9em;color:#666}}
-</style></head><body><p>{h}</p>
-<div class="footer">📧 AI 自動產生 | 僅供參考，請交叉驗證原始來源</div>
-</body></html>"""
+    return streamlit_html_renderer(md, remove_internal_candidate_markers)
 
 
 def markdown_fragment_to_html(md: str) -> str:
-    md = compact_report_urls(remove_internal_candidate_markers(md))
-
-    def _inline(line: str) -> str:
-        h = escape(line)
-        h = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", h)
-        h = re.sub(r"\[(.+?)\]\((https?://[^\s\)]+)\)", r'<a href="\2" target="_blank">\1</a>', h)
-        return h
-
-    rows = []
-    for raw_line in md.splitlines():
-        line = raw_line.strip()
-        if not line or line == "---":
-            rows.append('<div class="report-spacer"></div>')
-            continue
-        if line.startswith(("- ", "* ")):
-            rows.append(f'<div class="report-line list">• {_inline(line[2:].strip())}</div>')
-        elif line.startswith("> "):
-            rows.append(f'<div class="report-line meta">{_inline(line[2:].strip())}</div>')
-        else:
-            rows.append(f'<div class="report-line">{_inline(line)}</div>')
-    return "".join(rows)
+    return shared_fragment_renderer(md, remove_internal_candidate_markers, compact_report_urls)
 
 
 def short_url_label(url: str) -> str:
@@ -10358,31 +10324,7 @@ def register_pdf_fonts() -> tuple[str, str]:
     )
 
 
-def pdf_rich_text(text: str, cjk_font: str, latin_font: str) -> str:
-    prepared = (
-        (text or "")
-        .replace("🔹", "◆")
-        .replace("📊", "【統計】")
-        .replace("⏰", "【時間】")
-        .replace("🔍", "【搜尋】")
-        .replace("🚇", "")
-        .replace("📧", "")
-    )
-    links: list[tuple[str, str]] = []
-
-    def _protect_link(match: re.Match) -> str:
-        links.append((match.group(1), match.group(2)))
-        return f"__PDF_LINK_{len(links) - 1}__"
-
-    prepared = re.sub(r"\[([^\]]+)\]\((https?://[^\)]+)\)", _protect_link, prepared)
-    safe = escape(prepared, quote=False)
-    for idx, (label, url) in enumerate(links):
-        link_markup = (
-            f'<link href="{escape(url, quote=True)}" color="#1f5f8b">'
-            f'{escape(label, quote=False)}</link>'
-        )
-        safe = safe.replace(f"__PDF_LINK_{idx}__", link_markup)
-    return f'<font name="{cjk_font}">{safe}</font>'
+pdf_rich_text = shared_pdf_rich_text
 
 
 def category_badge_class(category: str) -> str:
@@ -10567,108 +10509,15 @@ def render_report_cards(report_md: str) -> None:
 
 
 def markdown_to_pdf_bytes(md: str) -> bytes:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, KeepTogether
-
-    md = remove_internal_candidate_markers(md)
-    cjk_font, latin_font = register_pdf_fonts()
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36,
+    return streamlit_pdf_renderer(
+        md, marker_cleaner=remove_internal_candidate_markers,
+        font_registrar=register_pdf_fonts, line_compactor=compact_report_line_for_pdf,
+        rich_text_renderer=pdf_rich_text, token_wrapper=_soft_wrap_long_tokens,
+        candidate_id_pattern=REPORT_CANDIDATE_ID_PATTERN,
     )
-    styles = getSampleStyleSheet()
-    for style_name in ("Title", "Heading1", "Heading2", "Heading3", "BodyText"):
-        styles[style_name].fontName = cjk_font
-        styles[style_name].leading = max(styles[style_name].leading, 14)
-        styles[style_name].wordWrap = "CJK"
-        styles[style_name].splitLongWords = 1
-    styles["BodyText"].fontSize = 10.2
-    styles["BodyText"].leading = 15
-    styles["Title"].fontSize = 15
-    styles["Title"].leading = 20
-    styles["Heading2"].fontSize = 12.5
-    styles["Heading2"].leading = 17
-    styles["Heading3"].fontSize = 11.2
-    styles["Heading3"].leading = 16
-    styles.add(ParagraphStyle(
-        name="ReportBullet",
-        parent=styles["BodyText"],
-        leftIndent=14,
-        firstLineIndent=-8,
-        spaceBefore=1,
-        spaceAfter=1,
-        wordWrap="CJK",
-        splitLongWords=1,
-    ))
-    styles.add(ParagraphStyle(
-        name="CompactReportTitle",
-        parent=styles["Title"],
-        fontName=cjk_font,
-        fontSize=13.5,
-        leading=18,
-        wordWrap="CJK",
-        splitLongWords=1,
-    ))
-
-    story = []
-    raw_lines = md.splitlines()
-    idx = 0
-    while idx < len(raw_lines):
-        raw_line = raw_lines[idx]
-        line = raw_line.strip()
-        if REPORT_CANDIDATE_ID_PATTERN.fullmatch(line):
-            idx += 1
-            continue
-        if not line or line == "---":
-            story.append(Spacer(1, 4))
-            idx += 1
-            continue
-        if line.startswith("📊") and idx + 1 < len(raw_lines):
-            next_idx = idx + 1
-            while next_idx < len(raw_lines) and not raw_lines[next_idx].strip():
-                next_idx += 1
-            next_line = raw_lines[next_idx].strip() if next_idx < len(raw_lines) else ""
-            if next_line.startswith("⏰"):
-                story.append(KeepTogether([
-                    Paragraph(pdf_rich_text(compact_report_line_for_pdf(line), cjk_font, latin_font), styles["BodyText"]),
-                    Spacer(1, 4),
-                    Paragraph(pdf_rich_text(compact_report_line_for_pdf(next_line), cjk_font, latin_font), styles["BodyText"]),
-                ]))
-                idx = next_idx + 1
-                continue
-        if line.startswith("# "):
-            title_text = line[2:]
-            title_style = styles["CompactReportTitle"] if len(title_text) >= 28 else styles["Title"]
-            story.append(Paragraph(pdf_rich_text(title_text, cjk_font, latin_font), title_style))
-        elif line.startswith("## "):
-            story.append(Paragraph(pdf_rich_text(line[3:], cjk_font, latin_font), styles["Heading2"]))
-        elif line.startswith("### "):
-            story.append(Paragraph(pdf_rich_text(line[4:], cjk_font, latin_font), styles["Heading3"]))
-        elif line.startswith(("- ", "• ")):
-            line = compact_report_line_for_pdf(line)
-            story.append(Paragraph(pdf_rich_text(_soft_wrap_long_tokens(line, 48), cjk_font, latin_font), styles["ReportBullet"]))
-        else:
-            line = compact_report_line_for_pdf(line)
-            story.append(Paragraph(pdf_rich_text(_soft_wrap_long_tokens(line, 56), cjk_font, latin_font), styles["BodyText"]))
-        idx += 1
-    doc.build(story)
-    return buffer.getvalue()
 
 
-def _soft_wrap_long_tokens(text: str, chunk: int = 45) -> str:
-    """在超長無空白字串（如 Google News 長網址）中每隔 chunk 字元插入零寬空白，
-    讓 reportlab 能夠換行、不會爆出版面；零寬空白不影響複製貼上後的文字內容。"""
-    words = text.split(" ")
-    out = []
-    for w in words:
-        has_cjk = re.search(r"[\u3400-\u9fff]", w) is not None
-        looks_like_url_or_ascii_token = re.search(r"https?://|[A-Za-z0-9]{24,}", w) is not None
-        if len(w) > chunk and looks_like_url_or_ascii_token and not has_cjk:
-            w = "\u200b".join(w[i:i + chunk] for i in range(0, len(w), chunk))
-        out.append(w)
-    return " ".join(out)
+_soft_wrap_long_tokens = shared_soft_wrap_long_tokens
 
 
 def try_markdown_to_pdf_bytes(md: str) -> bytes | None:
@@ -10775,30 +10624,15 @@ def load_demo_report_cache() -> tuple[str, bytes | None, dict]:
 
 def send_email_func(text: str, recipients: list, gmail_user: str, gmail_pass: str) -> bool:
     text = remove_internal_candidate_markers(text)
-    msg = MIMEMultipart("alternative")
     email_run_config = st.session_state.get("latest_run_config", current_run_config)
-    msg["Subject"] = email_run_config.get("report_title", report_title)
-    msg["From"]    = gmail_user
-    msg["To"]      = ", ".join(recipients)
-    msg.attach(MIMEText(text, "plain", "utf-8"))
-    msg.attach(MIMEText(markdown_to_html(text), "html", "utf-8"))
-    pdf_bytes = try_markdown_to_pdf_bytes(text)
-    if pdf_bytes:
-        pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")
-        pdf_part.add_header(
-            "Content-Disposition",
-            "attachment",
-            filename=build_report_download_filename("metro_report", "pdf", email_run_config),
-        )
-        msg.attach(pdf_part)
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-            s.login(gmail_user, gmail_pass)
-            s.sendmail(gmail_user, recipients, msg.as_string())
-        return True
-    except Exception as e:
-        st.error(f"寄信失敗：{e}")
-        return False
+    return send_streamlit_email(
+        text, recipients,
+        subject=email_run_config.get("report_title", report_title),
+        sender=gmail_user, password=gmail_pass,
+        html_renderer=markdown_to_html, pdf_renderer=try_markdown_to_pdf_bytes,
+        pdf_filename=build_report_download_filename("metro_report", "pdf", email_run_config),
+        on_error=st.error,
+    )
 
 
 def send_current_report_email(report_md: str, status_target=None, progress_target=None) -> bool:

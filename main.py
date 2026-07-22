@@ -12,20 +12,16 @@ import sys
 import re
 import time
 import random
-import smtplib
 import datetime
 import concurrent.futures
-from io import BytesIO
-from html import escape
 import urllib.request
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
 
 from ddgs import DDGS
 import requests
+
+from email_service import send_email as send_report_email
 
 try:
     sys.stdout.reconfigure(line_buffering=True)
@@ -654,93 +650,6 @@ def generate_report() -> str:
 
 
 # ─────────────────────────────────────────────────────
-def markdown_to_html(md: str) -> str:
-    h = md
-    h = re.sub(r'^# (.+)$',   r'<h1>\1</h1>', h, flags=re.MULTILINE)
-    h = re.sub(r'^## (.+)$',  r'<h2>\1</h2>', h, flags=re.MULTILINE)
-    h = re.sub(r'^### (.+)$', r'<h3>\1</h3>', h, flags=re.MULTILINE)
-    h = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', h)
-    h = re.sub(r'\[(.+?)\]\((https?://[^\)]+)\)', r'<a href="\2" target="_blank">\1</a>', h)
-    h = re.sub(r'^> (.+)$',  r'<blockquote>\1</blockquote>', h, flags=re.MULTILINE)
-    h = re.sub(r'^\* (.+)$', r'<li>\1</li>', h, flags=re.MULTILINE)
-    h = re.sub(r'^- (.+)$',  r'<li>\1</li>', h, flags=re.MULTILINE)
-    h = re.sub(r'^---$', r'<hr>', h, flags=re.MULTILINE)
-    h = h.replace('\n\n', '</p><p>').replace('\n', '<br>')
-    return f"""<!DOCTYPE html>
-<html lang="zh-TW"><head><meta charset="UTF-8">
-<style>
-  body{{font-family:'Noto Sans TC',Arial,sans-serif;line-height:1.8;
-       max-width:820px;margin:0 auto;padding:24px;color:#333}}
-  h1{{color:#1a3a5c;border-bottom:3px solid #1a3a5c;padding-bottom:8px}}
-  h2{{color:#2c5f8a}}
-  h3{{color:#1a6e4a;background:#f0f8f4;padding:8px 12px;
-      border-left:4px solid #1a6e4a;border-radius:0 4px 4px 0}}
-  blockquote{{background:#f5f5f5;border-left:4px solid #ccc;
-              margin:0;padding:8px 16px;color:#666}}
-  li{{margin:4px 0}} a{{color:#2c5f8a}}
-  hr{{border:none;border-top:1px solid #ddd;margin:24px 0}}
-  strong{{color:#1a3a5c}}
-  .footer{{background:#f5f8fc;padding:12px;border-radius:6px;
-           margin-top:24px;font-size:.9em;color:#666}}
-</style></head><body>
-<p>{h}</p>
-<div class="footer">
-  📧 此報告由 AI 自動產生 | MaiAgent 雲端 API + RSS + ddgs | 僅供參考，請交叉驗證原始來源
-</div></body></html>"""
-
-
-def markdown_to_pdf_bytes(md: str) -> bytes:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-
-    pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=36,
-        leftMargin=36,
-        topMargin=36,
-        bottomMargin=36,
-    )
-    styles = getSampleStyleSheet()
-    for style_name in ("Title", "Heading1", "Heading2", "Heading3", "BodyText"):
-        styles[style_name].fontName = "MSung-Light"
-        styles[style_name].leading = max(styles[style_name].leading, 16)
-    styles["BodyText"].fontSize = 10.5
-
-    story = []
-    for raw_line in md.splitlines():
-        line = raw_line.strip()
-        if not line or line == "---":
-            story.append(Spacer(1, 8))
-            continue
-        if line.startswith("# "):
-            story.append(Paragraph(escape(line[2:]), styles["Title"]))
-        elif line.startswith("## "):
-            story.append(Paragraph(escape(line[3:]), styles["Heading2"]))
-        elif line.startswith("### "):
-            story.append(Paragraph(escape(line[4:]), styles["Heading3"]))
-        else:
-            line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
-            line = re.sub(r"\[(.+?)\]\((https?://[^\)]+)\)", r"\1：\2", line)
-            story.append(Paragraph(escape(line), styles["BodyText"]))
-    doc.build(story)
-    return buffer.getvalue()
-
-
-def try_markdown_to_pdf_bytes(md: str) -> bytes | None:
-    try:
-        return markdown_to_pdf_bytes(md)
-    except ModuleNotFoundError:
-        print("[WARN] reportlab 未安裝，略過 PDF 附件")
-        return None
-
-
-# ─────────────────────────────────────────────────────
 def save_report(text: str) -> str:
     os.makedirs("reports", exist_ok=True)
     path = f"reports/report_{today.strftime('%Y%m%d')}.md"
@@ -752,30 +661,11 @@ def save_report(text: str) -> str:
 
 
 def send_email(text: str, recipients: list) -> bool:
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = report_title
-    msg["From"]    = GMAIL_USER
-    msg["To"]      = ", ".join(recipients)
-    msg.attach(MIMEText(text, "plain", "utf-8"))
-    msg.attach(MIMEText(markdown_to_html(text), "html", "utf-8"))
-    pdf_bytes = try_markdown_to_pdf_bytes(text)
-    if pdf_bytes:
-        pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")
-        pdf_part.add_header(
-            "Content-Disposition",
-            "attachment",
-            filename=f"metro_report_{today.strftime('%Y%m%d')}.pdf",
-        )
-        msg.attach(pdf_part)
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-            s.login(GMAIL_USER, GMAIL_APP_PASS)
-            s.sendmail(GMAIL_USER, recipients, msg.as_string())
-        print(f"[INFO] ✅ 已寄送至：{', '.join(recipients)}")
-        return True
-    except Exception as e:
-        print(f"[ERROR] 寄信失敗：{e}")
-        return False
+    return send_report_email(
+        text, recipients, subject=report_title, sender=GMAIL_USER,
+        password=GMAIL_APP_PASS,
+        pdf_filename=f"metro_report_{today.strftime('%Y%m%d')}.pdf",
+    )
 
 
 # ─────────────────────────────────────────────────────
