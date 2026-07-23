@@ -13,7 +13,6 @@ import random
 import difflib
 import datetime
 import smtplib
-import concurrent.futures
 from io import BytesIO
 from html import escape
 from pathlib import Path
@@ -104,6 +103,32 @@ from journal_service import (
     collect_journal_candidates as service_collect_journal_candidates,
     fetch_journal_page_metadata as service_fetch_journal_page_metadata,
 )
+from ddgs_search_service import (
+    DDGS_ERROR_STATUSES,
+    DdgsSearchContext,
+    _active_query_specs,
+    _basic_search_url_exclusion_reason,
+    _compact_query,
+    _ddgs_exception_status,
+    _ddgs_timelimit_for_lookback,
+    _format_ddg_block,
+    _regional_query_spec_sequence,
+    _search_result_date_hint,
+    _standard_search_queries,
+    build_ddgs_search_summary,
+    ddgs_general_only_queries,
+    ddgs_queries_by_outcome,
+    _basic_search_date_exclusion_reason as service_basic_search_date_exclusion_reason,
+    _ddgs_query_status_template as service_ddgs_query_status_template,
+    _query_metadata_for as service_query_metadata_for,
+    _query_with_period as service_query_with_period,
+    _run_single_query as service_run_single_query,
+    _search_family_from_query as service_search_family_from_query,
+    _search_language_from_query as service_search_language_from_query,
+    _selected_query_families as service_selected_query_families,
+    build_search_queries as service_build_search_queries,
+    run_duckduckgo_searches as service_run_duckduckgo_searches,
+)
 from pdf_exporter import (
     streamlit_markdown_to_pdf_bytes as streamlit_pdf_renderer,
     pdf_rich_text as shared_pdf_rich_text,
@@ -138,7 +163,6 @@ from article_processor import (
     _prefetch_url_for_candidate, _extract_prefetch_text, _prefetch_candidate_article,
 )
 from search_queries import (
-    SEARCH_QUERY_SPECS, REGION_QUERY_LANGUAGES, QUERY_FAMILY_BY_TYPE_INDEX, SEARCH_LANGUAGE_MARKERS,
     build_rss_sources, KNOWN_BAD_OFFICIAL_RSS_HOSTS, KNOWN_BAD_OFFICIAL_RSS_LABELS,
     FORMAL_SOURCE_PROXY_LABELS, REGION_NEWS_QUERIES, FAST_SOURCE_KEYWORDS,
     _source_skip_record, _source_identity, _is_known_bad_official_rss,
@@ -150,11 +174,8 @@ from search_service import (
     FeedFetchError as ServiceFeedFetchError,
     google_news_search_url as service_google_news_search_url,
     google_news_site_proxy_url as service_google_news_site_proxy_url,
-    compact_query as service_compact_query,
-    ddgs_timelimit_for_lookback as service_ddgs_timelimit_for_lookback,
     create_requests_session as service_create_requests_session,
     fetch_feed as service_fetch_feed,
-    execute_ddgs_query as service_execute_ddgs_query,
 )
 from maiagent_service import (
     call_maiagent_cloud as call_maiagent_service,
@@ -1342,479 +1363,93 @@ def fetch_rss_feeds(
     return raw_text
 
 
+def _ddgs_search_context(
+    progress_bar=None,
+    status_text=None,
+    *,
+    query_metadata: dict[str, dict] | None = None,
+) -> DdgsSearchContext:
+    return DdgsSearchContext(
+        selected_types=selected_types,
+        active_regions=active_regions,
+        lookback_days=lookback_days,
+        lookback_int=lookback_int,
+        is_global_scope=is_global_scope,
+        today=today,
+        ddgs_client_factory=DDGS,
+        query_metadata=LAST_DDGS_QUERY_METADATA if query_metadata is None else query_metadata,
+        progress_callback=progress_bar.progress if progress_bar else None,
+        status_callback=status_text.text if status_text else None,
+        perf_counter=time.perf_counter,
+        sleep=time.sleep,
+        random_uniform=random.uniform,
+    )
+
+
 def _search_language_from_query(query: str) -> str:
-    metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {}
-    if metadata.get("lang"):
-        return metadata["lang"]
-    q = query or ""
-    q_lower = q.casefold()
-    if any(marker in q for marker in ("метро", "трамвай", "фуникулер", "забастовка")):
-        return "ru"
-    if any(marker in q_lower for marker in ("eletrico", "elétrico", "greve", "investigacao", "investigação", "sinalizacao", "sinalização", "descarrilamento")):
-        return "pt"
-    if any(marker in q_lower for marker in ("sciopero", "funicolare", "segnalamento", "deragliamento", "collisione")):
-        return "it"
-    for language, markers in SEARCH_LANGUAGE_MARKERS:
-        if any(marker.casefold() in q_lower for marker in markers):
-            return language
-    return "en"
+    return service_search_language_from_query(
+        query,
+        query_metadata=LAST_DDGS_QUERY_METADATA,
+    )
 
 
 def _search_family_from_query(query: str) -> str:
-    metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {}
-    if metadata.get("family"):
-        return metadata["family"]
-    q = (query or "").casefold()
-    if any(term in q for term in ("deragliamento", "descarrilamento", "colisao", "colisão", "collisione", "incendio", "incêndio", "расследование", "сход с рельсов", "столкновение")):
-        return "major_accident"
-    if any(term in q for term in ("sciopero", "greve", "забастовка", "procurement dispute", "contract dispute", "cost overrun", "arbitration")):
-        return "dispute"
-    if any(term in q for term in ("apertura linea", "abertura linha", "fare reform", "operating hours", "capacity increase", "service change")):
-        return "policy"
-    if any(standard.casefold() in q for standards in STANDARDS_WATCHLIST.values() for standard in standards):
-        return "standards_update"
-    if any(domain in q for domain in ("ntsb.gov", "tsb.gc.ca", "atsb.gov.au", "bea-tt.developpement-durable.gouv.fr", "gov.uk/raib")):
-        return "official_investigation"
-    if any(term in q for term in (
-        "derailment", "collision", "evacuation", "fatal", "killed", "injured",
-        "entgleisung", "déraillement", "descarrilamiento", "сход", "脱線",
-        "탈선", "脫軌", "脱轨",
-    )):
-        return "major_accident"
-    if any(term in q for term in ("strike", "union dispute", "lawsuit", "procurement dispute", "contract dispute", "cost overrun", "arbitration", "罷工")):
-        return "dispute"
-    if any(term in q for term in ("line opening", "service restructuring", "fare reform", "operating hours", "capacity increase", "system renewal")):
-        return "policy"
-    if any(term in q for term in (
-        "contactless payment", "rolling stock", "signalling", "signaling", "cbtc",
-        "life-cycle management", "fire protection", "track renewal", "biometric",
-        "modernisierung", "modernisation", "modernización", "modernização",
-    )):
-        return "technology"
-    if "google news" in q or "site:" in q:
-        return "official_site_or_rss"
-    return "general"
-
-
-def _compact_query(query: str, limit: int = DDGS_QUERY_CHAR_LIMIT) -> str:
-    return service_compact_query(query, limit)
-
-
-_ddgs_timelimit_for_lookback = service_ddgs_timelimit_for_lookback
+    return service_search_family_from_query(
+        query,
+        query_metadata=LAST_DDGS_QUERY_METADATA,
+    )
 
 
 def _query_with_period(query: str) -> str:
-    q = query.strip()
-    if lookback_int > 31:
-        q = f"{q} {today:%Y}"
-    return _compact_query(q)
-
-
-def _active_query_specs(family: str) -> list[dict]:
-    return [spec for spec in SEARCH_QUERY_SPECS if spec.get("family") == family]
+    return service_query_with_period(query, context=_ddgs_search_context())
 
 
 def _selected_query_families() -> list[str]:
-    families: list[str] = []
-    for type_index, family in QUERY_FAMILY_BY_TYPE_INDEX.items():
-        if type_index < len(ADVANCED_TYPES) and ADVANCED_TYPES[type_index] in selected_types:
-            families.append(family)
-    if "major_accident" in families:
-        families.append("official_investigation")
-    return families
+    return service_selected_query_families(context=_ddgs_search_context())
 
 
 def _query_metadata_for(query: str) -> dict:
-    metadata = LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {}
-    if metadata:
-        return metadata
-    return {
-        "family": _search_family_from_query(query),
-        "lang": _search_language_from_query(query),
-        "query_region": "unplanned",
-        "use_news": True,
-        "timelimit": _ddgs_timelimit_for_lookback(lookback_int),
-        "requested_max_results": DDGS_RESULTS_PER_QUERY,
-    }
-
-
-def _regional_query_spec_sequence(families: list[str], preferred_lang: str) -> list[dict]:
-    selected_specs: list[dict] = []
-    selected_ids: set[int] = set()
-
-    for family in families:
-        family_specs = _active_query_specs(family)
-        preferred = next((spec for spec in family_specs if spec.get("lang") == preferred_lang), None)
-        fallback = next((spec for spec in family_specs if spec.get("lang") == "en"), None)
-        chosen = preferred or fallback or (family_specs[0] if family_specs else None)
-        if chosen:
-            selected_specs.append(chosen)
-            selected_ids.add(id(chosen))
-
-    for language in (preferred_lang, "en"):
-        for family in families:
-            for spec in _active_query_specs(family):
-                if id(spec) in selected_ids or spec.get("lang") != language:
-                    continue
-                selected_specs.append(spec)
-                selected_ids.add(id(spec))
-
-    for family in families:
-        for spec in _active_query_specs(family):
-            if id(spec) not in selected_ids:
-                selected_specs.append(spec)
-                selected_ids.add(id(spec))
-    return selected_specs
-
-
-def _standard_search_queries():
-    for standards in STANDARDS_WATCHLIST.values():
-        for standard in standards:
-            yield f'"{standard}" revision amendment published draft metro rail standard'
+    return service_query_metadata_for(query, context=_ddgs_search_context())
 
 
 def build_search_queries() -> tuple[list[str], set[int]]:
     global LAST_DDGS_QUERY_METADATA
-    LAST_DDGS_QUERY_METADATA = {}
-    queries: list[str] = []
-    news_indices: set[int] = set()
-    seen_queries: set[str] = set()
-    query_limit = DDGS_GLOBAL_QUERY_LIMIT if is_global_scope else DDGS_REGIONAL_QUERY_LIMIT
-    timelimit = _ddgs_timelimit_for_lookback(lookback_int)
-
-    def _add(
-        query: str,
-        family: str,
-        lang: str = "en",
-        use_news: bool = True,
-        query_region: str = "global",
-    ) -> bool:
-        if len(queries) >= query_limit:
-            return False
-        final_query = _query_with_period(query)
-        if not final_query or final_query in seen_queries:
-            return False
-        seen_queries.add(final_query)
-        queries.append(final_query)
-        LAST_DDGS_QUERY_METADATA[final_query] = {
-            "family": family,
-            "lang": lang,
-            "query_region": query_region,
-            "use_news": use_news,
-            "timelimit": timelimit,
-            "requested_max_results": DDGS_RESULTS_PER_QUERY,
-            "planned_index": len(queries),
-        }
-        if use_news:
-            news_indices.add(len(queries))
-        return True
-
-    selected_families = _selected_query_families()
-    include_official = "official_investigation" in selected_families
-    content_families = [family for family in selected_families if family != "official_investigation"]
-
-    if is_global_scope:
-        for family in content_families:
-            for spec in _active_query_specs(family):
-                _add(
-                    spec.get("query", ""),
-                    family=spec.get("family", family),
-                    lang=spec.get("lang", "en"),
-                    use_news=bool(spec.get("use_news", True)),
-                )
-    elif content_families and active_regions:
-        regions = list(dict.fromkeys(active_regions))
-        official_reserve = 1 if include_official else 0
-        country_budget = max(0, query_limit - official_reserve)
-        max_per_country = min(4, max(2, len(content_families)))
-        allocations = {region: min(2, country_budget // max(1, len(regions))) for region in regions}
-        remaining = country_budget - sum(allocations.values())
-        while remaining > 0 and any(count < max_per_country for count in allocations.values()):
-            for region in regions:
-                if remaining <= 0:
-                    break
-                if allocations[region] < max_per_country:
-                    allocations[region] += 1
-                    remaining -= 1
-
-        for region in regions:
-            preferred_lang = REGION_QUERY_LANGUAGES.get(region, "en")
-            specs = _regional_query_spec_sequence(content_families, preferred_lang)
-            prefix = REGION_SEARCH_TERMS.get(region, region)
-            for spec in specs[:allocations[region]]:
-                _add(
-                    f"{prefix} {spec.get('query', '')}",
-                    family=spec.get("family", "general"),
-                    lang=spec.get("lang", preferred_lang),
-                    use_news=bool(spec.get("use_news", True)),
-                    query_region=region,
-                )
-
-    if include_official:
-        official_spec = next(iter(_active_query_specs("official_investigation")), None)
-        if official_spec:
-            _add(
-                official_spec.get("query", ""),
-                family="official_investigation",
-                lang=official_spec.get("lang", "en"),
-                use_news=bool(official_spec.get("use_news", False)),
-                query_region="global",
-            )
-
-    if len(ADVANCED_TYPES) > 4 and ADVANCED_TYPES[4] in selected_types:
-        for query in _standard_search_queries():
-            if not _add(query, family="standards_update", lang="en", use_news=True):
-                break
-    return queries, news_indices
-
-
-def _format_ddg_block(i: int, backend: str, query: str, items: list[dict], status: str) -> str:
-    if not items:
-        return f"【搜尋 {i}（{backend}）】{query}\n  {status}"
-    lines = [f"【搜尋 {i}（{backend}）】{query}（有效候選 {len(items)} 篇）"]
-    for item in items:
-        lines.append(
-            f"  日期：{item['date']}\n"
-            f"  標題：{item['title']}\n"
-            f"  摘要：{item['summary']}\n"
-            f"  連結：{item['link']}"
-        )
-    return "\n".join(lines)
-
-
-def _search_result_date_hint(date_text: str, fallback_text: str = "") -> str:
-    if _candidate_date_obj(date_text):
-        return date_text
-    match = re.search(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b", fallback_text or "")
-    if match:
-        return match.group(0)
-    match = re.search(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+20\d{2}\b", fallback_text or "", flags=re.IGNORECASE)
-    if match:
-        return match.group(0)
-    match = re.search(r"\b20\d{2}\b", fallback_text or "")
-    return match.group(0) if match else date_text
+    query_metadata: dict[str, dict] = {}
+    result = service_build_search_queries(
+        context=_ddgs_search_context(query_metadata=query_metadata),
+    )
+    LAST_DDGS_QUERY_METADATA = query_metadata
+    return result
 
 
 def _ddgs_query_status_template(query: str, news_timelimit: str) -> dict:
-    metadata = _query_metadata_for(query) or {}
-    family = metadata.get("family", "general")
-    language = metadata.get("lang", "en")
-    requested = int(metadata.get("requested_max_results", DDGS_RESULTS_PER_QUERY) or DDGS_RESULTS_PER_QUERY)
-    return {
-        "search_family": family,
-        "search_language": language,
-        "query": query,
-        "query_region": metadata.get("query_region", "unplanned"),
-        "use_news": bool(metadata.get("use_news", True)),
-        "timelimit": metadata.get("timelimit") or news_timelimit,
-        "requested_max_results": requested,
-        "returned_count": 0,
-        "valid_url_count": 0,
-        "date_valid_count": 0,
-        "basic_excluded_count": 0,
-        "added_to_raw_count": 0,
-        "excluded_counts_by_reason": {},
-        "backend": "",
-        "execution_status": "not_executed",
-        "error_message": "",
-        "elapsed_seconds": 0.0,
-        "planned_index": int(metadata.get("planned_index", 0) or 0),
-        # Backward-compatible aliases retained for existing developer tooling.
-        "family": family,
-        "lang": language,
-        "requested": requested,
-    }
-
-
-DDGS_ERROR_STATUSES = {"http_403", "rate_limited_429", "timeout", "other_exception"}
-
-
-def ddgs_queries_by_outcome(statuses: list[dict], outcome: str) -> list[dict]:
-    rows = statuses or []
-    if outcome == "no_backend_result":
-        return [row for row in rows if row.get("execution_status") == "zero_results"]
-    if outcome == "all_results_basic_excluded":
-        return [row for row in rows if row.get("execution_status") == "all_results_basic_excluded"]
-    if outcome == "query_error":
-        return [row for row in rows if row.get("execution_status") in DDGS_ERROR_STATUSES]
-    if outcome == "added_zero":
-        return [row for row in rows if int(row.get("added_to_raw_count", 0) or 0) == 0]
-    if outcome == "success_with_raw":
-        return [row for row in rows if int(row.get("added_to_raw_count", 0) or 0) > 0]
-    return []
-
-
-def ddgs_general_only_queries(statuses: list[dict]) -> list[dict]:
-    return [
-        row for row in statuses or []
-        if (row.get("search_family") or row.get("family") or "general") == "general"
-    ]
-
-
-def _ddgs_exception_status(exc: Exception) -> str:
-    message = str(exc).casefold()
-    if "no results found" in message or "no result found" in message:
-        return "zero_results"
-    if "429" in message or "ratelimit" in message or "rate limit" in message:
-        return "rate_limited_429"
-    if "403" in message or "forbidden" in message:
-        return "http_403"
-    if isinstance(exc, (TimeoutError, requests.Timeout)) or "timeout" in message or "timed out" in message:
-        return "timeout"
-    return "other_exception"
-
-
-def _basic_search_url_exclusion_reason(title: str, href: str, candidate_text: str) -> str:
-    if not title:
-        return "empty_title"
-    if not href:
-        return "empty_url"
-    try:
-        parsed = urlparse(href)
-    except Exception:
-        return "unparseable_result"
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return "invalid_url"
-    host = parsed.netloc.lower().removeprefix("www.")
-    if _is_blocked_host(host) or any(
-        _host_matches(host, domain)
-        for domain in LOW_VALUE_EXCLUDED_HOSTS | PORTAL_SOCIAL_LOW_VALUE_DOMAINS
-    ):
-        return "blocked_or_low_value_domain"
-    if _is_domestic_taiwan_host(host) or _contains_taiwan_reference(candidate_text):
-        return "taiwan_news"
-    return ""
+    return service_ddgs_query_status_template(
+        query,
+        news_timelimit,
+        context=_ddgs_search_context(),
+    )
 
 
 def _basic_search_date_exclusion_reason(date_text: str) -> str:
-    date_obj = _candidate_date_obj(date_text)
-    if not date_obj:
-        return ""
-    cutoff_date = today - datetime.timedelta(days=max(1, min(int(lookback_days), 365)) + 3)
-    if date_obj < cutoff_date or date_obj > today + datetime.timedelta(days=1):
-        return "date_out_of_range"
-    return ""
+    return service_basic_search_date_exclusion_reason(
+        date_text,
+        context=_ddgs_search_context(),
+    )
 
 
-def build_ddgs_search_summary(statuses: list[dict], planned_query_count: int | None = None) -> dict:
-    rows = statuses or []
-
-    def _count_by(key: str, fallback_key: str = "") -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for row in rows:
-            value = row.get(key) or (row.get(fallback_key) if fallback_key else "") or "unassigned"
-            counts[str(value)] = counts.get(str(value), 0) + 1
-        return counts
-
-    return {
-        "planned_query_count": int(planned_query_count if planned_query_count is not None else len(rows)),
-        "executed_query_count": sum(1 for row in rows if row.get("execution_status") not in {"not_executed", "not_executed_dependency_missing"}),
-        "query_count_by_region": _count_by("query_region"),
-        "query_count_by_family": _count_by("search_family", "family"),
-        "query_count_by_language": _count_by("search_language", "lang"),
-        "no_backend_result_count": len(ddgs_queries_by_outcome(rows, "no_backend_result")),
-        "all_results_basic_excluded_count": len(ddgs_queries_by_outcome(rows, "all_results_basic_excluded")),
-        "query_error_count": len(ddgs_queries_by_outcome(rows, "query_error")),
-        "added_zero_count": len(ddgs_queries_by_outcome(rows, "added_zero")),
-        "success_with_raw_count": len(ddgs_queries_by_outcome(rows, "success_with_raw")),
-        "rate_limited_query_count": sum(1 for row in rows if row.get("execution_status") in {"http_403", "rate_limited_429"}),
-        "DDGS_added_to_raw_count": sum(int(row.get("added_to_raw_count", 0) or 0) for row in rows),
-        "outcome_definitions": {
-            "no_backend_result_count": "execution_status=zero_results",
-            "all_results_basic_excluded_count": "backend returned results but every result failed basic exclusions",
-            "query_error_count": "403, 429, timeout, or other exception",
-            "added_zero_count": "added_to_raw_count=0 across all planned queries",
-            "success_with_raw_count": "added_to_raw_count>0",
-        },
-    }
-
-
-def _run_single_query(i: int, query: str, use_news: bool, news_timelimit: str) -> tuple[int, str, str, list[dict], str, dict]:
-    started = time.perf_counter()
-    status_row = _ddgs_query_status_template(query, news_timelimit)
-    time.sleep(random.uniform(0.1, 0.4))
-    result_items: list[dict] = []
-    final_backend = ""
-    last_exception: Exception | None = None
-    errors: list[str] = []
-    received_response = False
-    zero_result_response = False
-
-    for backend in ["auto", "bing"]:
-        final_backend = backend
-        for attempt in range(1, 3):
-            try:
-                result_list = service_execute_ddgs_query(
-                    DDGS, query, use_news=use_news,
-                    max_results=status_row["requested_max_results"],
-                    timelimit=status_row["timelimit"], backend=backend,
-                )
-                received_response = True
-                status_row["returned_count"] = len(result_list)
-                if not result_list:
-                    break
-                for r in result_list:
-                    if not isinstance(r, dict):
-                        reason = "unparseable_result"
-                        status_row["excluded_counts_by_reason"][reason] = status_row["excluded_counts_by_reason"].get(reason, 0) + 1
-                        continue
-                    body = (r.get("body") or r.get("excerpt") or r.get("description") or "")[:350]
-                    href = r.get("href") or r.get("url") or ""
-                    title = (r.get("title") or "").strip()
-                    item_date = _search_result_date_hint(r.get("date") or r.get("published") or "", f"{title} {body}")
-                    candidate_text = f"{title} {body} {href} {item_date}"
-                    reason = _basic_search_url_exclusion_reason(title, href, candidate_text)
-                    if reason:
-                        status_row["excluded_counts_by_reason"][reason] = status_row["excluded_counts_by_reason"].get(reason, 0) + 1
-                        continue
-                    status_row["valid_url_count"] += 1
-                    date_reason = _basic_search_date_exclusion_reason(item_date)
-                    if date_reason:
-                        status_row["excluded_counts_by_reason"][date_reason] = status_row["excluded_counts_by_reason"].get(date_reason, 0) + 1
-                        continue
-                    if _candidate_date_obj(item_date):
-                        status_row["date_valid_count"] += 1
-                    result_items.append({
-                        "title": title,
-                        "summary": body,
-                        "link": href,
-                        "date": item_date or "日期未知",
-                    })
-                break
-            except Exception as exc:
-                exception_status = _ddgs_exception_status(exc)
-                if exception_status == "zero_results":
-                    received_response = True
-                    zero_result_response = True
-                    last_exception = None
-                    break
-                last_exception = exc
-                errors.append(f"{backend} attempt {attempt}: {str(exc)[:220]}")
-                wait = attempt * 0.8 + random.uniform(0.2, 0.9)
-                time.sleep(wait)
-                if exception_status not in {"http_403", "rate_limited_429"}:
-                    break
-
-        if status_row["returned_count"] > 0 or zero_result_response:
-            break
-
-    status_row["basic_excluded_count"] = sum(status_row["excluded_counts_by_reason"].values())
-    status_row["added_to_raw_count"] = len(result_items)
-    status_row["backend"] = final_backend
-    if status_row["returned_count"] > 0 and result_items:
-        execution_status = "success"
-    elif status_row["returned_count"] > 0:
-        execution_status = "all_results_basic_excluded"
-    elif received_response:
-        execution_status = "zero_results"
-    elif last_exception is not None:
-        execution_status = _ddgs_exception_status(last_exception)
-    else:
-        execution_status = "not_executed"
-    status_row["execution_status"] = execution_status
-    status_row["error_message"] = " | ".join(errors)[-600:]
-    status_row["elapsed_seconds"] = round(time.perf_counter() - started, 2)
-    return i, query, final_backend or "auto", result_items, execution_status, status_row
+def _run_single_query(
+    i: int,
+    query: str,
+    use_news: bool,
+    news_timelimit: str,
+) -> tuple[int, str, str, list[dict], str, dict]:
+    return service_run_single_query(
+        i,
+        query,
+        use_news,
+        news_timelimit,
+        context=_ddgs_search_context(),
+    )
 
 
 def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
@@ -1822,62 +1457,20 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
     global LAST_DDGS_QUERY_STATUSES, LAST_DDGS_SEARCH_SUMMARY
     LAST_DDGS_QUERY_STATUSES = []
     LAST_DDGS_SEARCH_SUMMARY = {}
-    if not selected_types:
-        LAST_DDGS_SEARCH_SUMMARY = build_ddgs_search_summary([], 0)
-        return "未勾選任何新聞類型，略過搜尋。"
 
-    search_queries, news_query_indices = build_search_queries()
-    total = len(search_queries)
-    days = int(lookback_days)
-    news_timelimit = _ddgs_timelimit_for_lookback(days)
-    if DDGS is None:
-        for query in search_queries:
-            row = _ddgs_query_status_template(query, news_timelimit)
-            row["execution_status"] = "not_executed_dependency_missing"
-            row["error_message"] = "ddgs package is not installed"
-            LAST_DDGS_QUERY_STATUSES.append(row)
-        LAST_DDGS_SEARCH_SUMMARY = build_ddgs_search_summary(LAST_DDGS_QUERY_STATUSES, total)
-        return "ddgs 套件未安裝，略過 ddgs 搜尋；請確認 requirements.txt 已包含 ddgs。"
-    if not search_queries:
-        LAST_DDGS_SEARCH_SUMMARY = build_ddgs_search_summary([], 0)
-        return "沒有規劃 DDGS 查詢。"
+    search_queries: list[str] = []
+    news_query_indices: set[int] = set()
+    if selected_types:
+        search_queries, news_query_indices = build_search_queries()
 
-    results_map: dict[int, str] = {}
-    done_count = 0
-
-    max_workers = max(1, min(6, total))
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_run_single_query, i, query, i in news_query_indices, news_timelimit): i
-            for i, query in enumerate(search_queries, 1)
-        }
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                i, query, backend, items, status, query_status = future.result()
-            except Exception as exc:
-                i = futures[future]
-                query = search_queries[i - 1] if 0 < i <= len(search_queries) else ""
-                backend = "auto"
-                items = []
-                status = _ddgs_exception_status(exc)
-                query_status = _ddgs_query_status_template(query, news_timelimit)
-                query_status["execution_status"] = status
-                query_status["error_message"] = str(exc)[:300]
-            LAST_DDGS_QUERY_STATUSES.append(query_status)
-            results_map[i] = _format_ddg_block(i, backend, query, items, status)
-            done_count += 1
-            if status_text:
-                status_text.text("正在蒐集國際捷運新聞")
-            if progress_bar:
-                progress_bar.progress(done_count / total)
-
-    LAST_DDGS_QUERY_STATUSES = sorted(
-        LAST_DDGS_QUERY_STATUSES,
-        key=lambda row: (int(row.get("planned_index", 0) or 0), str(row.get("query", ""))),
+    result_text, query_statuses, search_summary = service_run_duckduckgo_searches(
+        context=_ddgs_search_context(progress_bar, status_text),
+        search_queries=search_queries,
+        news_query_indices=news_query_indices,
     )
-    LAST_DDGS_SEARCH_SUMMARY = build_ddgs_search_summary(LAST_DDGS_QUERY_STATUSES, total)
-    return "\n\n".join(results_map[i] for i in sorted(results_map))
+    LAST_DDGS_QUERY_STATUSES = query_statuses
+    LAST_DDGS_SEARCH_SUMMARY = search_summary
+    return result_text
 
 
 def build_pipeline_debug_stats(
