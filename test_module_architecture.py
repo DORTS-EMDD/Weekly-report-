@@ -141,6 +141,27 @@ class ModuleArchitectureTests(unittest.TestCase):
         )
         self.assertEqual(unresolved, set())
 
+    def test_streamlit_report_postprocessor_service_attributes_exist(self):
+        import report_postprocessor
+
+        source = (PROJECT_ROOT / "streamlit_app.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        attributes = sorted(
+            {
+                node.attr
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "report_postprocess_service"
+            }
+        )
+        missing = [
+            f"report_postprocessor.{name}"
+            for name in attributes
+            if not hasattr(report_postprocessor, name)
+        ]
+        self.assertEqual(missing, [])
+
 
 if __name__ == "__main__":
     unittest.main()

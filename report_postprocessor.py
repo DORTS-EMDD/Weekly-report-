@@ -1712,14 +1712,19 @@ def enforce_research_section(report_md: str, journal_candidates: list[dict], *, 
         return report_md
     if journal_candidates:
         return report_md
-    heading = context.research_section_heading(markdown=True)
-    fallback = f'{heading}\n本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。'
-    if re.search('(?m)^#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:技術研究補充|國際學術期刊)\\s*$', report_md or ''):
-        return re.sub('(?ms)^#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:技術研究補充|國際學術期刊)\\s*.*?(?=^📊|^⏰|\\Z)', fallback + '\n\n', report_md, count=1).strip()
-    match = re.search('(?m)^📊', report_md or '')
+    heading = context.research_section_heading(True)
+    fallback = f"{heading}\n本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。"
+    if re.search(r"(?m)^#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:技術研究補充|國際學術期刊)\s*$", report_md or ""):
+        return re.sub(
+            r"(?ms)^#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:技術研究補充|國際學術期刊)\s*.*?(?=^📊|^⏰|\Z)",
+            fallback + "\n\n",
+            report_md,
+            count=1,
+        ).strip()
+    match = re.search(r"(?m)^📊", report_md or "")
     if match:
-        return (report_md[:match.start()].rstrip() + '\n\n' + fallback + '\n\n' + report_md[match.start():].lstrip()).strip()
-    return (report_md.rstrip() + '\n\n' + fallback).strip()
+        return (report_md[:match.start()].rstrip() + "\n\n" + fallback + "\n\n" + report_md[match.start():].lstrip()).strip()
+    return (report_md.rstrip() + "\n\n" + fallback).strip()
 
 def _candidate_report_presence_keys(candidate: dict, *, context: ReportPostprocessContext) -> list[str]:
     source_url = _effective_source_url(candidate)
