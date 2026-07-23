@@ -69,6 +69,30 @@ def build_maiagent_request(prompt: str, api_key: str, chatbot_id: str, api_base:
     return endpoint, headers, payload
 
 
+def _maiagent_log_excerpt(value, *, api_key: str, prompt: str) -> str:
+    text = str(value or "")
+    if api_key:
+        text = text.replace(api_key, "[REDACTED_API_KEY]")
+    if prompt:
+        text = text.replace(prompt, "[REDACTED_PROMPT]")
+    return text[:500]
+
+
+def _format_maiagent_attempt_log(attempts: list[dict]) -> str:
+    lines = ["MaiAgent attempt log:"]
+    for index, attempt in enumerate(attempts, start=1):
+        lines.extend([
+            f"Attempt {index}:",
+            f"  URL: {attempt.get('url', '')}",
+            f"  Payload streaming field: {attempt.get('payload_streaming_field', '')}",
+            f"  HTTP status: {attempt.get('http_status', '')}",
+            f"  Response body: {attempt.get('response_body', '')}",
+            f"  Location: {attempt.get('location', '')}",
+            f"  Allow: {attempt.get('allow', '')}",
+        ])
+    return "\n".join(lines)
+
+
 def call_maiagent_cloud(prompt: str, *, api_key: str, chatbot_id: str, api_base: str, http_client=requests) -> str:
     """Call the Streamlit V19.4 MaiAgent API without any UI dependency."""
     if not api_key:
@@ -76,17 +100,47 @@ def call_maiagent_cloud(prompt: str, *, api_key: str, chatbot_id: str, api_base:
     if not chatbot_id:
         raise RuntimeError("未設定 MAIAGENT_CHATBOT_ID")
     url, headers, payload = build_maiagent_request(prompt, api_key, chatbot_id, api_base)
+    payload_streaming_field = (
+        "isStreaming" if "isStreaming" in payload
+        else "is_streaming" if "is_streaming" in payload
+        else "none"
+    )
+    attempt_log: list[dict] = []
     try:
         response = http_client.post(url, headers=headers, json=payload, timeout=240)
     except Exception as exc:
-        raise RuntimeError(f"MaiAgent API 呼叫失敗：{exc}") from exc
+        attempt_log.append({
+            "url": _maiagent_log_excerpt(url, api_key=api_key, prompt=prompt),
+            "payload_streaming_field": payload_streaming_field,
+            "http_status": "N/A",
+            "response_body": _maiagent_log_excerpt(
+                f"Request error: {exc}", api_key=api_key, prompt=prompt
+            ),
+            "location": "",
+            "allow": "",
+        })
+        raise RuntimeError(
+            f"MaiAgent API 所有嘗試均失敗。\n{_format_maiagent_attempt_log(attempt_log)}"
+        ) from exc
+
+    attempt_log.append({
+        "url": _maiagent_log_excerpt(url, api_key=api_key, prompt=prompt),
+        "payload_streaming_field": payload_streaming_field,
+        "http_status": response.status_code,
+        "response_body": _maiagent_log_excerpt(
+            response.text, api_key=api_key, prompt=prompt
+        ),
+        "location": _maiagent_log_excerpt(
+            response.headers.get("Location", ""), api_key=api_key, prompt=prompt
+        ),
+        "allow": _maiagent_log_excerpt(
+            response.headers.get("Allow", ""), api_key=api_key, prompt=prompt
+        ),
+    })
 
     if not 200 <= response.status_code < 300:
-        location = response.headers.get("Location", "")
-        allow = response.headers.get("Allow", "")
         raise RuntimeError(
-            f"MaiAgent API 回應 {response.status_code}: "
-            f"body={response.text}; Location={location}; Allow={allow}"
+            f"MaiAgent API 所有嘗試均失敗。\n{_format_maiagent_attempt_log(attempt_log)}"
         )
 
     try:
