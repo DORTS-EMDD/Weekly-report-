@@ -2,18 +2,53 @@
 
 import datetime
 import re
+from dataclasses import dataclass
 from typing import Callable
 
 from article_processor import (
+    _candidate_date_obj,
+    _canonical_candidate_region,
+    _clean_text,
+    _contains_any_term,
     _domain_from_url,
+    _effective_source_url,
+    _extract_complete_url,
     _extract_complete_urls,
     _extract_domain_hint,
     _is_article_level_url,
     _is_query_proxy_source_label,
     _normalize_title,
 )
-from config import ADVANCED_TYPES, EMPTY_TEXT_BY_TYPE, SECTION_NUMBER_BY_TYPE
-from maiagent_service import remove_internal_candidate_markers
+from config import (
+    ADVANCED_LOOKBACK_OPTIONS,
+    ADVANCED_TYPES,
+    EMPTY_TEXT_BY_TYPE,
+    SECTION_NUMBER_BY_TYPE,
+)
+from journal_service import _parse_full_research_date
+from maiagent_service import (
+    REPORT_CANDIDATE_ID_PATTERN,
+    ensure_selected_candidate_ids,
+    remove_internal_candidate_markers,
+    validate_report_candidate_ids,
+)
+
+
+@dataclass(frozen=True)
+class ReportPostprocessContext:
+    selected_types: list[str]
+    standards_enabled: bool
+    include_research_supplement: bool
+    lookback_int: int
+    today: datetime.date
+    date_range: str
+    report_title: str
+    report_scope_label: str
+    candidate_selection_text: Callable[[dict], str]
+    infer_preliminary_type: Callable[[dict], str]
+    is_urban_rail_candidate: Callable[[str], bool]
+    research_section_heading: Callable[[bool], str]
+    id_validation_target: dict
 
 
 def short_url_label(url: str) -> str:
@@ -1170,3 +1205,833 @@ def count_report_items_by_category(report_md: str) -> dict[str, int]:
                 counts[category] += 1
                 break
     return counts
+
+# Extracted formal-report reconciliation and diagnostics.
+
+# Extracted formal-report reconciliation and diagnostics.
+
+def build_long_term_coverage_warning(candidates: list[dict], *, context: ReportPostprocessContext) -> dict:
+    if context.lookback_int not in ADVANCED_LOOKBACK_OPTIONS:
+        return {'long_term_coverage_warning': False, 'reason': ''}
+    date_objs = [date_obj for date_obj in (_candidate_date_obj(candidate.get('date', '')) for candidate in candidates or []) if date_obj]
+    if not date_objs:
+        return {'long_term_coverage_warning': True, 'reason': '長期回顧候選資料缺少可解析日期，無法確認是否完整涵蓋本期。'}
+    earliest = min(date_objs)
+    expected_start = context.today - datetime.timedelta(days=context.lookback_int)
+    recent_cutoff = context.today - datetime.timedelta(days=min(60, max(30, context.lookback_int // 5)))
+    if earliest > recent_cutoff:
+        return {'long_term_coverage_warning': True, 'reason': '來源回傳資料多集中於近期，年度回顧可能無法完整代表全年。' if context.lookback_int == 365 else '來源回傳資料多集中於近期，長期回顧可能無法完整代表整個期間。', 'earliest_candidate_date': earliest.isoformat(), 'expected_start': expected_start.isoformat()}
+    return {'long_term_coverage_warning': False, 'reason': '', 'earliest_candidate_date': earliest.isoformat(), 'expected_start': expected_start.isoformat()}
+
+def _unique_limited(values: list[str], limit: int=5, *, context: ReportPostprocessContext) -> list[str]:
+    output: list[str] = []
+    for value in values:
+        cleaned = str(value or '').strip()
+        if cleaned and cleaned not in output:
+            output.append(cleaned)
+        if len(output) >= limit:
+            break
+    return output
+
+def _annual_observation_dates_are_recent(candidates: list[dict], *, context: ReportPostprocessContext) -> bool:
+    date_objs = [date_obj for date_obj in (_candidate_date_obj(candidate.get('date', '')) for candidate in candidates or []) if date_obj]
+    if not date_objs:
+        return False
+    return min(date_objs) > context.today - datetime.timedelta(days=60)
+
+def _annual_observation_themes(candidates: list[dict], *, context: ReportPostprocessContext) -> list[str]:
+    theme_terms = [('號誌與列車控制', ['cbtc', 'signalling', 'signaling', 'signal', 'train control', '號誌', '信號']), ('自動化與無人駕駛', ['driverless', 'automation', 'automated', 'unattended train', '自動', '無人']), ('車輛與車隊更新', ['rolling stock', 'fleet', 'trainset', 'new train', '車輛', '列車']), ('月臺門與車站設備', ['platform screen door', 'platform doors', 'psd', 'elevator', 'escalator', '月臺門', '月台門', '電梯', '電扶梯']), ('供電與能源管理', ['power supply', 'traction power', 'substation', 'third rail', 'energy', '供電', '牽引', '變電', '能源']), ('通訊、資安與資料治理', ['communications', 'telecom', 'radio', '5g', 'lte', 'cyber', 'data', '通訊', '資安', '資料']), ('維修監測與影像分析', ['maintenance', 'monitoring', 'condition monitoring', 'video', 'camera', 'ai', '維修', '監測', '影像', 'AI']), ('AFC 與票務系統', ['afc', 'ticketing', 'fare gate', 'fare', '票務', '票閘', '票價'])]
+    combined = ' '.join((f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')}" for candidate in candidates or []))
+    return [label for label, terms in theme_terms if _contains_any_term(combined, terms)]
+
+def _annual_observation_report_blocks(report_md: str, *, context: ReportPostprocessContext) -> list[str]:
+    formal_area = re.split('(?m)^\\s*#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:國際學術期刊|技術研究補充)\\s*$', report_md or '', maxsplit=1)[0]
+    return re.findall('(?ms)^\\s*(🔹\\s*\\[(?:技術新知|重大事故|營運政策|營運爭議|規範更新)\\].*?)(?=^\\s*🔹\\s*\\[[^\\]]+\\]|^\\s*#{0,6}\\s*[一二三四五六七八九十]\\s*、|^\\s*📊|^\\s*⏰|\\Z)', formal_area)
+
+def _iter_calendar_months(start_date: datetime.date, end_date: datetime.date, *, context: ReportPostprocessContext) -> list[tuple[int, int]]:
+    months: list[tuple[int, int]] = []
+    year, month = (start_date.year, start_date.month)
+    while (year, month) <= (end_date.year, end_date.month):
+        months.append((year, month))
+        if month == 12:
+            year, month = (year + 1, 1)
+        else:
+            month += 1
+    return months
+
+def build_final_report_coverage_warning(final_report_md: str, report_days: int, report_end: datetime.date | None=None, *, context: ReportPostprocessContext) -> dict:
+    """Measure long-term coverage from formal news only, never journal entries."""
+    days = int(report_days or 0)
+    if days not in {90, 180, 365}:
+        return {'long_term_coverage_warning': False, 'reason': ''}
+    end_date = report_end or context.today
+    start_date = end_date - datetime.timedelta(days=days)
+    blocks = _annual_observation_report_blocks(final_report_md, context=context)
+    dates: list[datetime.date] = []
+    for block in blocks:
+        match = re.search('發布/事件日期\\s*[：:]\\s*(\\d{4}-\\d{2}-\\d{2})', block)
+        date_obj = _candidate_date_obj(match.group(1)) if match else None
+        if date_obj and start_date <= date_obj <= end_date + datetime.timedelta(days=1):
+            dates.append(date_obj)
+    month_keys = _iter_calendar_months(start_date, end_date, context=context)
+    monthly_counts = {f'{year:04d}-{month:02d}': sum((1 for value in dates if (value.year, value.month) == (year, month))) for year, month in month_keys}
+    quarter_counts: dict[str, int] = {}
+    for value in dates:
+        key = f'{value.year:04d}-Q{(value.month - 1) // 3 + 1}'
+        quarter_counts[key] = quarter_counts.get(key, 0) + 1
+    result = {'long_term_coverage_warning': False, 'reason': '', 'formal_news_with_valid_date_count': len(dates), 'coverage_bucket_type': 'quarter' if days == 365 else 'month', 'coverage_buckets': quarter_counts if days == 365 else monthly_counts, 'monthly_coverage_buckets': monthly_counts, 'quarterly_coverage_buckets': quarter_counts}
+    if not dates:
+        result.update({'long_term_coverage_warning': True, 'reason': '最終正式新聞沒有可解析日期，無法確認長期報告覆蓋。', 'max_consecutive_empty_months': len(month_keys), 'recent_60_day_count': 0, 'recent_60_day_share': 0.0})
+        return result
+    max_empty_streak = 0
+    current_empty_streak = 0
+    for count in monthly_counts.values():
+        current_empty_streak = current_empty_streak + 1 if count == 0 else 0
+        max_empty_streak = max(max_empty_streak, current_empty_streak)
+    recent_cutoff = end_date - datetime.timedelta(days=60)
+    recent_count = sum((1 for value in dates if value >= recent_cutoff))
+    recent_share = recent_count / len(dates)
+    result.update({'max_consecutive_empty_months': max_empty_streak, 'recent_60_day_count': recent_count, 'recent_60_day_share': round(recent_share, 4)})
+    if days == 365:
+        reasons: list[str] = []
+        if max_empty_streak >= 3:
+            reasons.append('最終正式新聞存在連續 3 個月以上的空白期間')
+        if recent_share > 0.6:
+            reasons.append('超過 60% 最終正式新聞集中於最近 60 天')
+        if reasons:
+            result['long_term_coverage_warning'] = True
+            result['reason'] = '；'.join(reasons) + '。'
+    return result
+
+def _annual_observation_report_dates_are_recent(blocks: list[str], *, context: ReportPostprocessContext) -> bool:
+    dates = []
+    for block in blocks or []:
+        match = re.search('發布/事件日期\\s*[：:]\\s*(\\d{4}-\\d{2}-\\d{2})', block)
+        date_obj = _candidate_date_obj(match.group(1)) if match else None
+        if date_obj:
+            dates.append(date_obj)
+    return bool(dates) and min(dates) > context.today - datetime.timedelta(days=60)
+
+def build_annual_observation_section(final_report_md: str, *, context: ReportPostprocessContext) -> str:
+    if context.lookback_int != 365:
+        return ''
+    blocks = _annual_observation_report_blocks(final_report_md, context=context)
+    counts = count_report_items_by_category(final_report_md)
+    categories = ('技術新知', '重大事故', '營運政策', '營運爭議')
+    count_text = '、'.join((f'{category}{counts.get(category, 0)}則' for category in categories))
+    sentences = [f'本年度回顧依最終正式報告整理，共收錄{count_text}。']
+    if not blocks:
+        sentences.append('本年度未取得可供歸納的正式新聞，以下列最終章節與統計為準。')
+        return '## 年度觀察重點\n' + ''.join(sentences)
+    regions = _unique_limited([match.group(1).strip() for block in blocks for match in [re.search('國家/地區\\s*[：:]\\s*([^\\n]+)', block)] if match and match.group(1).strip() not in {'未判定', '國際研究'}], context=context)
+    positive_categories = [category for category in categories if counts.get(category, 0) > 0]
+    if positive_categories:
+        max_count = max((counts.get(category, 0) for category in positive_categories))
+        leading = [category for category in positive_categories if counts.get(category, 0) == max_count]
+        sentences.append(f"新聞類型以{'、'.join(leading)}為主。")
+    if regions:
+        sentences.append(f"案例主要分布於{'、'.join(regions)}。")
+    report_candidates = [{'title': block, 'snippet': block, 'source': ''} for block in blocks]
+    themes = _unique_limited(_annual_observation_themes(report_candidates, context=context), 4, context=context)
+    if themes:
+        sentences.append(f"從最終新聞內容可見，觀察重點集中在{'、'.join(themes)}等都市軌道議題。")
+    if _annual_observation_report_dates_are_recent(blocks, context=context):
+        sentences.append('最終新聞日期多集中於近期，年度趨勢解讀應以本次實際輸出的案例範圍為準。')
+    return '## 年度觀察重點\n' + ''.join(sentences)
+
+def _remove_annual_observation_section(report_md: str, *, context: ReportPostprocessContext) -> str:
+    return re.sub('(?ms)^\\s*#{1,6}\\s*年度觀察重點\\s*$.*?(?=^\\s*#{0,6}\\s*[一二三四五六七八九十]\\s*、|^\\s*📊|^\\s*⏰|\\Z)', '', report_md or '', count=1).strip()
+
+def insert_annual_observation_section(report_md: str, *, context: ReportPostprocessContext) -> str:
+    if context.lookback_int != 365:
+        return report_md
+    report_without_observation = _remove_annual_observation_section(report_md, context=context)
+    section = build_annual_observation_section(report_without_observation, context=context)
+    if not section:
+        return report_without_observation
+    lines = report_without_observation.splitlines()
+    insert_idx = 1 if lines and lines[0].lstrip().startswith('#') else 0
+    while insert_idx < len(lines) and (not lines[insert_idx].strip() or lines[insert_idx].lstrip().startswith('>')):
+        insert_idx += 1
+    before = '\n'.join(lines[:insert_idx]).rstrip()
+    after = '\n'.join(lines[insert_idx:]).lstrip()
+    return f'{before}\n\n{section}\n\n{after}'.strip()
+
+# Extracted formal-report reconciliation and diagnostics.
+
+# Extracted formal-report reconciliation and diagnostics.
+
+def _journal_theme_summary(journal_candidates: list[dict], *, context: ReportPostprocessContext) -> list[str]:
+    theme_terms = [('列車控制與號誌安全', ['cbtc', 'signalling', 'signaling', 'train control', 'ato', 'atp', '號誌', '列控']), ('車輛與維修管理', ['rolling stock', 'vehicle', 'maintenance', 'condition monitoring', '車輛', '維修', '監測']), ('牽引供電與能源效率', ['traction power', 'regenerative', 'energy', 'power supply', '牽引', '供電', '能源']), ('資料治理、AI 與數位分身', ['data', 'ai', 'machine learning', 'digital twin', '資料', '數位分身', '人工智慧']), ('旅客流量與營運韌性', ['passenger flow', 'resilience', 'operation', 'capacity', '旅客流量', '韌性', '運能']), ('資安與系統整合', ['cyber', 'system integration', 'security', '資安', '系統整合'])]
+    text = ' '.join((f"{item.get('title', '')} {item.get('snippet', '')}" for item in journal_candidates or []))
+    themes = [label for label, terms in theme_terms if _contains_any_term(text, terms)]
+    return themes or ['都市軌道機電系統資料化、智慧化與維運管理']
+
+def build_journal_summary_conclusion(journal_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
+    themes = _unique_limited(_journal_theme_summary(journal_candidates, context=context), 4, context=context)
+    theme_text = '、'.join(themes)
+    source_names = _unique_limited([item.get('journal_name') or item.get('source') or _domain_from_url(item.get('url', '')) for item in journal_candidates or []], 4, context=context)
+    source_text = '、'.join(source_names) if source_names else '本期入選研究來源'
+    return f'本期國際學術期刊補充依系統取得之正式期刊或可信研究頁面整理，入選研究主要來自{source_text}，觀察主題集中於{theme_text}等方向。整體而言，近期都市軌道研究已由單一設備改善，逐步轉向以資料、模型與系統整合支撐營運安全、維修決策及能源效率管理。相關研究對臺北捷運局之啟示，在於新線規劃與既有系統更新時，應及早界定資料來源、欄位格式、系統介面、模型驗證、維修流程與營運安全邊界；導入 AI、數位分身或預測維護等工具時，也應避免僅著重演算法展示，而需同步建立資料品質、資安權限、異常處置與跨系統驗證機制。後續可將此類研究作為機電系統需求規劃、維修管理制度、能源效率策略及風險控管之參考來源，並以可追溯、可驗證、可維運為技術導入原則。'
+
+def ensure_journal_summary_conclusion(report_md: str, journal_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
+    if not context.include_research_supplement or not journal_candidates:
+        return report_md
+    if '學術期刊綜合結論' in (report_md or ''):
+        return report_md
+    conclusion = '【學術期刊綜合結論】\n' + build_journal_summary_conclusion(journal_candidates, context=context)
+    match = re.search('(?m)^📊', report_md or '')
+    if match:
+        return (report_md[:match.start()].rstrip() + '\n\n' + conclusion + '\n\n' + report_md[match.start():].lstrip()).strip()
+    return (report_md or '').rstrip() + '\n\n' + conclusion
+
+def _journal_candidate_full_date(item: dict, *, context: ReportPostprocessContext) -> str:
+    for key in ('published_date', 'date'):
+        date_obj = _parse_full_research_date(str(item.get(key, '') or ''))
+        if date_obj:
+            return date_obj.isoformat()
+    return ''
+
+def _normalize_doi_value(value: str, *, context: ReportPostprocessContext) -> str:
+    match = re.search('\\b10\\.\\d{4,9}/[-._;()/:A-Z0-9]+\\b', value or '', flags=re.IGNORECASE)
+    return match.group(0).rstrip('.;,)').casefold() if match else ''
+
+def _journal_candidate_date_for_text(text: str, journal_candidates: list[dict], report_title: str='', *, context: ReportPostprocessContext) -> str:
+    report_urls = set(_extract_complete_urls(text or ''))
+    for item in journal_candidates or []:
+        candidate_url = _extract_complete_url(str(item.get('url', '') or ''))
+        if candidate_url and candidate_url in report_urls:
+            return _journal_candidate_full_date(item, context=context)
+    report_dois = {doi for doi in (_normalize_doi_value(value, context=context) for value in [text or '', *_extract_complete_urls(text or '')]) if doi}
+    for item in journal_candidates or []:
+        candidate_dois = {doi for doi in (_normalize_doi_value(str(item.get('doi', '') or ''), context=context), _normalize_doi_value(str(item.get('url', '') or ''), context=context)) if doi}
+        if candidate_dois.intersection(report_dois):
+            return _journal_candidate_full_date(item, context=context)
+    normalized_report_title = _normalize_title(context.report_title)
+    if normalized_report_title:
+        for item in journal_candidates or []:
+            if normalized_report_title == _normalize_title(str(item.get('title', '') or '')):
+                return _journal_candidate_full_date(item, context=context)
+    return ''
+
+def repair_journal_dates_in_report(report_md: str, journal_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
+    if not context.include_research_supplement or not journal_candidates or (not report_md):
+        return report_md
+    heading_match = re.search('(?m)^#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:技術研究補充|國際學術期刊)\\s*$', report_md)
+    if not heading_match:
+        return report_md
+    end_match = re.search('(?m)^(?:📊|⏰)', report_md[heading_match.end():])
+    section_end = heading_match.end() + end_match.start() if end_match else len(report_md)
+    before = report_md[:heading_match.start()]
+    section = report_md[heading_match.start():section_end]
+    after = report_md[section_end:]
+    item_matches = list(re.finditer('(?m)^\\s*(?:#{1,6}\\s*)?(\\d+)[\\.、]\\s*(.+?)\\s*$', section))
+    if not item_matches:
+        return report_md
+    conclusion_match = re.search('(?m)^#{0,6}\\s*學術期刊綜合結論', section)
+    replacements: list[tuple[int, int, str]] = []
+    for index, item_match in enumerate(item_matches):
+        block_start = item_match.start()
+        if index + 1 < len(item_matches):
+            block_end = item_matches[index + 1].start()
+        elif conclusion_match and conclusion_match.start() > block_start:
+            block_end = conclusion_match.start()
+        else:
+            block_end = len(section)
+        block = section[block_start:block_end]
+        report_title = re.sub('\\s{2,}$', '', item_match.group(2)).strip()
+        matched_date = _journal_candidate_date_for_text(block, journal_candidates, context.report_title, context=context)
+        if not matched_date:
+            continue
+        repaired_block = re.sub('(?m)^(?P<prefix>\\s*(?:\\d+[\\.、]\\s*)?(?:[-*]\\s*)?(?:•\\s*)?發表日期\\s*[：:]\\s*).*$', lambda match: f"{match.group('prefix')}{matched_date}", block, count=1)
+        replacements.append((block_start, block_end, repaired_block))
+    repaired_section = section
+    for block_start, block_end, repaired_block in reversed(replacements):
+        repaired_section = repaired_section[:block_start] + repaired_block + repaired_section[block_end:]
+    return before + repaired_section + after
+
+# Extracted formal-report reconciliation and diagnostics.
+
+# Extracted formal-report reconciliation and diagnostics.
+
+def _is_canonical_journal_section(section: str, *, context: ReportPostprocessContext) -> bool:
+    required_fields = ['發表日期', '期刊／來源', '研究主題', '研究摘要', '臺北捷運局啟示', '資料來源']
+    item_count = 0
+    current_fields: list[str] = []
+    conclusion_count = 0
+    in_conclusion = False
+
+    def _field_name(line: str) -> str:
+        match = re.match('^•\\s*(發表日期|期刊[/／]來源|研究主題|研究摘要|臺北捷運局啟示|資料來源)\\s*[：:].+', line.strip())
+        if not match:
+            return ''
+        return '期刊／來源' if match.group(1) in {'期刊/來源', '期刊／來源'} else match.group(1)
+    for raw_line in (section or '').splitlines()[1:]:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if re.fullmatch('#{1,6}', line):
+            return False
+        if '學術期刊綜合結論' in line:
+            conclusion_count += 1
+            if conclusion_count > 1:
+                return False
+            if item_count and current_fields != required_fields:
+                return False
+            in_conclusion = True
+            continue
+        if in_conclusion:
+            continue
+        if re.match('^\\d+、\\S+', line):
+            if item_count and current_fields != required_fields:
+                return False
+            item_count += 1
+            current_fields = []
+            continue
+        field = _field_name(line)
+        if field:
+            if item_count <= 0:
+                return False
+            current_fields.append(field)
+            continue
+        return False
+    if item_count <= 0:
+        return False
+    return current_fields == required_fields or in_conclusion
+
+def normalize_journal_section_format(report_md: str, journal_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
+    if not context.include_research_supplement or not journal_candidates or (not report_md):
+        return report_md
+    heading_match = re.search('(?m)^#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:技術研究補充|國際學術期刊)\\s*$', report_md)
+    if not heading_match:
+        return report_md
+    end_match = re.search('(?m)^(?:📊|⏰)', report_md[heading_match.end():])
+    section_end = heading_match.end() + end_match.start() if end_match else len(report_md)
+    before = report_md[:heading_match.start()]
+    section = report_md[heading_match.start():section_end]
+    after = report_md[section_end:]
+    if _is_canonical_journal_section(section, context=context):
+        return report_md
+    section = re.sub('(?<=[^\\n])(?=\\d+、(?!發表日期|期刊[/／]來源|研究主題|研究摘要|臺北捷運局啟示|資料來源))', '\n', section)
+    section = re.sub('(?<=[^\\n])(\\s*#{0,6}\\s*學術期刊綜合結論)', '\\n\\1', section)
+    lines = section.splitlines()
+    if not lines:
+        return report_md
+    output: list[str] = [lines[0]]
+    item_index = 0
+    in_conclusion = False
+    field_names = ('發表日期', '期刊/來源', '期刊／來源', '研究主題', '研究摘要', '臺北捷運局啟示', '資料來源')
+    seen_fields_by_item: dict[int, set[str]] = {}
+
+    def _candidate_for_item(index: int) -> dict:
+        if 1 <= index <= len(journal_candidates):
+            return journal_candidates[index - 1] or {}
+        return {}
+
+    def _candidate_display_title(index: int) -> str:
+        item = _candidate_for_item(index)
+        title = _clean_text(str(item.get('title', '') or ''))
+        title = re.sub('\\[[^\\]]*(?:技術研究補充|國際學術期刊)[^\\]]*\\]\\s*', '', title).strip()
+        return title or f'國際學術期刊研究 {index}'
+
+    def _candidate_source_name(index: int) -> str:
+        item = _candidate_for_item(index)
+        source = item.get('journal_name') or item.get('source') or item.get('source_display') or _domain_from_url(item.get('url', ''))
+        source = _clean_source_label(str(source or ''), item.get('url', ''), _domain_from_url(item.get('url', '')))
+        if source == '資料來源未明確辨識':
+            return ''
+        return source
+
+    def _repair_truncated_value(value: str, expected: str) -> str:
+        value = (value or '').strip()
+        expected = (expected or '').strip()
+        if not value or not expected:
+            return value
+        if expected.casefold() == value.casefold():
+            return expected
+        if expected.casefold().endswith(value.casefold()) and 0 < len(expected) - len(value) <= 3:
+            return expected
+        return value
+
+    def _field_match(raw_line: str) -> tuple[str, str] | None:
+        stripped = raw_line.strip()
+        match = re.match('^\\s*(?:\\d+[\\.\\、]\\s*)?(?:[-*]\\s*)?(?:•\\s*)?(發表日期|期刊[/／]來源|研究主題|研究摘要|臺北捷運局啟示|資料來源)\\s*[：:]\\s*(.*)$', stripped)
+        if match:
+            field = '期刊／來源' if match.group(1) in {'期刊/來源', '期刊／來源'} else match.group(1)
+            return (field, match.group(2).strip())
+        match = re.match('^\\s*(?:\\d+[\\.\\、]\\s*)?(?:[-*]\\s*)?(?:•\\s*)?發表日期\\s*[Pp]\\s*(.*)$', stripped)
+        if match:
+            return ('發表日期', match.group(1).strip())
+        return None
+
+    def _clean_journal_title_line(raw_line: str) -> str:
+        title = raw_line.strip()
+        title = re.sub('^\\s*#{3,6}\\s*', '', title)
+        title = re.sub('^\\s*🔹\\s*', '', title)
+        title = re.sub('\\[[^\\]]*(?:技術研究補充|國際學術期刊)[^\\]]*\\]\\s*', '', title)
+        title = re.sub('^\\s*(?:\\d+[\\.\\、]|[（(]?\\d+[）)])\\s*', '', title)
+        title = title.strip(' ：:\u3000')
+        return title
+
+    def _matches_candidate_title(candidate_title: str, candidate: dict) -> bool:
+        original = str(candidate.get('title', '') or '')
+        if not original or not candidate_title:
+            return False
+        if candidate_title.casefold() in original.casefold() or original.casefold() in candidate_title.casefold():
+            return True
+        original_tokens = [token.casefold() for token in re.findall('[A-Za-z0-9\\u4e00-\\u9fff]{5,}', original) if len(token) >= 5]
+        title_lower = candidate_title.casefold()
+        return bool(original_tokens) and sum((1 for token in original_tokens[:8] if token in title_lower)) >= 2
+
+    def _looks_like_title_line(raw_line: str, title: str) -> bool:
+        stripped = raw_line.strip()
+        if not title or any((title.startswith(name) for name in field_names)):
+            return False
+        if '學術期刊綜合結論' in title:
+            return False
+        if re.match('^\\s*(?:#{3,6}|🔹|\\d+[\\.\\、]|[（(]?\\d+[）)])', stripped):
+            return True
+        if re.search('\\[[^\\]]*(?:技術研究補充|國際學術期刊)[^\\]]*\\]', stripped):
+            return True
+        if any((_matches_candidate_title(title, item) for item in journal_candidates or [])):
+            return True
+        if item_index < len(journal_candidates) and '：' not in title and (':' not in title):
+            if len(title) <= 120 and (not title.endswith(('。', '；', ';'))) and (not title.startswith(('以下', '本期', '研究補充', '國際學術期刊'))):
+                return True
+        return False
+
+    def _repair_date_value(value: str, index: int) -> str:
+        value = (value or '').strip()
+        match = re.search('\\b(20\\d{2})[-/](\\d{1,2})[-/](\\d{1,2})\\b', value)
+        if match:
+            return f'{int(match.group(1)):04d}-{int(match.group(2)):02d}-{int(match.group(3)):02d}'
+        if re.fullmatch('(?:0?\\d{2}|\\d{3})[-/]\\d{1,2}[-/]\\d{1,2}', value):
+            return '日期未明'
+        year_match = re.fullmatch('(20\\d{2}|19\\d{2})\\s*年?', value)
+        if year_match:
+            return f'{year_match.group(1)}年'
+        if not value or value in {'日期未知', '日期未明', '未知'}:
+            return '日期未明'
+        return value
+
+    def _repair_field_value(field: str, value: str, index: int) -> str:
+        value = _clean_text(value)
+        if field == '發表日期':
+            return _repair_date_value(value, index)
+        if field == '期刊／來源':
+            expected = _candidate_source_name(index)
+            value = _repair_truncated_value(value, expected)
+            if not value or value in {'資料來源未明確辨識', '報導'}:
+                value = expected
+            return value
+        return value
+
+    def _append_blank_if_needed() -> None:
+        if output and output[-1].strip():
+            output.append('')
+
+    def _append_title(title: str) -> None:
+        nonlocal item_index
+        item_index += 1
+        _append_blank_if_needed()
+        output.append(f'{item_index}、{title}')
+        seen_fields_by_item.setdefault(item_index, set())
+
+    def _ensure_item_started() -> None:
+        if item_index <= 0:
+            _append_title(_candidate_display_title(1))
+
+    def _append_field(field: str, value: str) -> None:
+        _ensure_item_started()
+        seen_fields = seen_fields_by_item.setdefault(item_index, set())
+        if field in seen_fields:
+            return
+        output.append(f'• {field}：{_repair_field_value(field, value, item_index)}')
+        seen_fields.add(field)
+
+    def _process_body_line(raw_line: str) -> None:
+        stripped = raw_line.strip()
+        if not stripped:
+            _append_blank_if_needed()
+            return
+        if re.fullmatch('#{1,6}', stripped):
+            return
+        if stripped == '---':
+            return
+        field_match = _field_match(raw_line)
+        if field_match:
+            _append_field(field_match[0], field_match[1])
+            return
+        explicit_title_marker = bool(re.match('^\\s*(?:#{3,6}|🔹|\\d+[\\.\\、]|[（(]?\\d+[）)])', stripped) or re.search('\\[[^\\]]*(?:技術研究補充|國際學術期刊)[^\\]]*\\]', stripped))
+        if output and output[-1].startswith('• ') and (not explicit_title_marker):
+            output[-1] = output[-1].rstrip() + ' ' + stripped
+            return
+        title = _clean_journal_title_line(raw_line)
+        if _looks_like_title_line(raw_line, title):
+            _append_title(title)
+            return
+        if item_index == 0:
+            output.append(stripped)
+        elif output and output[-1].startswith('• '):
+            output[-1] = output[-1].rstrip() + ' ' + stripped
+        else:
+            output.append(stripped)
+    for raw_line in lines[1:]:
+        stripped = raw_line.strip()
+        if in_conclusion:
+            output.append(raw_line)
+            continue
+        if '學術期刊綜合結論' in stripped:
+            prefix, _, suffix = raw_line.partition('學術期刊綜合結論')
+            prefix_clean = re.sub('^#{1,6}\\s*$', '', prefix.strip())
+            if prefix_clean:
+                _process_body_line(prefix)
+            _append_blank_if_needed()
+            output.append('學術期刊綜合結論')
+            suffix = suffix.strip(' ：:】]「」')
+            if suffix:
+                output.append(suffix)
+            in_conclusion = True
+            continue
+        _process_body_line(raw_line)
+    normalized = re.sub('\\n{3,}', '\n\n', '\n'.join(output)).strip()
+    return before + normalized + after
+
+# Extracted formal-report reconciliation and diagnostics.
+
+# Extracted formal-report reconciliation and diagnostics.
+
+def count_journal_summary_conclusion_chars(report_md: str, *, context: ReportPostprocessContext) -> int:
+    match = re.search('學術期刊綜合結論[】\\]]?\\s*\\n?(.+?)(?=^📊|^⏰|\\Z)', report_md or '', flags=re.DOTALL | re.MULTILINE)
+    if not match:
+        return 0
+    return len(re.sub('\\s+', '', match.group(1)))
+
+def enforce_research_section(report_md: str, journal_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
+    if not context.include_research_supplement:
+        return report_md
+    if journal_candidates:
+        return report_md
+    heading = context.research_section_heading(markdown=True)
+    fallback = f'{heading}\n本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。'
+    if re.search('(?m)^#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:技術研究補充|國際學術期刊)\\s*$', report_md or ''):
+        return re.sub('(?ms)^#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:技術研究補充|國際學術期刊)\\s*.*?(?=^📊|^⏰|\\Z)', fallback + '\n\n', report_md, count=1).strip()
+    match = re.search('(?m)^📊', report_md or '')
+    if match:
+        return (report_md[:match.start()].rstrip() + '\n\n' + fallback + '\n\n' + report_md[match.start():].lstrip()).strip()
+    return (report_md.rstrip() + '\n\n' + fallback).strip()
+
+def _candidate_report_presence_keys(candidate: dict, *, context: ReportPostprocessContext) -> list[str]:
+    source_url = _effective_source_url(candidate)
+    values = []
+    complete_source_url = _extract_complete_url(source_url)
+    if complete_source_url:
+        values.append(complete_source_url)
+    raw_url = candidate.get('url', '')
+    complete_raw_url = _extract_complete_url(raw_url)
+    if complete_raw_url and complete_raw_url not in values:
+        values.append(complete_raw_url)
+    values.append(candidate.get('title', ''))
+    return [str(value).strip() for value in values if str(value or '').strip()]
+
+def _report_block_matches_candidate(block: str, candidate: dict, *, context: ReportPostprocessContext) -> bool:
+    marker = re.search('<!--\\s*candidate_id\\s*:\\s*(\\d+)\\s*-->', block or '', flags=re.IGNORECASE)
+    if marker:
+        return int(marker.group(1)) == int(candidate.get('candidate_id') or candidate.get('id') or 0)
+    keys = _candidate_report_presence_keys(candidate, context=context)
+    if any((key and key in (block or '') for key in keys)):
+        return True
+    title_tokens = [token for token in re.findall('[A-Za-z0-9\\u4e00-\\u9fff]{4,}', candidate.get('title', '') or '') if len(token) >= 4]
+    return bool(title_tokens) and sum((1 for token in title_tokens[:6] if token in (block or ''))) >= 2
+
+def _supplemental_source_is_used(report_block: str, candidate: dict, source_row: dict, *, context: ReportPostprocessContext) -> bool:
+    summary_match = re.search('(?ms)^•\\s*事件摘要\\s*[：:]\\s*(.*?)(?=^•\\s*(?:臺北捷運局啟示|資料來源|發布/事件日期|國家/地區|相關機電系統)\\s*[：:]|\\Z)', report_block or '')
+    summary = summary_match.group(1) if summary_match else report_block or ''
+    summary_folded = summary.casefold()
+    supplemental_text = f"{source_row.get('title', '')} {source_row.get('source_display', '')}".casefold()
+    if re.search('\\b40\\s*%', supplemental_text) and re.search('40\\s*%', summary):
+        return True
+    bilingual_signals = ((('hitachi',), ('hitachi', '日立')), (('digital signalling', 'digital signaling'), ('digital signalling', 'digital signaling', '數位號誌', '數位信號')), (('capacity increase',), ('capacity increase', '容量提升', '容量增加', '運能提升', '運能增加')))
+    for source_terms, summary_terms in bilingual_signals:
+        if any((term in supplemental_text for term in source_terms)) and any((term in summary_folded for term in summary_terms)):
+            return True
+    source_display = str(source_row.get('source_display', '') or '').casefold()
+    source_name = source_display.split('.', 1)[0]
+    if len(source_name) >= 4 and source_name in summary_folded:
+        return True
+    candidate_title = str(candidate.get('title', '') or '').casefold()
+    if 'ttc' in candidate_title and 'line 2' in candidate_title:
+        return bool(re.search('40\\s*%|hitachi|日立|數位號誌|數位信號|運能(?:提升|增加)|容量(?:提升|增加)', summary, flags=re.IGNORECASE))
+    return False
+
+def _report_block_matches_supplemental_candidate(block: str, candidate: dict, *, context: ReportPostprocessContext) -> bool:
+    if _report_block_matches_candidate(block, candidate, context=context):
+        return True
+    block_folded = (block or '').casefold()
+    title_folded = str(candidate.get('title', '') or '').casefold()
+    operator_markers = [marker for marker in ('ttc', 'mta', 'wmata', 'bvg', 'translink', 'frauscher', 'austin') if marker in title_folded]
+    route_markers = [marker for marker in ('line 2', 'r211', 'm4', 'skytrain') if marker in title_folded]
+    return bool(operator_markers and any((marker in block_folded for marker in operator_markers))) and (not route_markers or any((marker in block_folded for marker in route_markers)))
+
+def ensure_supplemental_sources_in_report(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
+    candidates = [candidate for candidate in selected_candidates or [] if candidate.get('supplemental_sources')]
+    if not report_md or not candidates:
+        return report_md
+    parts = re.split('(?m)^(🔹\\s*\\[[^\\]]+\\].*)$', report_md)
+    if len(parts) <= 1:
+        return report_md
+    output = [parts[0]]
+    for idx in range(1, len(parts), 2):
+        heading = parts[idx]
+        body = parts[idx + 1] if idx + 1 < len(parts) else ''
+        block = heading + body
+        candidate = next((item for item in candidates if _report_block_matches_supplemental_candidate(block, item, context=context)), None)
+        if not candidate:
+            output.extend([heading, body])
+            continue
+        used_sources = [source_row for source_row in candidate.get('supplemental_sources', []) or [] if _supplemental_source_is_used(block, candidate, source_row, context=context)]
+        additions: list[str] = []
+        for source_row in used_sources:
+            source_url = _extract_complete_url(str(source_row.get('url', '') or ''))
+            source_display = str(source_row.get('source_display', '') or _domain_from_url(source_url) or '補充來源').strip()
+            if source_url and source_url not in block:
+                additions.append(f'{source_display}，{source_url}')
+            elif source_display and source_display.casefold() not in block.casefold():
+                additions.append(source_display)
+        if additions:
+            suffix = '；補充來源：' + '；'.join(additions)
+            if re.search('(?m)^•\\s*資料來源\\s*[：:].*$', body):
+                body = re.sub('(?m)^(•\\s*資料來源\\s*[：:].*)$', lambda match: match.group(1).rstrip('；; ') + suffix, body, count=1)
+            else:
+                body = body.rstrip() + f"\n\n• 資料來源：{suffix.lstrip('；')}\n"
+        output.extend([heading, body])
+    return ''.join(output)
+
+# Extracted formal-report reconciliation and diagnostics.
+
+# Extracted formal-report reconciliation and diagnostics.
+
+def _candidate_region_display(candidate: dict, *, context: ReportPostprocessContext) -> str:
+    text = context.candidate_selection_text(candidate)
+    region = _canonical_candidate_region(dict(candidate))
+    city_map = [('北愛爾蘭', ['northern ireland', 'belfast', '北愛爾蘭', '貝爾法斯特'], '英國（北愛爾蘭）'), ('巴塞爾', ['basel', '巴塞爾'], '瑞士（巴塞爾）'), ('休士頓', ['houston', '休士頓', '休斯頓'], '美國（休士頓）'), ('溫哥華', ['vancouver', 'broadway subway', '溫哥華'], '加拿大（溫哥華）'), ('多倫多', ['toronto', 'finch west', '多倫多'], '加拿大（多倫多）'), ('柏林', ['berlin', 'adlershof', '柏林'], '德國（柏林）'), ('萊比錫', ['leipzig', '萊比錫'], '德國（萊比錫）')]
+    for _, terms, label in city_map:
+        if _contains_any_term(text, terms):
+            return label
+    return region or '未判定'
+
+def _is_unknown_region_value(value: str, *, context: ReportPostprocessContext) -> bool:
+    cleaned = re.sub('\\s+', '', value or '').strip('：:，,。-')
+    return cleaned in {'', '未判定', '未知', '不明', '未明', '國家/地區未判定', '國家地區未判定'}
+
+def repair_report_region_lines(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
+    if not report_md or not selected_candidates:
+        return report_md
+    parts = re.split('(?m)^(🔹\\s*\\[[^\\]]+\\].*)$', report_md)
+    if len(parts) <= 1:
+        return report_md
+    output = [parts[0]]
+    for idx in range(1, len(parts), 2):
+        heading = parts[idx]
+        body = parts[idx + 1] if idx + 1 < len(parts) else ''
+        block = heading + body
+        matched = next((candidate for candidate in selected_candidates if _report_block_matches_candidate(block, candidate, context=context)), None)
+        if matched:
+            region_display = _candidate_region_display(matched, context=context)
+            if _is_unknown_region_value(region_display, context=context):
+                output.extend([heading, body])
+                continue
+            region_match = re.search('(?m)^•\\s*國家/地區\\s*[：:]\\s*(.*)$', body)
+            if region_match:
+                current_region = region_match.group(1).strip()
+                if _is_unknown_region_value(current_region, context=context):
+                    body = re.sub('(?m)^•\\s*國家/地區\\s*[：:].*$', f'• 國家/地區：{region_display}', body, count=1)
+            else:
+                insert_match = re.search('(?m)^•\\s*發布/事件日期\\s*[：:].*$', body)
+                if insert_match:
+                    body = body[:insert_match.end()] + f'\n• 國家/地區：{region_display}' + body[insert_match.end():]
+                else:
+                    body = f'\n• 國家/地區：{region_display}' + body
+        output.extend([heading, body])
+    return ''.join(output)
+
+def formal_title_from_candidate(candidate: dict, *, context: ReportPostprocessContext) -> str:
+    category = candidate.get('classification') or candidate.get('preliminary_type') or context.infer_preliminary_type(candidate)
+    text = context.candidate_selection_text(candidate)
+    original_title = _clean_text(candidate.get('title', ''))
+    if _contains_any_term(text, ['frauscher', 'axle counter', 'axle counters']):
+        return 'Frauscher 車軸計數器應用於電車號誌現代化'
+    if _contains_any_term(text, ['finch west', 'hitachi']):
+        return '多倫多 Finch West LRT 啟用 Hitachi Rail 號誌系統'
+    if _contains_any_term(text, ['broadway subway']):
+        return '溫哥華 Broadway Subway 都市軌道專案進展'
+    if _contains_any_term(text, ['houston', 'metrorail']):
+        return '休士頓 METRORail 都市軌道事件'
+    if _contains_any_term(text, ['adlershof']):
+        return '柏林 Adlershof 電車撞擊事故'
+    if _contains_any_term(text, ['basel']) and category == '重大事故':
+        return '巴塞爾電車碰撞事故'
+    if _contains_any_term(text, ['leipzig']) and category == '重大事故':
+        return '萊比錫路面電車營運安全事件'
+    if original_title and (not _title_needs_repair(original_title, category)):
+        if _looks_like_english_title(original_title):
+            return chinese_fallback_title(category, original_title)
+        return original_title
+    return chinese_fallback_title(category, original_title)
+
+def repair_generic_report_titles(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
+    if not report_md or not selected_candidates:
+        return report_md
+    parts = re.split('(?m)^(🔹\\s*\\[[^\\]]+\\]\\s*.*)$', report_md)
+    if len(parts) <= 1:
+        return report_md
+    output = [parts[0]]
+    for idx in range(1, len(parts), 2):
+        heading = parts[idx]
+        body = parts[idx + 1] if idx + 1 < len(parts) else ''
+        match = re.match('^(🔹\\s*\\[([^\\]]+)\\]\\s*)(.*)$', heading.strip())
+        if match and (not _has_valid_chinese_report_title(match.group(3))) and _title_needs_repair(match.group(3), match.group(2)):
+            block = heading + body
+            matched = next((candidate for candidate in selected_candidates if _report_block_matches_candidate(block, candidate, context=context)), None)
+            if matched:
+                heading = f'{match.group(1)}{formal_title_from_candidate(matched, context=context)}'
+        output.extend([heading, body])
+    return ''.join(output)
+
+# Extracted formal-report reconciliation and diagnostics.
+
+# Extracted formal-report reconciliation and diagnostics.
+
+def _extract_marked_candidate_blocks(report_md: str, *, context: ReportPostprocessContext) -> tuple[dict[int, str], list[int]]:
+    pattern = re.compile('<!--\\s*candidate_id\\s*:\\s*(\\d+)\\s*-->\\s*(.*?)(?=<!--\\s*candidate_id\\s*:|^\\s*#{0,6}\\s*[一二三四五六七八九十]\\s*、|^\\s*📊|^\\s*⏰|\\Z)', flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
+    blocks: dict[int, str] = {}
+    duplicates: list[int] = []
+    for match in pattern.finditer(report_md or ''):
+        candidate_id = int(match.group(1))
+        if candidate_id in blocks:
+            duplicates.append(candidate_id)
+            continue
+        blocks[candidate_id] = match.group(2).strip()
+    return (blocks, sorted(set(duplicates)))
+
+def _candidate_source_line(candidate: dict, *, context: ReportPostprocessContext) -> str:
+    source_url = _effective_source_url(candidate)
+    source_display = candidate.get('source_display') or candidate.get('source') or _domain_from_url(source_url) or '原始來源'
+    item_date = candidate.get('date') or '日期未知'
+    return f'• 資料來源：{source_display}，{item_date}，{source_url}'
+
+def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext) -> str:
+    candidate_id = int(candidate.get('candidate_id') or candidate.get('id') or 0)
+    category = candidate.get('classification') or candidate.get('preliminary_type') or context.infer_preliminary_type(candidate)
+    title = formal_title_from_candidate(candidate, context=context)
+    summary = _clean_text(candidate.get('snippet', '')) or _clean_text(candidate.get('title', ''))
+    summary = _short_formal_sentence(summary, 360) or '候選資料僅提供標題與來源，未提供更多可核實細節。'
+    return '\n'.join([f'<!-- candidate_id: {candidate_id} -->', f'🔹 [{category}] {title}', '', f"• 發布/事件日期：{candidate.get('date') or '日期未知'}", '', f'• 國家/地區：{_candidate_region_display(candidate, context=context)}', '', '• 相關機電系統：依原始候選資料所示之都市軌道系統', '', '• 事件摘要：', summary, '', '• 臺北捷運局啟示：', '本案可納入後續技術、營運或安全追蹤，具體內容以原始來源為準。', '', _candidate_source_line(candidate, context=context), '', '________________________________________'])
+
+def _force_candidate_fields_in_block(block: str, candidate: dict, *, context: ReportPostprocessContext) -> str:
+    normalized = normalize_final_report_md(block or '')
+    if not re.search('(?m)^🔹\\s*\\[[^\\]]+\\]', normalized):
+        return _fallback_report_block(candidate, context=context)
+    candidate_id = int(candidate.get('candidate_id') or candidate.get('id') or 0)
+    category = candidate.get('classification') or candidate.get('preliminary_type') or context.infer_preliminary_type(candidate)
+    normalized = REPORT_CANDIDATE_ID_PATTERN.sub('', normalized).strip()
+    normalized = re.sub('(?m)^(🔹\\s*)\\[[^\\]]+\\]', f'\\1[{category}]', normalized, count=1)
+    source_line = _candidate_source_line(candidate, context=context)
+    if re.search('(?m)^•\\s*資料來源\\s*[：:].*$', normalized):
+        normalized = re.sub('(?m)^•\\s*資料來源\\s*[：:].*$', source_line, normalized, count=1)
+    else:
+        normalized = normalized.rstrip() + f'\n\n{source_line}'
+    return f'<!-- candidate_id: {candidate_id} -->\n{normalized}'.strip()
+
+def _extract_research_section_for_reconcile(report_md: str, *, context: ReportPostprocessContext) -> str:
+    match = re.search('(?ms)^\\s*#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:國際學術期刊|技術研究補充)\\s*$.*?(?=^\\s*📊|^\\s*⏰|\\Z)', report_md or '')
+    return match.group(0).strip() if match else ''
+
+def reconcile_report_candidate_output(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> tuple[str, dict]:
+    selected_candidates = ensure_selected_candidate_ids(selected_candidates)
+    initial_validation = validate_report_candidate_ids(report_md, selected_candidates)
+    marked_blocks, extracted_duplicates = _extract_marked_candidate_blocks(report_md, context=context)
+    selected_map = {int(item.get('candidate_id') or item.get('id') or 0): item for item in selected_candidates or []}
+    accepted_blocks: dict[int, str] = {}
+    fallback_ids: list[int] = []
+    for candidate_id, candidate in selected_map.items():
+        if candidate_id in marked_blocks and candidate_id not in extracted_duplicates:
+            accepted_blocks[candidate_id] = _force_candidate_fields_in_block(marked_blocks[candidate_id], candidate, context=context)
+        else:
+            accepted_blocks[candidate_id] = _fallback_report_block(candidate, context=context)
+            fallback_ids.append(candidate_id)
+    sections: list[str] = [f'# {context.report_title}', f'> 資料涵蓋期間：{context.date_range}', f'> 報導範圍：{context.report_scope_label}']
+    category_groups = [('一、技術新知', {'技術新知'}), ('二、重大事故', {'重大事故'}), ('三、營運議題', {'營運政策', '營運爭議'})]
+    if context.standards_enabled or '規範更新' in context.selected_types:
+        category_groups.append(('四、規範更新', {'規範更新'}))
+    for heading, categories in category_groups:
+        if not categories.intersection(context.selected_types):
+            continue
+        section_blocks = [accepted_blocks[int(item.get('candidate_id') or item.get('id') or 0)] for item in selected_candidates if (item.get('classification') or item.get('preliminary_type')) in categories]
+        sections.extend(['', f'## {heading}', ''])
+        if section_blocks:
+            sections.append('\n\n'.join(section_blocks))
+        elif len(categories) == 1:
+            category = next(iter(categories))
+            sections.append(EMPTY_TEXT_BY_TYPE.get(category, '本期未發現符合條件資料。'))
+        else:
+            sections.append('本期未發現符合條件的營運議題資料。')
+    research_section = _extract_research_section_for_reconcile(report_md, context=context) if context.include_research_supplement else ''
+    if research_section:
+        sections.extend(['', research_section])
+    reconciled = re.sub('\\n{3,}', '\n\n', '\n'.join(sections)).strip()
+    final_validation = validate_report_candidate_ids(reconciled, selected_candidates)
+    diagnostics = {'before_reconcile': initial_validation, 'fallback_candidate_ids': fallback_ids, 'accepted_model_candidate_ids': sorted(set(selected_map) - set(fallback_ids)), 'after_reconcile': final_validation}
+    return (reconciled, diagnostics)
+
+def identify_dropped_selected_candidates(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> list[dict]:
+    missing_ids = set(validate_report_candidate_ids(report_md, selected_candidates).get('missing_ids', []))
+    return [candidate for candidate in selected_candidates or [] if int(candidate.get('candidate_id') or candidate.get('id') or 0) in missing_ids]
+
+def restore_missing_selected_report_items(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> tuple[str, list[dict]]:
+    dropped = identify_dropped_selected_candidates(report_md, selected_candidates, context=context)
+    reconciled, diagnostics = reconcile_report_candidate_output(report_md, selected_candidates, context=context)
+    context.id_validation_target.clear()
+    context.id_validation_target.update(diagnostics)
+    return (reconciled, dropped)
+
+# Extracted formal-report reconciliation and diagnostics.
+
+# Extracted formal-report reconciliation and diagnostics.
+
+def build_final_incident_coverage_debug(selected_candidates: list[dict], maiagent_report_response: str, final_report_md: str, *, global_scope: bool, report_days: int, incident_enabled: bool, context: ReportPostprocessContext) -> dict:
+    python_count = sum((1 for item in selected_candidates or [] if (item.get('classification') or item.get('preliminary_type')) == '重大事故'))
+    maiagent_count = count_report_items_by_category(maiagent_report_response).get('重大事故', 0)
+    final_count = count_report_items_by_category(final_report_md).get('重大事故', 0)
+    dropped_after_maiagent = max(0, python_count - final_count)
+    warning = bool(global_scope and int(report_days or 0) in {90, 365} and incident_enabled and (final_count == 0))
+    reason = ''
+    if warning:
+        if python_count > 0 and maiagent_count == 0:
+            reason = 'Python 已入選重大事故，但 MaiAgent 正式回覆未輸出重大事故。'
+        elif maiagent_count > 0 and final_count == 0:
+            reason = 'MaiAgent 正式回覆含重大事故，但報告後處理後未保留重大事故。'
+        elif python_count == 0:
+            reason = 'Python 入選候選未含重大事故，最終正式報告亦無重大事故。'
+        else:
+            reason = '最終正式報告未輸出重大事故。'
+    return {'python_incident_selected_count': python_count, 'maiagent_incident_report_count': maiagent_count, 'final_incident_report_count': final_count, 'incident_dropped_after_maiagent': dropped_after_maiagent, 'incident_coverage_warning': warning, 'incident_coverage_reason': reason}
+
+def report_has_unselected_types(report_md: str, *, context: ReportPostprocessContext) -> bool:
+    unselected = [category for category in ADVANCED_TYPES if category not in context.selected_types]
+    for category in unselected:
+        if re.search(f'(?m)^(##|###)\\s+.*{re.escape(category)}', report_md):
+            return True
+    return False
+
+def report_has_non_urban_formal_items(report_md: str, *, context: ReportPostprocessContext) -> bool:
+    formal_area = report_md.split('## 候補觀察', 1)[0]
+    for block in re.split('(?m)^###\\s+', formal_area)[1:]:
+        if '[規範更新]' in block:
+            continue
+        if not context.is_urban_rail_candidate(block):
+            return True
+    return False
+
+def has_candidate_observations(report_md: str, *, context: ReportPostprocessContext) -> bool:
+    return '候補觀察' in report_md and (not re.search('候補觀察[^\\n]*\\n\\s*(?:無|本期無)', report_md))

@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 SERVICE_FILES = (
     "run_config_service.py",
     "report_prompt_service.py",
+    "report_postprocessor.py",
     "streamlit_sidebar_ui.py",
     "streamlit_report_ui.py",
     "streamlit_debug_ui.py",
@@ -117,7 +118,11 @@ class ModuleArchitectureTests(unittest.TestCase):
             self.assertNotIn("streamlit_app", imports, filename)
 
     def test_non_ui_services_are_streamlit_free(self):
-        for filename in ("run_config_service.py", "report_prompt_service.py"):
+        for filename in (
+            "run_config_service.py",
+            "report_prompt_service.py",
+            "report_postprocessor.py",
+        ):
             source = (PROJECT_ROOT / filename).read_text(encoding="utf-8")
             self.assertNotIn("import streamlit", source, filename)
             self.assertNotIn("import *", source, filename)
