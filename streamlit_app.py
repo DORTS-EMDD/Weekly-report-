@@ -148,6 +148,25 @@ from developer_debug_service import (
     build_developer_debug_payload as service_build_developer_debug_payload,
 )
 from ui_style_service import load_streamlit_css
+from run_config_service import (
+    DownloadFilenameContext,
+    RunConfigContext,
+    RunSettingsContext,
+    _compact_date as service_compact_date,
+    _formal_report_topic_labels as service_formal_report_topic_labels,
+    build_current_run_config as service_build_current_run_config,
+    build_report_download_filename as service_build_report_download_filename,
+    build_run_settings,
+    get_report_type_code as service_get_report_type_code,
+)
+from streamlit_sidebar_ui import SidebarContext, render_sidebar
+from streamlit_report_ui import (
+    MainDashboardContext,
+    ReportDisplayContext,
+    render_main_dashboard as service_render_main_dashboard,
+    render_report_display,
+)
+from streamlit_debug_ui import DebugUiContext, render_developer_debug_ui
 from pdf_exporter import (
     streamlit_markdown_to_pdf_bytes as streamlit_pdf_renderer,
     pdf_rich_text as shared_pdf_rich_text,
@@ -361,355 +380,132 @@ model_choice = "MaiAgent 雲端 API"
 gmail_user = get_secret("GMAIL_USER")
 gmail_pass = get_secret("GMAIL_APP_PASS")
 
-if not st.session_state.get("_demo_cache_default_off_applied"):
-    st.session_state["demo_cache_mode"] = False
-    st.session_state["_demo_cache_default_off_applied"] = True
-
-if not st.session_state.get("_fast_mode_removed_applied"):
-    st.session_state["fast_mode"] = False
-    st.session_state["_fast_mode_removed_applied"] = True
-
-
-def select_all_report_types() -> None:
-    st.session_state["selected_types_state"] = ADVANCED_TYPES.copy()
-    for report_type in ADVANCED_TYPES:
-        st.session_state[f"type_{report_type}"] = True
-
-
-def clear_selected_report_types() -> None:
-    st.session_state["selected_types_state"] = []
-    for report_type in ADVANCED_TYPES:
-        st.session_state[f"type_{report_type}"] = False
-
-
-# ── 側邊欄 ──────────────────────────────────────────
-with st.sidebar:
-    st.markdown(
-        """
-        <div class="sidebar-title">🚇 國際捷運 AI 週報</div>
-        <div class="sidebar-subtitle">臺北市政府捷運工程局｜機電系統設計處</div>
-        """,
-        unsafe_allow_html=True,
+sidebar_selection = render_sidebar(
+    SidebarContext(
+        default_recipients=get_secret("DEFAULT_RECIPIENTS", ""),
+        default_selected_types=DEFAULT_SELECTED_TYPES,
+        advanced_types=ADVANCED_TYPES,
+        normal_lookback_options=NORMAL_LOOKBACK_OPTIONS,
+        advanced_lookback_options=ADVANCED_LOOKBACK_OPTIONS,
+        report_period_labels=REPORT_PERIOD_LABELS,
+        long_term_target_labels=LONG_TERM_TARGET_LABELS,
+        default_regions=DEFAULT_REGIONS,
+        advanced_regions=ADVANCED_REGIONS,
+        standards_watchlist=STANDARDS_WATCHLIST,
+        get_research_supplement_lookback_days=get_research_supplement_lookback_days,
     )
-
-    st.markdown("### 📬 收件設定")
-    default_recipients = get_secret("DEFAULT_RECIPIENTS", "")
-    if "recipients_text" not in st.session_state:
-        st.session_state["recipients_text"] = default_recipients
-
-    recipient_input = st.text_area(
-        "收件信箱",
-        key="recipients_text",
-        placeholder="每行一個 Email",
-        height=52,
-        help="需要新增收件人時，直接換行輸入。",
-    )
-
-    st.markdown("### 📋 報告設定")
-    if "selected_types_state" not in st.session_state:
-        st.session_state["selected_types_state"] = DEFAULT_SELECTED_TYPES.copy()
-    if (
-        not st.session_state.get("_default_types_without_standards_applied")
-        and st.session_state.get("selected_types_state") == ADVANCED_TYPES
-    ):
-        st.session_state["selected_types_state"] = DEFAULT_SELECTED_TYPES.copy()
-        st.session_state["type_規範更新"] = False
-    st.session_state["_default_types_without_standards_applied"] = True
-    if "long_term_mode" not in st.session_state:
-        st.session_state["long_term_mode"] = False
-    if "lookback_days_state" not in st.session_state:
-        st.session_state["lookback_days_state"] = NORMAL_LOOKBACK_OPTIONS[0]
-
-    available_lookback_options = NORMAL_LOOKBACK_OPTIONS + (
-        ADVANCED_LOOKBACK_OPTIONS if st.session_state["long_term_mode"] else []
-    )
-    if st.session_state["lookback_days_state"] not in available_lookback_options:
-        st.session_state["lookback_days_state"] = NORMAL_LOOKBACK_OPTIONS[0]
-
-    lookback_days = st.selectbox(
-        "報告期間",
-        available_lookback_options,
-        key="lookback_days_state",
-        format_func=lambda d: f"{d} 天（{REPORT_PERIOD_LABELS.get(int(d), '報告')}）",
-    )
-    if int(lookback_days) in ADVANCED_LOOKBACK_OPTIONS:
-        st.info("長期回顧適合趨勢分析、事故彙整與規範更新追蹤；不建議作為一般新聞週報使用，系統將提高重複內容排除與來源審查標準。")
-
-    selected_types = []
-    period_summary = LONG_TERM_TARGET_LABELS.get(int(lookback_days), REPORT_PERIOD_LABELS.get(int(lookback_days), "報告"))
-    selected_type_count = sum(
-        1 for t in ADVANCED_TYPES
-        if st.session_state.get(f"type_{t}", t in st.session_state["selected_types_state"])
-    )
-    st.markdown("**📰 新聞類型**")
-    st.caption(f"已選 {selected_type_count} 種類型｜{period_summary}")
-    with st.expander("展開選擇新聞類型", expanded=False):
-        col_t_all, col_t_clear = st.columns(2)
-        col_t_all.button(
-            "全選類型",
-            use_container_width=True,
-            on_click=select_all_report_types,
-        )
-
-        col_t_clear.button(
-            "清除類型",
-            use_container_width=True,
-            on_click=clear_selected_report_types,
-        )
-
-        for t in ADVANCED_TYPES:
-            checked = t in st.session_state["selected_types_state"]
-            if st.checkbox(t, value=checked, key=f"type_{t}"):
-                selected_types.append(t)
-
-    st.session_state["selected_types_state"] = selected_types
-    if not selected_types:
-        st.warning("⚠️ 請至少選擇一種新聞類型。")
-
-    standards_enabled = "規範更新" in selected_types
-    standard_count = sum(len(v) for v in STANDARDS_WATCHLIST.values())
-
-    st.markdown("### 🌏 追蹤範圍")
-    scope_mode = st.radio(
-        "報導範圍",
-        ["指定先進國家/地區", "全球（安全白名單來源）"],
-        index=0,
-        horizontal=False,
-        help="全球模式不以國家刪除新聞；指定模式才套用下方先進國家/地區清單。",
-    )
-    if "selected_regions_state" not in st.session_state:
-        st.session_state["selected_regions_state"] = DEFAULT_REGIONS.copy()
-    st.session_state["selected_regions_state"] = [
-        region
-        for region in dict.fromkeys(st.session_state["selected_regions_state"])
-        if region in ADVANCED_REGIONS
-    ]
-
-    stored_selected_regions = list(st.session_state["selected_regions_state"])
-    selected_regions = stored_selected_regions.copy()
-    global_scope_selected = scope_mode == "全球（安全白名單來源）"
-    if scope_mode == "全球（安全白名單來源）":
-        st.caption("報導範圍：全球模式")
-    else:
-        st.caption(f"已選 {len(stored_selected_regions)} / {len(ADVANCED_REGIONS)} 個國家")
-
-    with st.expander("展開選擇國家", expanded=False):
-        col_all, col_clear = st.columns(2)
-        if col_all.button("全選國家", use_container_width=True, key="select_all_regions", disabled=global_scope_selected):
-            st.session_state["selected_regions_state"] = ADVANCED_REGIONS.copy()
-            for region in ADVANCED_REGIONS:
-                st.session_state[f"region_{region}"] = True
-            st.rerun()
-
-        if col_clear.button("清除全選", use_container_width=True, key="clear_all_regions", disabled=global_scope_selected):
-            st.session_state["selected_regions_state"] = []
-            for region in ADVANCED_REGIONS:
-                st.session_state[f"region_{region}"] = False
-            st.rerun()
-
-        next_selected_regions = []
-        region_cols = st.columns(2)
-        for idx, region in enumerate(ADVANCED_REGIONS):
-            checked = region in stored_selected_regions
-            if region_cols[idx % 2].checkbox(region, value=checked, key=f"region_{region}", disabled=global_scope_selected):
-                next_selected_regions.append(region)
-
-    if not global_scope_selected:
-        selected_regions = list(dict.fromkeys(next_selected_regions))
-        st.session_state["selected_regions_state"] = selected_regions
-    else:
-        selected_regions = stored_selected_regions
-    if scope_mode != "全球（安全白名單來源）" and not selected_regions:
-        st.warning("請至少選擇一個國家/地區。")
-
-    if standards_enabled:
-        st.markdown("### 📚 規範追蹤")
-        st.caption(f"已啟用，{standard_count} 項標準")
-        with st.expander("查看規範追蹤清單", expanded=False):
-            for category, standards in STANDARDS_WATCHLIST.items():
-                st.markdown(f"**{category}**：{', '.join(standards)}")
-        st.caption("規範追蹤僅作為更新監測清單；若未查得明確修訂、公告、草案、徵詢或新版發布，不會列入正式週報。")
-
-    with st.expander("⚙️ 進階設定", expanded=False):
-        st.markdown("**長期趨勢 / 規範追蹤模式**")
-        long_term_mode = st.checkbox(
-            "啟用長期趨勢 / 規範追蹤模式",
-            key="long_term_mode",
-            help="啟用後，報告期間可選 90、180、365 天。",
-        )
-        include_research_supplement = st.checkbox(
-            f"納入近 {get_research_supplement_lookback_days(int(lookback_days))} 天國際學術期刊補充",
-            value=False,
-            key="include_research_supplement",
-            help="7、14、30、90 天報告查近 90 天；180 天半年報查近 180 天；365 天年度回顧查近 365 天。只在正式報告最後新增「國際學術期刊」，不計入新聞統計。",
-        )
-
-        st.markdown("**排程說明**")
-        st.caption("由 GitHub Actions 自動寄送週報；預設每周一早上8時30分寄出報告。")
-
-        st.markdown("**AI 模型設定**")
-        st.caption("目前使用：MaiAgent 雲端 API")
-
-        show_developer_info = st.checkbox(
-            "開發者資訊顯示",
-            value=False,
-            key="show_developer_info",
-            help="啟用後只顯示 AI 校正資料 JSON 下載按鈕，供排錯使用。",
-        )
-
-        st.markdown("**展覽快速版**")
-        demo_cache_mode = st.checkbox(
-            "展覽快速版（10 秒內顯示預產報告）",
-            value=False,
-            key="demo_cache_mode",
-            help="啟用後按下產生報告會直接載入 repo 內預產展示報告，不即時搜尋、不呼叫 MaiAgent。",
-        )
-        if demo_cache_mode:
-            st.caption("目前會顯示預先產製展示報告，不是即時搜尋結果。")
-
-    st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統")
-
-week_start = today - datetime.timedelta(days=int(lookback_days))
-date_range = f"{week_start.strftime('%Y年%m月%d日')} 至 {today.strftime('%Y年%m月%d日')}"
-lookback_int = int(lookback_days)
-include_research_supplement = bool(
-    include_research_supplement and research_supplement_allowed_for_report(lookback_int)
 )
-fast_mode_enabled = False
-demo_cache_mode_enabled = bool(st.session_state.get("demo_cache_mode", False))
-report_period_label = REPORT_PERIOD_LABELS.get(lookback_int, "週報")
-research_supplement_lookback_days = get_research_supplement_lookback_days(lookback_int)
-research_supplement_start_date = today - datetime.timedelta(days=research_supplement_lookback_days)
-research_supplement_period_label = f"近 {research_supplement_lookback_days} 天"
-target_is_enforced = lookback_int in REPORT_TARGET_BY_DAYS
-min_report_items = REPORT_TARGET_BY_DAYS.get(lookback_int, 0)
-report_target_display = f"至少 {min_report_items} 則" if target_is_enforced else LONG_TERM_TARGET_LABELS.get(lookback_int, "趨勢回顧")
-report_output_requirement = f"正式報告至少 {min_report_items} 則" if target_is_enforced else f"{report_target_display}，不強制篇數"
-report_quantity_instruction = (
-    f"本期為 {report_period_label}，正式報告建議下限為 {min_report_items} 則。"
-    f"請不要在達到 {min_report_items} 則以前提早停止；若高信度新聞不足，"
-    f"請優先納入中信度但來源、日期、都市軌道關聯明確的候選；"
-    f"不要因摘要較短或連結為 Google News 轉址而過度剔除。"
-    f"若最後正式新聞仍不足 {min_report_items} 則，必須在結尾列明不足原因，"
-    f"例如：都市軌道來源不足、日期不明、非捷運/非輕軌、來源不合格。"
-    f"**品質優先於數量；不得為了湊滿數量，把高鐵、一般鐵路、公車、長途運輸、"
-    f"事故、政策、爭議或一般專案消息升格為技術新知。"
-    f"規範追蹤清單、持續追蹤中、無單一新聞連結的標準項目，"
-    f"不得列入正式規範更新，也不得計入正式新聞數。**"
-    if target_is_enforced
-    else f"本期為 {report_period_label}，屬長期趨勢 / 規範追蹤模式，不強制篇數。"
-         f"請以趨勢分析、事故彙整、真正規範更新、來源品質與重複內容排除為優先；"
-         f"不得為了增加篇數納入低關聯、重複、非都市軌道或來源不合格新聞。"
-         f"規範追蹤清單、持續追蹤中、無單一新聞連結的標準項目，"
-         f"不得列入正式規範更新，也不得計入正式新聞數。"
-         f"若有效候選有限，請在報告摘要說明原因。"
+recipient_input = sidebar_selection.recipient_input
+lookback_days = sidebar_selection.lookback_days
+selected_types = sidebar_selection.selected_types
+standards_enabled = sidebar_selection.standards_enabled
+standard_count = sidebar_selection.standard_count
+scope_mode = sidebar_selection.scope_mode
+selected_regions = sidebar_selection.selected_regions
+long_term_mode = sidebar_selection.long_term_mode
+include_research_supplement = sidebar_selection.include_research_supplement
+show_developer_info = sidebar_selection.show_developer_info
+demo_cache_mode = sidebar_selection.demo_cache_mode
+
+run_settings = build_run_settings(
+    RunSettingsContext(
+        today=today,
+        lookback_days=lookback_days,
+        selected_types=selected_types,
+        scope_mode=scope_mode,
+        selected_regions=selected_regions,
+        standards_enabled=standards_enabled,
+        include_research_supplement=include_research_supplement,
+        demo_cache_mode_enabled=bool(st.session_state.get("demo_cache_mode", False)),
+        current_app_hash=current_app_hash,
+        report_period_labels=REPORT_PERIOD_LABELS,
+        long_term_target_labels=LONG_TERM_TARGET_LABELS,
+        report_target_by_days=REPORT_TARGET_BY_DAYS,
+        research_supplement_allowed_for_report=research_supplement_allowed_for_report,
+        get_research_supplement_lookback_days=get_research_supplement_lookback_days,
+    )
 )
-report_shortfall_summary_line = (
-    f"**不足 {min_report_items} 則原因**：（僅正式新聞少於 {min_report_items} 則時輸出；若達標，整行不要出現）"
-    if target_is_enforced
-    else "**長期回顧說明**：（簡述本期趨勢、重複內容排除後有效候選品質與來源限制）"
-)
+week_start = run_settings.week_start
+date_range = run_settings.date_range
+lookback_int = run_settings.lookback_int
+include_research_supplement = run_settings.include_research_supplement
+fast_mode_enabled = run_settings.fast_mode_enabled
+demo_cache_mode_enabled = run_settings.demo_cache_mode_enabled
+report_period_label = run_settings.report_period_label
+research_supplement_lookback_days = run_settings.research_supplement_lookback_days
+research_supplement_start_date = run_settings.research_supplement_start_date
+research_supplement_period_label = run_settings.research_supplement_period_label
+target_is_enforced = run_settings.target_is_enforced
+min_report_items = run_settings.min_report_items
+report_target_display = run_settings.report_target_display
+report_output_requirement = run_settings.report_output_requirement
+report_quantity_instruction = run_settings.report_quantity_instruction
+report_shortfall_summary_line = run_settings.report_shortfall_summary_line
+selected_report_topic = run_settings.selected_report_topic
+report_title = run_settings.report_title
+is_global_scope = run_settings.is_global_scope
+active_regions = run_settings.active_regions
+report_scope_label = run_settings.report_scope_label
+
+
 def _formal_report_topic_labels(report_types: list[str]) -> list[str]:
-    labels: list[str] = []
-    operations_added = False
-    for category in report_types or []:
-        if category in {"營運政策", "營運爭議"}:
-            if not operations_added:
-                labels.append("營運議題")
-                operations_added = True
-            continue
-        if category not in labels:
-            labels.append(category)
-    return labels
+    return service_formal_report_topic_labels(report_types)
 
 
-selected_report_topic = "、".join(_formal_report_topic_labels(selected_types)) if selected_types else "技術趨勢"
-report_title = f"【{today.strftime('%Y/%m/%d')}】國際捷運{selected_report_topic}{report_period_label}"
-is_global_scope = scope_mode == "全球（安全白名單來源）"
-active_regions = [] if is_global_scope else selected_regions
-report_scope_label = "全球" if is_global_scope else "、".join(active_regions)
+def _run_config_context() -> RunConfigContext:
+    return RunConfigContext(
+        today=today,
+        week_start=week_start,
+        lookback_int=lookback_int,
+        date_range=date_range,
+        report_period_label=report_period_label,
+        report_title=report_title,
+        selected_types=selected_types,
+        scope_mode=scope_mode,
+        is_global_scope=is_global_scope,
+        active_regions=active_regions,
+        report_scope_label=report_scope_label,
+        standards_enabled=standards_enabled,
+        include_research_supplement=include_research_supplement,
+        research_supplement_lookback_days=research_supplement_lookback_days,
+        research_supplement_start_date=research_supplement_start_date,
+        fast_mode_enabled=fast_mode_enabled,
+        demo_cache_mode_enabled=demo_cache_mode_enabled,
+        current_app_hash=current_app_hash,
+    )
 
 
 def build_current_run_config() -> dict:
-    return {
-        "report_date": today.isoformat(),
-        "report_date_label": today.strftime("%Y/%m/%d"),
-        "start_date": week_start.isoformat(),
-        "end_date": today.isoformat(),
-        "lookback_days": lookback_int,
-        "date_range": date_range,
-        "report_label": report_period_label,
-        "report_title": report_title,
-        "selected_types": selected_types.copy(),
-        "scope_mode": scope_mode,
-        "selected_regions": ["全球"] if is_global_scope else active_regions.copy(),
-        "report_scope_label": report_scope_label,
-        "include_standards": standards_enabled,
-        "include_research_supplement": include_research_supplement,
-        "research_supplement_period": {
-            "lookback_days": research_supplement_lookback_days,
-            "start_date": research_supplement_start_date.isoformat(),
-            "end_date": today.isoformat(),
-        },
-        "fast_mode": fast_mode_enabled,
-        "demo_cache_mode": demo_cache_mode_enabled,
-        "app_source_hash": current_app_hash,
-    }
+    return service_build_current_run_config(_run_config_context())
 
 
 current_run_config = build_current_run_config()
 
 
 def get_report_type_code(report_label: str, lookback_days: int) -> str:
-    label = (report_label or "").strip()
-    try:
-        days = int(lookback_days)
-    except (TypeError, ValueError):
-        days = 0
-    if days == 7 or label == "週報":
-        return "weekly"
-    if days == 30 or label == "月報":
-        return "monthly"
-    if days == 90 or label == "季報":
-        return "quarterly"
-    if days == 180 or label in {"半年報", "半年度報告"}:
-        return "halfyear"
-    if days == 365 or label in {"年報", "年度回顧"}:
-        return "annual"
-    return f"{days}days" if days else "report"
+    return service_get_report_type_code(report_label, lookback_days)
 
 
 def _compact_date(value, fallback: datetime.date | None = None) -> str:
-    if isinstance(value, datetime.datetime):
-        return value.strftime("%Y%m%d")
-    if isinstance(value, datetime.date):
-        return value.strftime("%Y%m%d")
-    text = str(value or "").strip()
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
-        try:
-            return datetime.datetime.strptime(text, fmt).strftime("%Y%m%d")
-        except ValueError:
-            continue
-    match = re.search(r"(20\d{2})\D?(\d{1,2})\D?(\d{1,2})", text)
-    if match:
-        return f"{int(match.group(1)):04d}{int(match.group(2)):02d}{int(match.group(3)):02d}"
-    return (fallback or today).strftime("%Y%m%d")
+    return service_compact_date(value, fallback, today=today)
 
 
-def build_report_download_filename(prefix: str, extension: str, run_config: dict | None = None) -> str:
-    config = run_config or current_run_config
-    days = int(config.get("lookback_days") or lookback_int)
-    report_date_obj = today
-    try:
-        report_date_obj = datetime.date.fromisoformat(str(config.get("report_date") or today.isoformat()))
-    except ValueError:
-        pass
-    report_type_code = get_report_type_code(config.get("report_label", report_period_label), days)
-    report_date = _compact_date(config.get("report_date"), report_date_obj)
-    clean_prefix = re.sub(r"[^A-Za-z0-9_]+", "_", str(prefix or "report")).strip("_")
-    clean_extension = re.sub(r"[^A-Za-z0-9]+", "", str(extension or "")).lower()
-    filename = f"{clean_prefix}_{report_type_code.strip()}_{report_date.strip()}.{clean_extension.strip()}"
-    return re.sub(r"\s+\.", ".", filename).strip()
+def build_report_download_filename(
+    prefix: str,
+    extension: str,
+    run_config: dict | None = None,
+) -> str:
+    return service_build_report_download_filename(
+        prefix,
+        extension,
+        run_config,
+        context=DownloadFilenameContext(
+            current_run_config=current_run_config,
+            lookback_int=lookback_int,
+            today=today,
+            report_period_label=report_period_label,
+        ),
+    )
 
 
 def google_news_search_url(query: str, hl: str = "en-US", gl: str = "US", ceid_lang: str = "en") -> str:
@@ -740,46 +536,25 @@ def build_run_news_sources(
     )
 
 
-def render_main_dashboard(source_count: int, standards_count: int):
-    selected_regions_note = "全球" if is_global_scope else f"{len(selected_regions)} 個國家"
-    st.markdown(
-        f"""
-        <div class="hero-card">
-          <div class="hero-eyebrow">臺北市政府捷運工程局｜機電系統設計處</div>
-          <div class="hero-title">國際捷運技術{report_period_label} AI 自動產生系統</div>
-          <div class="hero-subtitle">國際技術新知、重大事故、營運議題與規範更新之自動化監測</div>
-            <div class="hero-meta">
-            <span class="hero-pill">今日日期：{today.strftime('%Y/%m/%d')}</span>
-            <span class="hero-pill">資料涵蓋：{week_start.strftime('%Y/%m/%d')} - {today.strftime('%Y/%m/%d')}</span>
-            <span class="hero-pill">範圍：{scope_mode}</span>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown('<div class="section-title">報告產出</div>', unsafe_allow_html=True)
-    generate_clicked = st.button(f"🚀 產生國際捷運 AI {report_period_label}", type="primary", use_container_width=True)
-    if demo_cache_mode_enabled:
-        st.info("展覽快速版已啟用：按下產生報告會顯示預先產製展示報告，不是即時搜尋結果。")
-    send_after_generate = st.checkbox(
-        "產生後寄送 Email",
-        value=False,
-        key="send_after_generate",
-        help="預設只產生並顯示報告；勾選後會在報告成功產生後才寄送。",
-    )
-    progress_placeholder = st.empty()
-    status_placeholder = st.empty()
-
-    return generate_clicked, send_after_generate, progress_placeholder, status_placeholder
 
 
 initial_region_sources = build_region_news_sources(active_regions, int(lookback_days), fast_mode=fast_mode_enabled)
 initial_standard_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
 initial_combined_sources = build_run_news_sources(initial_region_sources, initial_standard_sources, fast_mode_enabled)
-generate_btn, send_after_generate, progress_placeholder, status_placeholder = render_main_dashboard(
-    source_count=len(initial_combined_sources),
-    standards_count=sum(len(v) for v in STANDARDS_WATCHLIST.values()),
+generate_btn, send_after_generate, progress_placeholder, status_placeholder = (
+    service_render_main_dashboard(
+        source_count=len(initial_combined_sources),
+        standards_count=sum(len(v) for v in STANDARDS_WATCHLIST.values()),
+        context=MainDashboardContext(
+            is_global_scope=is_global_scope,
+            selected_regions=selected_regions,
+            report_period_label=report_period_label,
+            today=today,
+            week_start=week_start,
+            scope_mode=scope_mode,
+            demo_cache_mode_enabled=demo_cache_mode_enabled,
+        ),
+    )
 )
 
 
@@ -3980,84 +3755,28 @@ if generate_btn:
             st.info("請確認 MaiAgent API Key、Chatbot ID 與 API Base 正確，且該雲端 API 可由目前執行環境連線。")
 
 # ── 報告顯示區 ──────────────────────────────────────
-st.markdown("---")
-source_statuses = st.session_state.get("latest_source_statuses", [])
-display_run_config = st.session_state.get("latest_run_config", current_run_config)
-display_report_label = display_run_config.get("report_label", report_period_label)
-report_matches_current_app = (
-    not display_run_config.get("app_source_hash")
-    or display_run_config.get("app_source_hash") == current_app_hash
+report_display = render_report_display(
+    ReportDisplayContext(
+        current_run_config=current_run_config,
+        report_period_label=report_period_label,
+        current_app_hash=current_app_hash,
+        last_pdf_error=LAST_PDF_ERROR,
+        progress_placeholder=progress_placeholder,
+        status_placeholder=status_placeholder,
+        candidate_marker_remover=remove_internal_candidate_markers,
+        final_report_normalizer=normalize_final_report_md,
+        report_markdown_renderer=display_report_markdown,
+        pdf_renderer=try_markdown_to_pdf_bytes,
+        download_filename_builder=build_report_download_filename,
+        email_sender=send_current_report_email,
+    )
 )
-
-st.markdown(f'<div class="section-title">正式{display_report_label}</div>', unsafe_allow_html=True)
-
-report_stats = st.session_state.get("latest_report_stats", {})
-stored_latest_report_md = st.session_state.get("latest_report_md", "")
-stored_latest_report = st.session_state.get("latest_report", "")
-latest_report_md = remove_internal_candidate_markers(stored_latest_report_md)
-legacy_latest_report = remove_internal_candidate_markers(stored_latest_report)
-marker_cleanup_changed = (
-    latest_report_md != stored_latest_report_md
-    or legacy_latest_report != stored_latest_report
-)
-if marker_cleanup_changed:
-    st.session_state["latest_pdf"] = None
-if stored_latest_report_md or stored_latest_report:
-    clean_session_report = latest_report_md or legacy_latest_report
-    st.session_state["latest_report_md"] = clean_session_report
-    st.session_state["latest_report"] = clean_session_report
-    latest_report_md = clean_session_report
-report_to_show = (latest_report_md or legacy_latest_report) if report_matches_current_app else ""
-if report_to_show and not latest_report_md:
-    report_to_show = remove_internal_candidate_markers(normalize_final_report_md(report_to_show))
-    st.session_state["latest_report_md"] = report_to_show
-    st.session_state["latest_report"] = report_to_show
-    latest_report_md = report_to_show
-
-if report_to_show:
-    st.markdown(display_report_markdown(report_to_show))
-
-    st.markdown('<div class="section-title">輸出與寄送</div>', unsafe_allow_html=True)
-    pdf_source_md = st.session_state.get("latest_report_md", "")
-    pdf_bytes = st.session_state.get("latest_pdf") or (try_markdown_to_pdf_bytes(pdf_source_md) if pdf_source_md else None)
-    output_cols = st.columns(2)
-    out1 = output_cols[0]
-    out2 = output_cols[1]
-    with out1:
-        if pdf_bytes:
-            st.download_button(
-                f"📄 下載正式{display_report_label} PDF",
-                data=pdf_bytes,
-                file_name=build_report_download_filename("metro_report", "pdf", display_run_config),
-                mime="application/octet-stream",
-                use_container_width=True,
-            )
-        else:
-            st.button(f"📄 下載正式{display_report_label} PDF", disabled=True, use_container_width=True)
-            if LAST_PDF_ERROR:
-                st.error(LAST_PDF_ERROR)
-            else:
-                st.caption("請先產生本次報告；PDF 會使用 latest_report_md。")
-    with out2:
-        if latest_report_md:
-            send_latest_btn = st.button("📧 寄送目前報告", use_container_width=True)
-            if send_latest_btn:
-                email_progress = progress_placeholder.progress(0.95)
-                st.session_state["email_sent"] = bool(send_current_report_email(
-                    st.session_state["latest_report_md"],
-                    status_target=status_placeholder,
-                    progress_target=email_progress,
-                ))
-        else:
-            st.button("📧 寄送目前報告", disabled=True, use_container_width=True)
-            st.caption("請先產生報告。")
-else:
-    if not report_matches_current_app and st.session_state.get("latest_report_md"):
-        st.caption("程式已更新，上一版本報告已隱藏；請重新產生報告。")
-    st.markdown(f"""
-    <div class="warn-box">
-    📭 尚無報告資料。請點擊上方「產生國際捷運 AI {report_period_label}」按鈕產生第一份報告。
-    </div>""", unsafe_allow_html=True)
+source_statuses = report_display.source_statuses
+display_run_config = report_display.display_run_config
+display_report_label = report_display.display_report_label
+report_stats = report_display.report_stats
+latest_report_md = report_display.latest_report_md
+report_to_show = report_display.report_to_show
 
 # ── 開發者除錯資訊 ───────────────────────────────────
 def _developer_debug_context() -> DeveloperDebugContext:
@@ -4094,21 +3813,13 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
 
 
 debug_info = st.session_state.get("latest_debug_info", {})
-if show_developer_info:
-    if debug_info:
-        debug_payload = build_developer_debug_payload(debug_info, report_stats, source_statuses)
-        st.session_state["latest_debug_payload"] = debug_payload
-    else:
-        debug_payload = st.session_state.get("latest_debug_payload")
-
-    if debug_payload:
-        debug_json = json.dumps(debug_payload, ensure_ascii=False, indent=2)
-        st.download_button(
-            "下載 AI 校正資料 JSON",
-            data=debug_json.encode("utf-8"),
-            file_name=build_report_download_filename("developer_debug", "json", display_run_config),
-            mime="application/json",
-            use_container_width=True,
-        )
-    else:
-        st.caption("請先產生報告，開發者 JSON 會在報告完成後提供下載。")
+render_developer_debug_ui(
+    DebugUiContext(
+        show_developer_info=show_developer_info,
+        report_stats=report_stats,
+        source_statuses=source_statuses,
+        display_run_config=display_run_config,
+        payload_builder=build_developer_debug_payload,
+        download_filename_builder=build_report_download_filename,
+    )
+)
