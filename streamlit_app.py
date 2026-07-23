@@ -306,6 +306,18 @@ today = datetime.date.today()
 APP_DIR = Path(__file__).resolve().parent
 REPORTS_DIR = APP_DIR / "reports"
 
+
+def _write_report_markdown_files(
+    report_md: str,
+    report_date: datetime.date,
+) -> tuple[Path, Path]:
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    latest_path = REPORTS_DIR / "latest.md"
+    dated_path = REPORTS_DIR / f"report_{report_date.strftime('%Y%m%d')}.md"
+    latest_path.write_text(report_md, encoding="utf-8")
+    dated_path.write_text(report_md, encoding="utf-8")
+    return latest_path, dated_path
+
 PDF_FONT_CANDIDATES = [
     ("project", APP_DIR / "fonts" / "NotoSansTC-Regular.ttf"),
     ("project", APP_DIR / "fonts" / "NotoSansCJKtc-Regular.otf"),
@@ -1910,9 +1922,21 @@ def load_demo_report_cache() -> tuple[str, bytes | None, dict]:
     debug_payload = _read_demo_debug_payload(demo_debug_path)
     source = "內建展示文字"
 
-    if demo_md_path.exists():
-        report_text = demo_md_path.read_text(encoding="utf-8")
-        source = str(demo_md_path)
+    try:
+        demo_md_exists = demo_md_path.exists()
+    except OSError:
+        demo_md_exists = False
+    if demo_md_exists:
+        try:
+            report_text = demo_md_path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            report_text = str(debug_payload.get("final_report_md") or "").strip()
+            if report_text:
+                source = str(demo_debug_path)
+            else:
+                report_text = _builtin_demo_report_text()
+        else:
+            source = str(demo_md_path)
     else:
         report_text = str(debug_payload.get("final_report_md") or "").strip()
         if report_text:
@@ -1925,15 +1949,24 @@ def load_demo_report_cache() -> tuple[str, bytes | None, dict]:
     report_text = normalize_final_report_md(report_text)
     report_text = apply_final_report_footer(report_text, [])
 
-    if demo_pdf_path.exists():
-        pdf_bytes = demo_pdf_path.read_bytes()
+    try:
+        demo_pdf_exists = demo_pdf_path.exists()
+    except OSError:
+        demo_pdf_exists = False
+    if demo_pdf_exists:
+        try:
+            pdf_bytes = demo_pdf_path.read_bytes()
+        except OSError:
+            pdf_bytes = None
+        if not pdf_bytes:
+            pdf_bytes = try_markdown_to_pdf_bytes(report_text)
     else:
         pdf_bytes = try_markdown_to_pdf_bytes(report_text)
 
     return report_text, pdf_bytes, {
         "demo_source": source,
         "demo_markdown_path": str(demo_md_path),
-        "demo_pdf_path": str(demo_pdf_path) if demo_pdf_path.exists() else "",
+        "demo_pdf_path": str(demo_pdf_path) if demo_pdf_exists else "",
         "demo_debug_path": str(demo_debug_path) if demo_debug_path.exists() else "",
         "demo_debug_payload_found": bool(debug_payload),
     }
@@ -2321,11 +2354,7 @@ if generate_btn:
             LAST_PYTHON_SELECTION_DEBUG["incident_coverage_warning"] = incident_coverage_warning
             LAST_PYTHON_SELECTION_DEBUG["incident_coverage_reason"] = incident_coverage_reason
 
-            os.makedirs("reports", exist_ok=True)
-            with open("reports/latest.md", "w", encoding="utf-8") as f:
-                f.write(clean_report)
-            with open(f"reports/report_{today.strftime('%Y%m%d')}.md", "w", encoding="utf-8") as f:
-                f.write(clean_report)
+            _write_report_markdown_files(clean_report, today)
 
             report_stats = {
                 "raw_count": candidate_pool["raw_count"],
