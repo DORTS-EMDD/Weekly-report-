@@ -640,63 +640,6 @@ def iter_pdf_font_candidates():
                 yield candidate
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ── 金鑰狀態 ──────────────────────────────────────────
 # AI 報告產製改用 MaiAgent 雲端 API。
 # 請在 Streamlit Cloud Secrets 或環境變數設定：
@@ -1071,7 +1014,6 @@ def google_news_site_proxy_url(domain: str, days: int, keywords: str = TRANSIT_N
 RSS_SOURCES = build_rss_sources(int(lookback_days))
 
 
-
 def _conditional_news_sources(fast_mode: bool) -> tuple[list[tuple[str, str]], list[dict]]:
     return service_conditional_news_sources(
         fast_mode, int(lookback_days), lookback_int, standards_enabled,
@@ -1087,38 +1029,6 @@ def build_run_news_sources(
         lookback_days=int(lookback_days), lookback_int=lookback_int,
         standards_enabled=standards_enabled, return_skipped=return_skipped,
     )
-
-# ═══════════════════════════════════════════════════════
-#  RSS 訂閱源（官方 RSS 優先；必要時由抓取函式 fallback 至 Google News site: 代理）
-# ═══════════════════════════════════════════════════════
-
-
-
-
-
-
-
-
-
-
-
-# ═══════════════════════════════════════════════════════
-#  依勾選國家動態產生的 Google News 地區代理來源
-# ═══════════════════════════════════════════════════════
-# 背景：上方 RSS_SOURCES 幾乎都是歐美鐵道媒體，對日韓星港等亞洲市場的
-# 捷運新聞覆蓋率實測為 0（見程式修訂紀錄）。這裡針對使用者勾選的國家，
-# 用當地語言關鍵字動態組出 Google News RSS 代理，補上這塊缺口。
-# 每個 tuple：(顯示名稱, 查詢關鍵字, hl 語系, gl 國別, ceid 語言代碼)
-
-
-
-
-
-
-
-
-
-
 
 
 def render_main_dashboard(source_count: int, standards_count: int):
@@ -1164,9 +1074,6 @@ generate_btn, send_after_generate, progress_placeholder, status_placeholder = re
 )
 
 
-
-
-
 def _make_news_candidate(title: str, date: str, source: str, url: str, snippet: str, query: str, region: str, source_type: str, source_href: str = "") -> dict:
     return service_make_news_candidate(
         title, date, source, url, snippet, query, region, source_type, source_href,
@@ -1194,16 +1101,6 @@ FeedFetchError = ServiceFeedFetchError
 create_requests_session = service_create_requests_session
 
 
-
-
-
-
-
-
-
-
-
-
 def _fallback_google_news_url(source_url: str) -> str | None:
     parsed = urlparse(source_url)
     if "news.google.com" in parsed.netloc:
@@ -1212,60 +1109,6 @@ def _fallback_google_news_url(source_url: str) -> str | None:
     if not domain:
         return None
     return google_news_site_proxy_url(domain, int(lookback_days))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _fetch_feed(session: requests.Session, url: str):
@@ -2037,84 +1880,6 @@ def run_duckduckgo_searches(progress_bar=None, status_text=None) -> str:
     return "\n\n".join(results_map[i] for i in sorted(results_map))
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def build_pipeline_debug_stats(
     raw_candidates: list[dict],
     deduped_candidates: list[dict],
@@ -2747,32 +2512,6 @@ def _policy_selection_rule() -> str:
 """.strip()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 WORK_ZONE_MONITORING_TERMS = [
     "work zone", "speed enforcement", "construction zone", "maintenance safety",
     "工區", "施工區", "速限執法", "維修作業安全", "施工安全", "安全監測",
@@ -2787,11 +2526,6 @@ WORK_ZONE_TECH_DETAIL_TERMS = [
 SOURCE_QUALITY_C_DOMAINS.update(PORTAL_REPOST_DOMAINS | PORTAL_SOCIAL_LOW_VALUE_DOMAINS)
 
 
-
-
-
-
-
 STRICT_HIGH_VALUE_POLICY_TEXT_TERMS = [
     "fare reform", "payment policy", "service restructure", "service restructuring",
     "headway", "service frequency", "operating hours", "capacity", "trial operation",
@@ -2804,215 +2538,7 @@ STRICT_HIGH_VALUE_POLICY_TEXT_TERMS = [
 ]
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 LAST_PYTHON_SELECTION_DEBUG: dict = dict(REPORT_SELECTION_DEBUG_DEFAULT)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def build_selection_prompt(candidates: list[dict]) -> str:
@@ -3180,7 +2706,6 @@ def parse_selection_response(response_text: str, candidates: list[dict]) -> list
         backup["include_in_report"] = True
         selected.append(backup)
     return selected
-
 
 
 def build_python_unselected_stats(model_candidates: list[dict], selected_candidates: list[dict]) -> dict:
@@ -3560,8 +3085,6 @@ def sanitize_report_text(text: str) -> str:
         include_research_supplement=include_research_supplement,
         research_section_heading=research_section_heading,
     )
-
-
 
 
 def _journal_theme_summary(journal_candidates: list[dict]) -> list[str]:
@@ -4184,8 +3707,6 @@ def repair_report_region_lines(report_md: str, selected_candidates: list[dict]) 
     return "".join(output)
 
 
-
-
 def formal_title_from_candidate(candidate: dict) -> str:
     category = candidate.get("classification") or candidate.get("preliminary_type") or infer_preliminary_type(candidate)
     text = _candidate_selection_text(candidate)
@@ -4243,8 +3764,6 @@ extract_report_candidate_ids = service_extract_report_candidate_ids
 
 
 remove_internal_candidate_markers = service_remove_internal_candidate_markers
-
-
 
 
 validate_report_candidate_ids = service_validate_report_candidate_ids
@@ -4508,8 +4027,6 @@ def detect_category(text: str) -> str:
         if category in text:
             return category
     return "其他"
-
-
 
 
 def build_final_incident_coverage_debug(
