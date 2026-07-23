@@ -129,6 +129,17 @@ from ddgs_search_service import (
     build_search_queries as service_build_search_queries,
     run_duckduckgo_searches as service_run_duckduckgo_searches,
 )
+from rss_feed_service import (
+    RssFeedContext,
+    _format_items_block,
+    _status_record,
+    build_source_health_summary,
+    _fallback_google_news_url as service_fallback_google_news_url,
+    _fetch_feed as service_rss_fetch_feed,
+    _items_from_parsed_feed as service_items_from_parsed_feed,
+    _method_for_url as service_method_for_url,
+    fetch_rss_feeds as service_fetch_rss_feeds,
+)
 from pdf_exporter import (
     streamlit_markdown_to_pdf_bytes as streamlit_pdf_renderer,
     pdf_rich_text as shared_pdf_rich_text,
@@ -1122,18 +1133,43 @@ FeedFetchError = ServiceFeedFetchError
 create_requests_session = service_create_requests_session
 
 
+def _rss_feed_context(status_text=None) -> RssFeedContext:
+    return RssFeedContext(
+        lookback_days=lookback_days,
+        feedparser_module=feedparser,
+        http_session_factory=create_requests_session,
+        fetch_feed_callback=service_fetch_feed,
+        fallback_url_builder=_fallback_google_news_url,
+        url_safety_check=_is_valid_news_url,
+        known_bad_source_checker=_is_known_bad_official_rss,
+        parse_pub_date=_parse_pub_date,
+        is_recent=_is_recent,
+        entry_pub_str=_entry_pub_str,
+        entry_source_href=_entry_source_href,
+        contains_taiwan_reference=_contains_taiwan_reference,
+        is_standards_source=_is_standards_source,
+        is_standard_update_candidate=_is_standard_update_candidate,
+        is_urban_rail_candidate=_is_urban_rail_candidate,
+        is_tech_news_only_mode=_is_tech_news_only_mode,
+        is_technical_news_candidate=_is_technical_news_candidate,
+        normalize_title=_normalize_title,
+        dedupe_url=_dedupe_url,
+        domain_from_url=_domain_from_url,
+        status_callback=status_text.text if status_text else None,
+        now_provider=lambda: datetime.datetime.now(datetime.timezone.utc),
+    )
+
+
 def _fallback_google_news_url(source_url: str) -> str | None:
-    parsed = urlparse(source_url)
-    if "news.google.com" in parsed.netloc:
-        return None
-    domain = parsed.netloc.lower().removeprefix("www.")
-    if not domain:
-        return None
-    return google_news_site_proxy_url(domain, int(lookback_days))
+    return service_fallback_google_news_url(
+        source_url,
+        lookback_days=int(lookback_days),
+        google_news_fallback_builder=google_news_site_proxy_url,
+    )
 
 
 def _fetch_feed(session: requests.Session, url: str):
-    return service_fetch_feed(session, url, feedparser)
+    return service_rss_fetch_feed(session, url, context=_rss_feed_context())
 
 
 def _items_from_parsed_feed(
@@ -1143,138 +1179,18 @@ def _items_from_parsed_feed(
     seen_urls: set[str],
     source_name: str = "",
 ) -> tuple[list[dict], int, int, int, int]:
-    items: list[dict] = []
-    invalid_count = 0
-    blocked_count = 0
-    duplicate_count = 0
-    topic_filtered_count = 0
-
-    for entry in getattr(parsed_feed, "entries", []):
-        title = (entry.get("title") or "").strip()
-        link = (entry.get("link") or "").strip()
-        desc = (entry.get("summary") or entry.get("description") or "").strip()
-        pub_str = _entry_pub_str(entry)
-        source_href = _entry_source_href(entry)
-
-        if not title or not _is_recent(pub_str, cutoff):
-            continue
-
-        candidate_text = f"{title} {desc} {link} {source_href} {pub_str}"
-
-        if _contains_taiwan_reference(candidate_text):
-            blocked_count += 1
-            continue
-
-        # 規範更新來源必須是「真正更新」，不能只是標準首頁或追蹤清單
-        if _is_standards_source(source_name):
-            if not pub_str or not _is_standard_update_candidate(candidate_text):
-                topic_filtered_count += 1
-                continue
-
-        if not _is_urban_rail_candidate(candidate_text, source_name):
-            topic_filtered_count += 1
-            continue
-
-        if _is_tech_news_only_mode() and not _is_technical_news_candidate(f"{title} {desc} {link} {source_href}", source_name):
-            topic_filtered_count += 1
-            continue
-
-        is_valid, reason = _is_valid_news_url(link, source_href=source_href)
-        if not is_valid:
-            if reason in ("被安全規則排除", "範圍排除"):
-                blocked_count += 1
-            else:
-                invalid_count += 1
-            continue
-
-        title_key = _normalize_title(title)
-        url_key = _dedupe_url(link)
-        if title_key in seen_titles or url_key in seen_urls:
-            duplicate_count += 1
-            continue
-        seen_titles.add(title_key)
-        seen_urls.add(url_key)
-
-        items.append({
-            "title": title,
-            "link": link,
-            "summary": re.sub(r"<[^>]+>", " ", desc)[:500],
-            "date": _parse_pub_date(pub_str),
-            "source_href": source_href,
-        })
-
-    return items, invalid_count, blocked_count, duplicate_count, topic_filtered_count
-
-
-def _status_record(
-    source_name: str,
-    method: str,
-    status: str,
-    item_count: int,
-    error_message: str = "",
-    fallback_used: bool = False,
-) -> dict:
-    return {
-        "source_name": source_name,
-        "method": method,
-        "status": status,
-        "item_count": item_count,
-        "error_message": error_message,
-        "fallback_used": fallback_used,
-    }
-
-
-def build_source_health_summary(source_statuses: list[dict]) -> dict:
-    summary = {
-        "total": len(source_statuses or []),
-        "success": 0,
-        "no_articles": 0,
-        "non_urban_rail": 0,
-        "skipped_known_bad": 0,
-        "safety_excluded": 0,
-        "fallback_success": 0,
-        "fallback_used": 0,
-        "other": 0,
-    }
-    for item in source_statuses or []:
-        status = str(item.get("status", "") or "")
-        message = str(item.get("error_message", "") or "")
-        if item.get("fallback_used"):
-            summary["fallback_used"] += 1
-        if status in {"成功", "success"}:
-            summary["success"] += 1
-        elif status == "fallback 成功":
-            summary["success"] += 1
-            summary["fallback_success"] += 1
-        elif status in {"無文章", "no_articles"}:
-            summary["no_articles"] += 1
-        elif status in {"非都市軌道", "non_urban_rail"}:
-            summary["non_urban_rail"] += 1
-        elif status == "skipped_known_bad":
-            summary["skipped_known_bad"] += 1
-        elif status in {"被安全規則排除", "範圍排除", "safety_excluded"} or "安全排除" in message:
-            summary["safety_excluded"] += 1
-        else:
-            summary["other"] += 1
-    return summary
+    return service_items_from_parsed_feed(
+        parsed_feed,
+        cutoff,
+        seen_titles,
+        seen_urls,
+        source_name,
+        context=_rss_feed_context(),
+    )
 
 
 def _method_for_url(url: str) -> str:
-    return "Google News 代理" if "news.google.com" in _domain_from_url(url) else "官方 RSS"
-
-
-def _format_items_block(source_name: str, items: list[dict]) -> str:
-    shown = items[:MAX_ITEMS_PER_SOURCE]
-    lines = [f"【RSS來源：{source_name}（有效候選 {len(items)} 篇，傳給模型 {len(shown)} 篇）】"]
-    for item in shown:
-        source_hint = f"\n  原始來源：{item['source_href']}" if item.get("source_href") else ""
-        lines.append(
-            f"  日期：{item['date']}\n"
-            f"  標題：{item['title']}\n"
-            f"  摘要：{item['summary']}\n"
-            f"  連結：{item['link']}{source_hint}"
-        )
-    return "\n".join(lines)
+    return service_method_for_url(url, domain_from_url=_domain_from_url)
 
 
 def fetch_rss_feeds(
@@ -1285,82 +1201,11 @@ def fetch_rss_feeds(
     """通用 RSS/Atom 抓取函式，使用 feedparser + requests retry/backoff。"""
     if sources is None:
         sources = RSS_SOURCES
-
-    cutoff = (
-        datetime.datetime.now(datetime.timezone.utc)
-        - datetime.timedelta(days=max(1, min(int(lookback_days), 365)))
+    return service_fetch_rss_feeds(
+        sources,
+        context=_rss_feed_context(status_text),
+        return_status=return_status,
     )
-    all_blocks: list[str] = []
-    source_statuses: list[dict] = []
-    seen_titles: set[str] = set()
-    seen_urls: set[str] = set()
-    session = create_requests_session()
-
-    for idx, (source_name, url) in enumerate(sources, 1):
-        if status_text:
-            status_text.text("正在蒐集國際捷運新聞")
-
-        method = _method_for_url(url)
-        if _is_known_bad_official_rss(source_name, url):
-            source_statuses.append(_status_record(
-                source_name,
-                method,
-                "skipped_known_bad",
-                0,
-                "已知官方 RSS 長期失效，保留代理或未來自訂 RSS 可能性",
-            ))
-            all_blocks.append(f"【RSS來源：{source_name}】（skipped_known_bad）")
-            continue
-        valid_source, source_reason = _is_valid_news_url(url)
-        if not valid_source and source_reason in ("被安全規則排除", "範圍排除"):
-            source_statuses.append(_status_record(source_name, method, source_reason, 0, source_reason))
-            all_blocks.append(f"【RSS來源：{source_name}】（{source_reason}）")
-            continue
-
-        try:
-            parsed_feed = _fetch_feed(session, url)
-            items_found, invalid_count, blocked_count, duplicate_count, topic_filtered_count = _items_from_parsed_feed(
-                parsed_feed, cutoff, seen_titles, seen_urls, source_name
-            )
-            if items_found:
-                all_blocks.append(_format_items_block(source_name, items_found))
-                source_statuses.append(_status_record(source_name, method, "成功", min(len(items_found), MAX_ITEMS_PER_SOURCE)))
-            else:
-                status = "非都市軌道" if topic_filtered_count and not (invalid_count or blocked_count) else "被安全規則排除" if blocked_count and not invalid_count else "無文章"
-                message = f"無有效候選；非都市軌道 {topic_filtered_count}、無效連結 {invalid_count}、安全排除 {blocked_count}、重複 {duplicate_count}"
-                all_blocks.append(f"【RSS來源：{source_name}】（{status}）")
-                source_statuses.append(_status_record(source_name, method, status, 0, message))
-        except FeedFetchError as exc:
-            fallback_url = _fallback_google_news_url(url)
-            if fallback_url:
-                try:
-                    parsed_feed = _fetch_feed(session, fallback_url)
-                    items_found, invalid_count, blocked_count, duplicate_count, topic_filtered_count = _items_from_parsed_feed(
-                        parsed_feed, cutoff, seen_titles, seen_urls, f"{source_name}（fallback Google News）"
-                    )
-                    if items_found:
-                        all_blocks.append(_format_items_block(f"{source_name}（fallback Google News）", items_found))
-                        source_statuses.append(
-                            _status_record(source_name, "Google News fallback", "fallback 成功", min(len(items_found), MAX_ITEMS_PER_SOURCE), f"官方 RSS 失敗：{exc.message}", True)
-                        )
-                    else:
-                        status = "非都市軌道" if topic_filtered_count and not (invalid_count or blocked_count) else "被安全規則排除" if blocked_count and not invalid_count else "無文章"
-                        message = f"官方 RSS 失敗：{exc.message}；fallback 無有效候選；非都市軌道 {topic_filtered_count}、無效連結 {invalid_count}、安全排除 {blocked_count}、重複 {duplicate_count}"
-                        all_blocks.append(f"【RSS來源：{source_name}】（{status}）")
-                        source_statuses.append(_status_record(source_name, "Google News fallback", status, 0, message, True))
-                except FeedFetchError as fallback_exc:
-                    all_blocks.append(f"【RSS來源：{source_name}】（{exc.status}）")
-                    source_statuses.append(
-                        _status_record(source_name, method, exc.status, 0, f"官方 RSS：{exc.message}；fallback：{fallback_exc.message}", True)
-                    )
-            else:
-                all_blocks.append(f"【RSS來源：{source_name}】（{exc.status}）")
-                source_statuses.append(_status_record(source_name, method, exc.status, 0, exc.message))
-
-    raw_text = "\n\n".join(all_blocks)
-    if return_status:
-        return raw_text, source_statuses
-    return raw_text
 
 
 def _ddgs_search_context(
