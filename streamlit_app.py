@@ -957,13 +957,31 @@ _has_single_person_incident_exception = _selector_api["_has_single_person_incide
 _compute_passes_major_accident_gate = _selector_api["_compute_passes_major_accident_gate"]
 _passes_major_accident_gate = _selector_api["_passes_major_accident_gate"]
 _compute_passes_operational_dispute_gate = _selector_api["_compute_passes_operational_dispute_gate"]
-_compute_passes_operational_dispute_primary_gate = _selector_api["_compute_passes_operational_dispute_primary_gate"]
-_passes_operational_dispute_primary_gate = _selector_api["_passes_operational_dispute_primary_gate"]
-_compute_passes_operational_dispute_secondary_gate = _selector_api["_compute_passes_operational_dispute_secondary_gate"]
-_passes_operational_dispute_secondary_gate = _selector_api["_passes_operational_dispute_secondary_gate"]
 _passes_operational_dispute_gate = _selector_api["_passes_operational_dispute_gate"]
-_is_dispute_dominant = _selector_api["_is_dispute_dominant"]
-_is_policy_dominant = _selector_api["_is_policy_dominant"]
+_compute_passes_operational_dispute_primary_gate = _selector_api.get(
+    "_compute_passes_operational_dispute_primary_gate",
+    _compute_passes_operational_dispute_gate,
+)
+_passes_operational_dispute_primary_gate = _selector_api.get(
+    "_passes_operational_dispute_primary_gate",
+    _passes_operational_dispute_gate,
+)
+_compute_passes_operational_dispute_secondary_gate = _selector_api.get(
+    "_compute_passes_operational_dispute_secondary_gate",
+    lambda candidate: False,
+)
+_passes_operational_dispute_secondary_gate = _selector_api.get(
+    "_passes_operational_dispute_secondary_gate",
+    lambda candidate: False,
+)
+_is_dispute_dominant = _selector_api.get(
+    "_is_dispute_dominant",
+    _passes_operational_dispute_gate,
+)
+_is_policy_dominant = _selector_api.get(
+    "_is_policy_dominant",
+    lambda candidate: False,
+)
 _is_short_term_service_notice = _selector_api["_is_short_term_service_notice"]
 _compute_passes_high_value_policy_gate = _selector_api["_compute_passes_high_value_policy_gate"]
 _passes_high_value_policy_gate = _selector_api["_passes_high_value_policy_gate"]
