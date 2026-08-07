@@ -7,13 +7,14 @@ import unittest
 from unittest.mock import patch
 
 import run_config_service
+import config
 import streamlit_debug_ui
 import streamlit_report_ui
 import streamlit_sidebar_ui
 
 
 EXPECTED_SIDEBAR_SHA256 = (
-    "afd0996f04c2dcab8734a60757731a24a0dd3cd7359c146ed58e32f8a576faaf"
+    "d478a370c7357e54933a52a39e7580c6c066c4b2011587928fc53dd5f8bd5f28"
 )
 EXPECTED_DASHBOARD_SHA256 = (
     "4dfa770f9ada8fa1723858dd78af7d40e7a27f8d9daea414d7b3c9e7e87f3d93"
@@ -236,6 +237,15 @@ def _sidebar_context():
 
 
 class StreamlitUiModuleTests(unittest.TestCase):
+    def _render_sidebar(self, *, session_state=None, responses=None):
+        recorder = FakeStreamlit(
+            session_state=session_state,
+            responses=responses,
+        )
+        with patch.object(streamlit_sidebar_ui, "st", recorder):
+            result = streamlit_sidebar_ui.render_sidebar(_sidebar_context())
+        return recorder, result
+
     def test_run_config_and_download_filename_golden(self):
         today = datetime.date(2026, 7, 23)
         settings = run_config_service.build_run_settings(
@@ -321,15 +331,85 @@ class StreamlitUiModuleTests(unittest.TestCase):
         self.assertEqual(filename, "metro_report_weekly_20260723.pdf")
 
     def test_sidebar_recorder_snapshot(self):
-        recorder = FakeStreamlit()
-        with patch.object(streamlit_sidebar_ui, "st", recorder):
-            result = streamlit_sidebar_ui.render_sidebar(_sidebar_context())
+        recorder, result = self._render_sidebar()
         snapshot = {
             "calls": recorder.calls,
             "session_state": recorder.session_state,
             "result": result.__dict__,
         }
         self.assertEqual(_sha256(snapshot), EXPECTED_SIDEBAR_SHA256)
+
+    def test_sidebar_v2_visible_periods_and_legacy_state(self):
+        for legacy_value in (14, 90, 180, 365, None, "invalid"):
+            recorder, result = self._render_sidebar(
+                session_state={
+                    "lookback_days_state": legacy_value,
+                    "long_term_mode": True,
+                    "include_research_supplement": True,
+                }
+            )
+            selectbox_calls = [
+                call for call in recorder.calls if call["name"] == "selectbox"
+            ]
+            self.assertEqual(len(selectbox_calls), 1)
+            self.assertEqual(selectbox_calls[0]["args"][1], [7, 30])
+            self.assertEqual(result.lookback_days, 7)
+            self.assertFalse(result.long_term_mode)
+            self.assertFalse(result.include_research_supplement)
+            self.assertEqual(recorder.session_state["lookback_days_state"], 7)
+            self.assertFalse(recorder.session_state["long_term_mode"])
+            self.assertFalse(
+                recorder.session_state["include_research_supplement"]
+            )
+
+    def test_sidebar_v2_preserves_controls_and_hides_advanced_modes(self):
+        recorder, result = self._render_sidebar(
+            responses={"type_規範更新": True}
+        )
+        call_text = json.dumps(recorder.calls, ensure_ascii=False)
+        self.assertEqual(result.lookback_days, 7)
+        self.assertTrue(result.standards_enabled)
+        self.assertFalse(result.long_term_mode)
+        self.assertFalse(result.include_research_supplement)
+        for hidden_text in (
+            "啟用長期趨勢 / 規範追蹤模式",
+            "國際學術期刊",
+            "排程說明",
+            "GitHub Actions",
+            "AI 模型設定",
+            "MaiAgent 雲端 API",
+        ):
+            self.assertNotIn(hidden_text, call_text)
+        for retained_text in (
+            "收件信箱",
+            "📰 新聞類型",
+            "規範更新",
+            "📚 規範追蹤",
+            "報導範圍",
+            "開發者資訊顯示",
+            "展覽快速版",
+        ):
+            self.assertIn(retained_text, call_text)
+
+    def test_sidebar_v2_keeps_interface_and_backend_period_options(self):
+        self.assertEqual(
+            tuple(streamlit_sidebar_ui.SidebarSelection.__dataclass_fields__),
+            (
+                "recipient_input",
+                "lookback_days",
+                "selected_types",
+                "standards_enabled",
+                "standard_count",
+                "scope_mode",
+                "selected_regions",
+                "long_term_mode",
+                "include_research_supplement",
+                "show_developer_info",
+                "demo_cache_mode",
+            ),
+        )
+        self.assertEqual(config.NORMAL_LOOKBACK_OPTIONS, [7, 14, 30])
+        self.assertEqual(config.ADVANCED_LOOKBACK_OPTIONS, [90, 180, 365])
 
     def test_main_dashboard_recorder_snapshot(self):
         recorder = FakeStreamlit()

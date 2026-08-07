@@ -6,6 +6,9 @@ from typing import Callable
 import streamlit as st
 
 
+VISIBLE_LOOKBACK_DAYS = (7, 30)
+
+
 @dataclass(frozen=True)
 class SidebarContext:
     default_recipients: str
@@ -37,6 +40,14 @@ class SidebarSelection:
 
 
 def render_sidebar(context: SidebarContext) -> SidebarSelection:
+    visible_lookback_options = [
+        days
+        for days in VISIBLE_LOOKBACK_DAYS
+        if days in context.normal_lookback_options
+    ]
+    if not visible_lookback_options:
+        raise ValueError("Sidebar requires at least one visible report period")
+
     if not st.session_state.get("_demo_cache_default_off_applied"):
         st.session_state["demo_cache_mode"] = False
         st.session_state["_demo_cache_default_off_applied"] = True
@@ -91,46 +102,23 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             )
             st.session_state["type_規範更新"] = False
         st.session_state["_default_types_without_standards_applied"] = True
-        if "long_term_mode" not in st.session_state:
-            st.session_state["long_term_mode"] = False
-        if "lookback_days_state" not in st.session_state:
-            st.session_state["lookback_days_state"] = (
-                context.normal_lookback_options[0]
-            )
-
-        available_lookback_options = context.normal_lookback_options + (
-            context.advanced_lookback_options
-            if st.session_state["long_term_mode"]
-            else []
-        )
-        if (
-            st.session_state["lookback_days_state"]
-            not in available_lookback_options
-        ):
-            st.session_state["lookback_days_state"] = (
-                context.normal_lookback_options[0]
-            )
+        if st.session_state.get("lookback_days_state") not in visible_lookback_options:
+            st.session_state["lookback_days_state"] = visible_lookback_options[0]
+        st.session_state["long_term_mode"] = False
+        st.session_state["include_research_supplement"] = False
 
         lookback_days = st.selectbox(
             "報告期間",
-            available_lookback_options,
+            visible_lookback_options,
             key="lookback_days_state",
             format_func=lambda d: (
                 f"{d} 天（"
                 f"{context.report_period_labels.get(int(d), '報告')}）"
             ),
         )
-        if int(lookback_days) in context.advanced_lookback_options:
-            st.info(
-                "長期回顧適合趨勢分析、事故彙整與規範更新追蹤；"
-                "不建議作為一般新聞週報使用，系統將提高重複內容排除與來源審查標準。"
-            )
 
         selected_types = []
-        period_summary = context.long_term_target_labels.get(
-            int(lookback_days),
-            context.report_period_labels.get(int(lookback_days), "報告"),
-        )
+        period_summary = context.report_period_labels.get(int(lookback_days), "報告")
         selected_type_count = sum(
             1
             for report_type in context.advanced_types
@@ -269,33 +257,6 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             )
 
         with st.expander("⚙️ 進階設定", expanded=False):
-            st.markdown("**長期趨勢 / 規範追蹤模式**")
-            long_term_mode = st.checkbox(
-                "啟用長期趨勢 / 規範追蹤模式",
-                key="long_term_mode",
-                help="啟用後，報告期間可選 90、180、365 天。",
-            )
-            include_research_supplement = st.checkbox(
-                f"納入近 "
-                f"{context.get_research_supplement_lookback_days(int(lookback_days))} "
-                f"天國際學術期刊補充",
-                value=False,
-                key="include_research_supplement",
-                help=(
-                    "7、14、30、90 天報告查近 90 天；180 天半年報查近 180 天；"
-                    "365 天年度回顧查近 365 天。只在正式報告最後新增"
-                    "「國際學術期刊」，不計入新聞統計。"
-                ),
-            )
-
-            st.markdown("**排程說明**")
-            st.caption(
-                "由 GitHub Actions 自動寄送週報；預設每周一早上8時30分寄出報告。"
-            )
-
-            st.markdown("**AI 模型設定**")
-            st.caption("目前使用：MaiAgent 雲端 API")
-
             show_developer_info = st.checkbox(
                 "開發者資訊顯示",
                 value=False,
@@ -330,8 +291,8 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         standard_count=standard_count,
         scope_mode=scope_mode,
         selected_regions=selected_regions,
-        long_term_mode=long_term_mode,
-        include_research_supplement=include_research_supplement,
+        long_term_mode=False,
+        include_research_supplement=False,
         show_developer_info=show_developer_info,
         demo_cache_mode=demo_cache_mode,
     )
