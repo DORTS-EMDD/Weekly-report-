@@ -1,0 +1,1035 @@
+"""Article normalization, source/region inference, candidate schema, and deduplication."""
+
+import datetime
+import difflib
+import re
+import time
+import urllib.parse
+import requests
+from html import unescape
+from urllib.parse import parse_qs, unquote, urlparse, urlunparse
+from email.utils import parsedate_to_datetime
+
+from config import *
+from search_queries import FORMAL_SOURCE_PROXY_LABELS
+
+def _parse_pub_date(pub_str: str) -> str:
+    if not pub_str:
+        return "日期未知"
+    try:
+        return parsedate_to_datetime(pub_str).strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    try:
+        return datetime.datetime.fromisoformat(
+            pub_str.replace("Z", "+00:00")
+        ).strftime("%Y-%m-%d")
+    except Exception:
+        return pub_str[:16]
+
+
+def _is_recent(pub_str: str, cutoff: datetime.datetime) -> bool:
+    if not pub_str:
+        return True
+    try:
+        dt = parsedate_to_datetime(pub_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt > cutoff
+    except Exception:
+        pass
+    try:
+        dt = datetime.datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+        return dt > cutoff
+    except Exception:
+        return True
+
+
+def _source_tuple(source) -> tuple[str, str]:
+    return source[0], source[1]
+
+
+def _host_matches(host: str, domain: str) -> bool:
+    host = host.lower().strip(".")
+    domain = domain.lower().strip(".")
+    return host == domain or host.endswith("." + domain)
+
+
+def _domain_from_url(url: str) -> str:
+    try:
+        return urlparse(url).netloc.lower().removeprefix("www.")
+    except Exception:
+        return ""
+
+
+def _normalize_source_domain(domain: str) -> str:
+    host = (domain or "").strip().lower().removeprefix("www.")
+    if not host:
+        return ""
+    aliases = {
+        "news.google.com": "",
+        "finance.yahoo.com": "yahoo.com",
+        "uk.news.yahoo.com": "yahoo.com",
+        "ca.news.yahoo.com": "yahoo.com",
+        "www.gov.uk": "gov.uk",
+    }
+    return aliases.get(host, host)
+
+
+def _extract_site_domain_from_google_news(url: str) -> str:
+    try:
+        query = parse_qs(urlparse(url).query).get("q", [""])[0]
+    except Exception:
+        return ""
+    match = re.search(r"site:([^\s\)]+)", query)
+    return match.group(1).lower().removeprefix("www.") if match else ""
+
+
+def _is_blocked_host(host: str) -> bool:
+    host = host.lower().strip(".")
+    if not host:
+        return False
+    return any(host.endswith(suffix) for suffix in BLOCKED_DOMAINS)
+
+
+def _is_domestic_taiwan_host(host: str) -> bool:
+    host = host.lower().strip(".")
+    if not host:
+        return False
+    return any(host.endswith(suffix) for suffix in DOMESTIC_EXCLUDED_DOMAINS)
+
+
+def _is_allowed_host(host: str) -> bool:
+    if not ALLOWED_NEWS_DOMAINS:
+        return True
+    return any(_host_matches(host, domain) for domain in ALLOWED_NEWS_DOMAINS)
+
+
+def _is_valid_news_url(url: str, source_href: str = "") -> tuple[bool, str]:
+    if not url or not url.strip():
+        return False, "空網址"
+    url = url.strip()
+    if url.startswith("/") or "/clev" in url.lower():
+        return False, "相對網址或 Google /clev 轉址"
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return False, "非 http/https 網址"
+    if parsed.path in ("", "/") and "news.google.com" not in parsed.netloc:
+        return False, "首頁連結"
+
+    lower_url = url.lower()
+    blocked_markers = [
+        "/login", "/signin", "/sign-in", "/subscribe", "subscription",
+        "membership", "/member", "/account", "/advertis", "/sponsor",
+        "/privacy", "/terms", "/cookie", "/jobs", "/careers",
+    ]
+    if any(marker in lower_url for marker in blocked_markers):
+        return False, "廣告、會員或非新聞頁"
+
+    safety_url = source_href or url
+    host = _domain_from_url(safety_url)
+    url_host = _domain_from_url(url)
+    if any(
+        candidate_host and _host_matches(candidate_host, domain)
+        for candidate_host in (host, url_host)
+        for domain in LOW_VALUE_EXCLUDED_HOSTS
+    ):
+        return False, "低價值來源或子網域"
+    if _is_blocked_host(host):
+        return False, "被安全規則排除"
+    if _is_domestic_taiwan_host(host):
+        return False, "範圍排除"
+    if not _is_allowed_host(host):
+        return False, "不在來源白名單"
+    return True, ""
+
+
+def _contains_taiwan_reference(text: str) -> bool:
+    text_lower = (text or "").casefold()
+    return any(term.casefold() in text_lower for term in DOMESTIC_EXCLUDED_TERMS)
+
+
+def _contains_any_term(text: str, terms: list[str]) -> bool:
+    text_lower = (text or "").casefold()
+    for term in terms:
+        term_lower = term.casefold()
+        if re.fullmatch(r"[a-z0-9][a-z0-9\s/&.\-]*", term_lower):
+            if re.search(rf"(?<![a-z0-9]){re.escape(term_lower)}(?![a-z0-9])", text_lower):
+                return True
+        elif term_lower in text_lower:
+            return True
+    return False
+
+
+def _domain_hint_from_source_label(text: str) -> str:
+    text_lower = (text or "").casefold()
+    for label, domain in SOURCE_DOMAIN_HINT_BY_LABEL.items():
+        if label.casefold() in text_lower:
+            return domain
+    return ""
+
+
+def _original_source_domain(source: str = "", url: str = "", source_href: str = "", query: str = "") -> str:
+    for value in (source_href, url):
+        host = _normalize_source_domain(_domain_from_url(value))
+        if host and host != "news.google.com":
+            return host
+    for value in (url, source_href, query):
+        domain = _normalize_source_domain(_extract_site_domain_from_google_news(value))
+        if domain and domain != "news.google.com":
+            return domain
+    return _normalize_source_domain(_domain_hint_from_source_label(f"{source} {query}"))
+
+
+def _strict_source_domain(url: str = "", source_href: str = "", query: str = "") -> str:
+    """Return only URL, source_href or explicit site: domains; never infer from display labels."""
+    for value in (source_href, url):
+        host = _normalize_source_domain(_domain_from_url(value))
+        if host and host != "news.google.com":
+            return host
+    for value in (url, source_href, query):
+        domain = _normalize_source_domain(_extract_site_domain_from_google_news(value))
+        if domain and domain != "news.google.com":
+            return domain
+    return ""
+
+
+def _strip_source_name_noise(text: str) -> str:
+    cleaned = text or ""
+    for term in SOURCE_NAME_NOISE_TERMS:
+        cleaned = re.sub(re.escape(term), " ", cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
+def clean_source_name_for_ui(source_name: str) -> str:
+    """只清理前台顯示名稱；debug 仍保留原始 source_name/method。"""
+    cleaned = str(source_name or "")
+    cleaned = re.sub(r"[（(]\s*fallback\s*Google\s*News\s*[）)]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"（\s*Google\s*News\s*代理\s*）", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\(\s*Google\s*News\s*proxy\s*\)", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"由\s*Google\s*News\s*代理", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"Google\s*News\s*地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"Google\s*News\s*代理", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"地區代理\s*[－\-:：]?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bfallback\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"（\s*）|\(\s*\)", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" －-_/|：:")
+    return cleaned or str(source_name or "").strip()
+
+
+def _is_query_proxy_source_label(source_name: str) -> bool:
+    raw = str(source_name or "").strip()
+    cleaned = clean_source_name_for_ui(raw).strip()
+    raw_lower = raw.casefold()
+    cleaned_lower = cleaned.casefold()
+    if "google news" in raw_lower or "代理" in raw_lower:
+        return True
+    return any(cleaned_lower == label.casefold() for label in FORMAL_SOURCE_PROXY_LABELS)
+
+
+def _candidate_region_text(candidate: dict) -> str:
+    return " ".join(str(candidate.get(key, "") or "") for key in (
+        "region", "title", "snippet", "url", "source_href", "source_domain", "source"
+    ))
+
+
+def _region_from_domain_hints(candidate: dict) -> str:
+    source_url = _effective_source_url(candidate)
+    hosts = [
+        candidate.get("source_domain", ""),
+        _domain_from_url(source_url),
+        _domain_from_url(candidate.get("source_href", "")),
+        _domain_from_url(candidate.get("url", "")),
+        _original_source_domain(
+            candidate.get("source", ""),
+            candidate.get("url", ""),
+            candidate.get("source_href", ""),
+            "",
+        ),
+    ]
+    for host in hosts:
+        for domain, region in REGION_DOMAIN_HINTS.items():
+            if host and _host_matches(host, domain):
+                return region
+    return ""
+
+
+def _region_guess_from_candidate(candidate: dict) -> str:
+    title = str(candidate.get("title", "") or "")
+    snippet = str(candidate.get("snippet", "") or "")
+    explicit_event_guess = _explicit_event_region_hint(f"{title} {snippet}")
+    if explicit_event_guess:
+        return explicit_event_guess
+
+    query_region = str(candidate.get("query_region", "") or "").strip()
+    if query_region and query_region not in {"global", "unplanned", "未判定", "國際", "國際研究"}:
+        return query_region
+    query_guess = guess_region_from_text(candidate.get("query", ""))
+    if query_guess != "未判定":
+        return query_guess
+
+    title_guess = guess_region_from_text(title)
+    if title_guess != "未判定":
+        return title_guess
+    snippet_guess = guess_region_from_text(snippet)
+    if snippet_guess != "未判定":
+        return snippet_guess
+
+    source_guess = guess_region_from_text(candidate.get("source", ""))
+    if source_guess != "未判定":
+        return source_guess
+    domain_guess = _region_from_domain_hints(candidate)
+    if domain_guess:
+        return domain_guess
+
+    path_text = " ".join(
+        urlparse(candidate.get(key, "") or "").path.replace("/", " ")
+        for key in ("url", "source_href")
+    )
+    path_guess = guess_region_from_text(path_text)
+    if path_guess != "未判定":
+        return path_guess
+    existing = str(candidate.get("region", "") or "").strip()
+    return existing if existing not in {"", "未判定", "國際研究"} else "未判定"
+
+
+def _canonical_candidate_region(candidate: dict) -> str:
+    region = str(candidate.get("region", "") or "").strip()
+    guessed = _region_guess_from_candidate(candidate)
+    if guessed == "巴西":
+        region = "巴西"
+    elif guessed != "未判定" and (not region or region in {"未判定", "國際", "國際研究"} or region != guessed):
+        region = guessed
+    if region in {"Brazil", "Brasil", "São Paulo", "Sao Paulo", "聖保羅", "圣保罗"}:
+        region = "巴西"
+    if not region:
+        region = "未判定"
+    candidate["region"] = region
+    return region
+
+
+def _normalize_title(title: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\u4e00-\u9fff]+", " ", title.casefold())).strip()
+
+
+def _dedupe_url(url: str) -> str:
+    parsed = urlparse(url)
+    clean = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=parsed.netloc.lower(),
+        path=parsed.path.rstrip("/"),
+        params="",
+        query="",
+        fragment="",
+    )
+    return urlunparse(clean)
+
+
+def _entry_source_href(entry) -> str:
+    source = entry.get("source") if hasattr(entry, "get") else None
+    if isinstance(source, dict):
+        return source.get("href") or source.get("url") or ""
+    return ""
+
+
+def _entry_pub_str(entry) -> str:
+    for key in ("published", "updated", "created", "date"):
+        value = entry.get(key, "")
+        if value:
+            return str(value)
+    for key in ("published_parsed", "updated_parsed"):
+        value = entry.get(key)
+        if value:
+            try:
+                return datetime.datetime.fromtimestamp(time.mktime(value), tz=datetime.timezone.utc).isoformat()
+            except Exception:
+                pass
+    return ""
+
+
+def _clean_text(text: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", text or "")
+    text = re.sub(r"&nbsp;|&#160;", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _shorten(text: str, max_chars: int = CANDIDATE_SNIPPET_CHARS) -> str:
+    text = _clean_text(text)
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
+def _is_article_level_url(value: str, allow_google_news: bool = False) -> bool:
+    url = _clean_candidate_url(value)
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    if "news.google.com" in parsed.netloc.casefold():
+        return allow_google_news and parsed.path not in {"", "/"}
+    return parsed.path not in {"", "/"}
+
+
+def _effective_source_url(candidate: dict) -> str:
+    resolved_url = candidate.get("resolved_article_url") or ""
+    source_href = candidate.get("source_href") or ""
+    url = candidate.get("url") or ""
+    if _is_article_level_url(resolved_url):
+        return _clean_candidate_url(resolved_url)
+    if _is_article_level_url(source_href):
+        return _clean_candidate_url(source_href)
+    if _is_article_level_url(url, allow_google_news=True):
+        return _clean_candidate_url(url)
+    # A Google News article URL is a valid fallback. Never replace it with a
+    # synthesized publisher home page, which is not a source article.
+    if "news.google.com" in _domain_from_url(url):
+        return _clean_candidate_url(url)
+    return _clean_candidate_url(source_href or url)
+
+
+def _extract_complete_url(text: str) -> str:
+    match = re.search(r"https?://[^\s\)\]）＞>，,；;。]+", text or "")
+    if not match:
+        return ""
+    return match.group(0).rstrip("。；;,，)")
+
+
+def _extract_complete_urls(text: str) -> list[str]:
+    return [
+        match.group(0).rstrip("。；;,，)")
+        for match in re.finditer(r"https?://[^\s\)\]）＞>，,；;。]+", text or "")
+    ]
+
+
+def _extract_domain_hint(text: str) -> str:
+    text = text or ""
+    url = _extract_complete_url(text)
+    if url:
+        return _domain_from_url(url)
+    match = re.search(r"\b(?:[a-z0-9-]+\.)+(?:com|org|net|gov|edu|info|co|jp|kr|sg|hk|uk|fr|de|au|ca|tw)\b", text, flags=re.IGNORECASE)
+    return match.group(0).lower() if match else ""
+
+
+def _clean_candidate_url(value: str) -> str:
+    value = (value or "").strip()
+    if value.casefold() in {"http:", "https:", "http://", "https://"}:
+        return ""
+    url = _extract_complete_url(value)
+    if url:
+        return url
+    domain = _extract_domain_hint(value)
+    return domain or value
+
+
+def _quality_rank(quality: str) -> int:
+    return {"A": 0, "B": 1, "C": 2}.get((quality or "B").upper(), 1)
+
+
+def _source_tier_rank(tier: str) -> int:
+    return {
+        "A_official": 0,
+        "B_professional": 1,
+        "C_media": 2,
+        "D_proxy_low_value": 3,
+    }.get(tier or "C_media", 2)
+
+
+def classify_source_quality(source: str, url: str, source_href: str = "") -> tuple[str, str]:
+    strict_host = _strict_source_domain(url, source_href)
+    label_host = _domain_hint_from_source_label(source)
+    host = strict_host or label_host
+    text = f"{source} {url} {source_href}".casefold()
+
+    if host and any(_host_matches(host, domain) for domain in PORTAL_REPOST_DOMAINS | PORTAL_SOCIAL_LOW_VALUE_DOMAINS):
+        return "C", "入口、轉載或社群平台"
+    if strict_host and any(_host_matches(strict_host, domain) for domain in SOURCE_QUALITY_A_DOMAINS):
+        return "A", "官方/營運機構/政府交通機關/專業鐵道媒體"
+    if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_C_DOMAINS):
+        return "C", "轉載、旅遊或低信度網站"
+    if any(term.casefold() in text for term in LOW_QUALITY_CONTENT_TERMS):
+        return "C", "旅遊、SEO 或內容農場線索"
+    return "B", "一般新聞媒體或未分級來源"
+
+
+def classify_source_tier(source: str, url: str, source_href: str = "") -> tuple[str, str]:
+    strict_host = _strict_source_domain(url, source_href)
+    label_host = _domain_hint_from_source_label(source)
+    host = strict_host or label_host
+    text = f"{source} {url} {source_href}".casefold()
+    path_lower = urlparse(url or "").path.casefold()
+
+    if host and any(_host_matches(host, domain) for domain in LOW_VALUE_EXCLUDED_HOSTS):
+        return "D_proxy_low_value", "低價值來源或子網域"
+    if host and any(_host_matches(host, domain) for domain in PORTAL_SOCIAL_LOW_VALUE_DOMAINS):
+        return "D_proxy_low_value", "入口、轉載或社群平台"
+    if any(marker in path_lower for marker in LOW_INFORMATION_PATH_MARKERS):
+        return "D_proxy_low_value", "入口頁、查詢頁、路線頁、PDF 或低資訊頁"
+    if any(term.casefold() in text for term in LOW_INFORMATION_PAGE_TERMS):
+        return "D_proxy_low_value", "入口頁、分類頁或低資訊內容"
+    if host and any(_host_matches(host, domain) for domain in PORTAL_REPOST_DOMAINS):
+        return "C_media", "一般入口或轉載媒體"
+    if strict_host and any(_host_matches(strict_host, domain) for domain in SOURCE_TIER_OFFICIAL_DOMAINS):
+        return "A_official", "官方公告、政府交通主管機關或營運機構"
+    if host and any(_host_matches(host, domain) for domain in SOURCE_TIER_PROFESSIONAL_DOMAINS):
+        return "B_professional", "專業鐵道或大眾運輸媒體"
+    if host and any(_host_matches(host, domain) for domain in SOURCE_QUALITY_C_DOMAINS):
+        return "C_media", "一般媒體、轉載或入口媒體"
+    if "news.google.com" in _domain_from_url(url) and not host:
+        return "D_proxy_low_value", "Google News 代理且原始來源未明確辨識"
+    return "C_media", "一般新聞媒體或未分級來源"
+
+
+def source_label_for_report(source: str, url: str, source_href: str = "", tier: str = "") -> str:
+    strict_host = _strict_source_domain(url, source_href)
+    label_host = _domain_hint_from_source_label(source)
+    display_host = strict_host or (
+        label_host
+        if label_host and any(_host_matches(label_host, domain) for domain in SOURCE_TIER_PROFESSIONAL_DOMAINS)
+        else ""
+    )
+    for domain, label in SOURCE_DISPLAY_BY_DOMAIN.items():
+        if display_host and _host_matches(display_host, domain):
+            return label
+
+    source_clean = clean_source_name_for_ui(source)
+    if _is_query_proxy_source_label(source):
+        if display_host and display_host != "news.google.com":
+            return display_host
+        return "資料來源未明確辨識"
+
+    if source_clean and source_clean not in {"RSS", "ddgs", "Google News"}:
+        if tier == "A_official" and "官方" not in source_clean:
+            return f"{source_clean} 官方公告"
+        return source_clean
+    if display_host and display_host != "news.google.com":
+        return display_host
+    if "news.google.com" in _domain_from_url(url):
+        return "資料來源未明確辨識"
+    return "資料來源未明確辨識"
+
+
+def source_verb_for_report(tier: str, label: str) -> str:
+    if tier == "A_official" or "官方" in (label or ""):
+        return "公告"
+    if tier == "B_professional":
+        return "報導"
+    return "報導"
+
+
+def _region_term_matches(text_lower: str, term: str) -> bool:
+    term_lower = (term or "").casefold()
+    if not term_lower:
+        return False
+    if re.fullmatch(r"[a-z0-9.\-]+", term_lower) and len(term_lower.replace(".", "").replace("-", "")) <= 4:
+        return bool(re.search(rf"(?<![a-z0-9]){re.escape(term_lower)}(?![a-z0-9])", text_lower))
+    return term_lower in text_lower
+
+
+def _explicit_event_region_hint(text: str) -> str:
+    text_lower = (text or "").casefold()
+    # Ambiguous operator names are paired with an event city before generic
+    # query or publisher hints are considered.
+    explicit_hints = [
+        ("英國", ["translink northern ireland", "translink ni", "belfast", "northern ireland"]),
+        ("美國", ["austin transit partnership", "austin light rail", "wmata", "washington metro", "new york subway", "nyct", "mta"]),
+        ("加拿大", ["ttc", "toronto subway", "toronto", "translink vancouver", "vancouver translink", "vancouver", "skytrain"]),
+        ("德國", ["bvg", "berlin", "berlin tram"]),
+    ]
+    for region, terms in explicit_hints:
+        if any(_region_term_matches(text_lower, term) for term in terms):
+            return region
+    return ""
+
+
+def _event_region_hint_from_text(text: str) -> str:
+    text_lower = (text or "").casefold()
+    for region, terms in EVENT_REGION_PRIORITY_HINTS:
+        if any(_region_term_matches(text_lower, term) for term in terms):
+            return region
+    return ""
+
+
+def guess_region_from_text(text: str) -> str:
+    text_lower = (text or "").casefold()
+    priority_hint = _event_region_hint_from_text(text)
+    if priority_hint:
+        return priority_hint
+    aliases = {
+        "日本": ["japan", "tokyo", "osaka", "日本", "東京", "大阪"],
+        "韓國": ["korea", "seoul", "韓國", "韩国", "서울"],
+        "新加坡": ["singapore", "lta", "smrt", "新加坡"],
+        "香港": ["hong kong", "mtr.com.hk", "香港", "港鐵", "港铁"],
+        "澳洲": ["australia", "sydney", "melbourne", "brisbane", "澳洲"],
+        "英國": ["united kingdom", "uk", "london", "tfl", "underground", "英國", "英国", "倫敦"],
+        "法國": ["france", "paris", "ratp", "法國", "法国", "巴黎"],
+        "德國": ["germany", "berlin", "munich", "hamburg", "u-bahn", "德國", "德国"],
+        "美國": [
+            "united states", "new york", "nyc", "manhattan", "washington", "chicago",
+            "seattle", "federal way", "star lake", "sound transit", "link light rail",
+            "wmata", "cta", "mta.info", "soundtransit.org", "美國", "美国",
+        ],
+        "加拿大": [
+            "canada", "toronto", "vancouver", "yaletown-roundhouse",
+            "yaletown–roundhouse", "ttc", "skytrain", "加拿大",
+        ],
+        "西班牙": ["spain", "madrid", "barcelona", "西班牙"],
+        "巴西": ["brazil", "brasil", "são paulo", "sao paulo", "sao-paulo", "saopaulo", "巴西", "聖保羅", "圣保罗"],
+        "印度": ["india", "mumbai", "delhi metro", "印度", "孟買", "孟买"],
+        "荷蘭": ["netherlands", "amsterdam", "rotterdam", "荷蘭", "荷兰"],
+        "瑞士": ["switzerland", "zurich", "lausanne", "瑞士"],
+        "義大利": ["italy", "milan", "rome", "turin", "義大利", "意大利"],
+        "瑞典": ["sweden", "stockholm", "gothenburg", "瑞典"],
+        "奧地利": ["austria", "vienna", "wien", "奧地利", "奥地利"],
+        "丹麥": ["denmark", "copenhagen", "丹麥", "丹麦"],
+        "挪威": ["norway", "oslo", "挪威"],
+    }
+    for region, terms in aliases.items():
+        if any(_region_term_matches(text_lower, term) for term in terms):
+            return region
+    return "未判定"
+
+
+def _candidate_date_obj(date_text: str) -> datetime.date | None:
+    text = (date_text or "").strip()
+    if not text or "未知" in text:
+        return None
+    try:
+        return parsedate_to_datetime(text).date()
+    except Exception:
+        pass
+    try:
+        return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except Exception:
+        pass
+    for pattern in (r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", r"(\d{4})年(\d{1,2})月(\d{1,2})日"):
+        match = re.search(pattern, text)
+        if match:
+            try:
+                return datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            except Exception:
+                return None
+    year_match = re.search(r"\b(20\d{2})\b", text)
+    if year_match:
+        try:
+            return datetime.date(int(year_match.group(1)), 1, 1)
+        except Exception:
+            return None
+    return None
+
+
+def _date_from_url_path(*urls: str) -> datetime.date | None:
+    """Extract an explicit calendar date from an article URL path."""
+    for raw_url in urls:
+        if not raw_url:
+            continue
+        path = unquote(urlparse(raw_url).path or "")
+        for pattern in (
+            r"(?<!\d)(20\d{2})/(\d{1,2})/(\d{1,2})(?!\d)",
+            r"(?<!\d)(20\d{2})-(\d{1,2})-(\d{1,2})(?!\d)",
+        ):
+            match = re.search(pattern, path)
+            if not match:
+                continue
+            try:
+                return datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            except ValueError:
+                continue
+    return None
+
+
+def _date_sort_key(candidate: dict) -> int:
+    date_obj = _candidate_date_obj(candidate.get("date", ""))
+    return date_obj.toordinal() if date_obj else 0
+
+
+def _make_news_candidate(
+    title: str,
+    date: str,
+    source: str,
+    url: str,
+    snippet: str,
+    query: str,
+    region: str,
+    source_type: str,
+    source_href: str = "",
+    *, query_metadata: dict | None = None, search_family_resolver=None,
+    search_language_resolver=None,
+) -> dict:
+    normalized_date = _clean_text(date)
+    if not _candidate_date_obj(normalized_date):
+        url_date = _date_from_url_path(source_href, url)
+        if url_date:
+            normalized_date = url_date.isoformat()
+    raw_domain = _domain_from_url(source_href or url) or _extract_site_domain_from_google_news(url) or _domain_hint_from_source_label(source)
+    original_domain = _normalize_source_domain(_original_source_domain(source, url, source_href, query))
+    quality, quality_reason = classify_source_quality(source, url, source_href)
+    source_tier, source_tier_reason = classify_source_tier(source, url, source_href)
+    source_display = source_label_for_report(source, url, source_href, source_tier)
+    source_verb = source_verb_for_report(source_tier, source_display)
+    query_metadata = query_metadata or {}
+    search_family = query_metadata.get("family") or search_family_resolver(query or source)
+    search_language = query_metadata.get("lang") or search_language_resolver(query or source)
+    candidate = {
+        "title": _clean_text(title),
+        "date": normalized_date or "日期未知",
+        "source": _clean_text(source) or (_domain_from_url(source_href or url) or "未判定來源"),
+        "url": (url or "").strip(),
+        "snippet": _shorten(snippet, REPORT_SNIPPET_CHARS),
+        "query": _clean_text(query),
+        "region": region if region and region != "未判定" else "未判定",
+        "source_type": source_type,
+        "source_href": (source_href or "").strip(),
+        "source_quality": quality,
+        "source_quality_reason": quality_reason,
+        "source_tier": source_tier,
+        "source_tier_reason": source_tier_reason,
+        "source_display": source_display,
+        "source_verb": source_verb,
+        "source_domain_raw": raw_domain,
+        "source_domain": original_domain or _normalize_source_domain(_domain_from_url(source_href or url)),
+        "source_domain_normalized": original_domain or _normalize_source_domain(_domain_from_url(source_href or url)),
+        "search_family": search_family,
+        "search_query": _clean_text(query),
+        "search_language": search_language,
+        "query_region": query_metadata.get("query_region", ""),
+    }
+    candidate["region"] = _region_guess_from_candidate(candidate)
+    return candidate
+
+
+def parse_rss_candidates(raw_rss: str, candidate_factory=_make_news_candidate) -> list[dict]:
+    candidates: list[dict] = []
+    for block in re.split(r"(?=^【RSS來源：)", raw_rss or "", flags=re.MULTILINE):
+        block = block.strip()
+        if not block.startswith("【RSS來源："):
+            continue
+        header, *body_lines = block.splitlines()
+        source_match = re.match(r"^【RSS來源：(.+?)(?:（|】)", header)
+        source_name = source_match.group(1).strip() if source_match else "RSS"
+        source_type = "Google News 代理" if "Google News" in source_name or "代理" in source_name else "官方 RSS"
+        current: dict[str, str] = {}
+
+        def _flush_current():
+            if current.get("title") and current.get("url"):
+                candidates.append(candidate_factory(
+                    title=current.get("title", ""),
+                    date=current.get("date", ""),
+                    source=source_name,
+                    url=current.get("url", ""),
+                    snippet=current.get("snippet", ""),
+                    query=source_name,
+                    region=guess_region_from_text(f"{source_name} {current.get('title', '')}"),
+                    source_type=source_type,
+                    source_href=current.get("source_href", ""),
+                ))
+
+        for raw_line in body_lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("日期："):
+                _flush_current()
+                current = {"date": line.split("：", 1)[1].strip()}
+            elif line.startswith("標題："):
+                current["title"] = line.split("：", 1)[1].strip()
+            elif line.startswith("摘要："):
+                current["snippet"] = line.split("：", 1)[1].strip()
+            elif line.startswith("連結："):
+                link_text = line.split("：", 1)[1].strip()
+                link_parts = link_text.split("原始來源：", 1)
+                current["url"] = link_parts[0].strip()
+                if len(link_parts) > 1:
+                    current["source_href"] = link_parts[1].strip()
+            elif line.startswith("原始來源："):
+                current["source_href"] = line.split("：", 1)[1].strip()
+        _flush_current()
+    return candidates
+
+
+def parse_ddg_candidates(raw_ddg: str, candidate_factory=_make_news_candidate) -> list[dict]:
+    candidates: list[dict] = []
+    for block in re.split(r"(?=^【搜尋\s+\d+)", raw_ddg or "", flags=re.MULTILINE):
+        block = block.strip()
+        if not block.startswith("【搜尋"):
+            continue
+        header, *body_lines = block.splitlines()
+        query_match = re.match(r"^【搜尋\s+\d+（[^）]+）】(.+?)(?:（有效候選|\s*$)", header)
+        query = query_match.group(1).strip() if query_match else header
+        current: dict[str, str] = {}
+
+        def _flush_current():
+            if current.get("title") and current.get("url"):
+                source_domain = _domain_from_url(current.get("url", ""))
+                candidates.append(candidate_factory(
+                    title=current.get("title", ""),
+                    date=current.get("date", ""),
+                    source=source_domain or "ddgs",
+                    url=current.get("url", ""),
+                    snippet=current.get("snippet", ""),
+                    query=query,
+                    region=guess_region_from_text(f"{query} {current.get('title', '')} {current.get('snippet', '')}"),
+                    source_type="ddgs",
+                ))
+
+        for raw_line in body_lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("日期："):
+                _flush_current()
+                current = {"date": line.split("：", 1)[1].strip()}
+            elif line.startswith("標題："):
+                current["title"] = line.split("：", 1)[1].strip()
+            elif line.startswith("摘要："):
+                current["snippet"] = line.split("：", 1)[1].strip()
+            elif line.startswith("連結："):
+                current["url"] = line.split("：", 1)[1].strip()
+        _flush_current()
+    return candidates
+
+
+def _dedupe_entity_tokens(candidate: dict) -> set[str]:
+    text = " ".join(str(candidate.get(key, "") or "") for key in ("title", "url", "source_href"))
+    text = urllib.parse.unquote(text).casefold()
+    tokens: set[str] = set()
+    patterns = [
+        r"\b(?:line|route|service|tram|lrt|mrt|u-bahn|u)\s*[-#]?\s*[a-z0-9]{1,6}\b",
+        r"\b[a-z]\s*line\b",
+        r"\bline\s*[a-z0-9]{1,6}\b",
+        r"\broute\s*[a-z0-9]{1,6}\b",
+        r"\b(?:station|stop|depot)\s+[a-z0-9][a-z0-9\- ]{1,40}\b",
+        r"\b[a-z0-9][a-z0-9\- ]{1,40}\s+(?:station|stop|depot)\b",
+        r"[a-z0-9一二三四五六七八九十東西南北中環港島觀塘荃灣屯馬將軍澳迪士尼]{1,12}[線綫]",
+        r"[a-z0-9一二三四五六七八九十東西南北中環港島觀塘荃灣屯馬將軍澳迪士尼]{1,12}[站]",
+    ]
+    for pattern in patterns:
+        for match in re.findall(pattern, text, flags=re.IGNORECASE):
+            token = re.sub(r"\s+", " ", match if isinstance(match, str) else " ".join(match)).strip()
+            if len(token) >= 2:
+                tokens.add(token)
+    return tokens
+
+
+def _dedupe_route_line_tokens(candidate: dict) -> set[str]:
+    text = " ".join(str(candidate.get(key, "") or "") for key in ("title", "url", "source_href"))
+    text = urllib.parse.unquote(text).casefold().replace("_", "-")
+    tokens: set[str] = set()
+    patterns = [
+        r"\b(?:line|route|service|tram|lrt|mrt|u-bahn|u)\s*[-#]?\s*[a-z0-9]{1,6}\b",
+        r"\b(?:line|route|service|tram|lrt|mrt|u-bahn|u)[-/][a-z0-9]{1,6}\b",
+        r"\b[a-z]\s*line\b",
+        r"\bline\s*[a-z0-9]{1,6}\b",
+        r"\broute\s*[a-z0-9]{1,6}\b",
+        r"[a-z0-9一二三四五六七八九十東西南北中環港島觀塘荃灣屯馬將軍澳迪士尼]{1,12}[線綫]",
+    ]
+    for pattern in patterns:
+        for match in re.findall(pattern, text, flags=re.IGNORECASE):
+            token = re.sub(r"[\s/_]+", "-", match if isinstance(match, str) else " ".join(match)).strip("-")
+            if len(token) >= 2:
+                tokens.add(token)
+    return tokens
+
+
+def _dedupe_titles_conflict_on_entities(candidate: dict, existing: dict) -> bool:
+    left_region = candidate.get("region", "")
+    right_region = existing.get("region", "")
+    if left_region and right_region and left_region != right_region:
+        return True
+    left_lines = _dedupe_route_line_tokens(candidate)
+    right_lines = _dedupe_route_line_tokens(existing)
+    if left_lines and right_lines and left_lines.isdisjoint(right_lines):
+        return True
+    left_tokens = _dedupe_entity_tokens(candidate)
+    right_tokens = _dedupe_entity_tokens(existing)
+    if left_tokens and right_tokens and left_tokens.isdisjoint(right_tokens):
+        return True
+    left_date = _candidate_date_obj(candidate.get("date", ""))
+    right_date = _candidate_date_obj(existing.get("date", ""))
+    if left_date and right_date and abs((left_date - right_date).days) > 7:
+        return True
+    return False
+
+
+def _is_similar_title_duplicate(candidate: dict, existing: dict, threshold: float) -> bool:
+    candidate_key = _normalize_title(candidate.get("title", ""))
+    existing_key = _normalize_title(existing.get("title", ""))
+    if not candidate_key or not existing_key:
+        return False
+    similarity = difflib.SequenceMatcher(None, candidate_key, existing_key).ratio()
+    if similarity < threshold:
+        return False
+    return not _dedupe_titles_conflict_on_entities(candidate, existing)
+
+
+def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[dict], dict[str, int]]:
+    stats = {"URL 重複": 0, "標題正規化重複": 0, "標題相似重複": 0}
+    seen_urls: set[str] = set()
+    seen_title_keys: set[str] = set()
+    title_entries: list[dict] = []
+    deduped: list[dict] = []
+    similarity_threshold = 0.84 if int(lookback_days) in ADVANCED_LOOKBACK_OPTIONS else 0.90
+
+    sorted_candidates = sorted(
+        candidates,
+        key=lambda item: (
+            _source_tier_rank(item.get("source_tier", "C_media")),
+            _quality_rank(item.get("source_quality", "B")),
+            0 if item.get("source_type") in {"官方 RSS", "Google News 代理"} else 1,
+            -_date_sort_key(item),
+        ),
+    )
+
+    for candidate in sorted_candidates:
+        url_key = _dedupe_url(candidate.get("url", ""))
+        title_key = _normalize_title(candidate.get("title", ""))
+        if url_key and url_key in seen_urls:
+            stats["URL 重複"] += 1
+            continue
+        if title_key and title_key in seen_title_keys:
+            stats["標題正規化重複"] += 1
+            continue
+        if title_key and any(_is_similar_title_duplicate(candidate, existing, similarity_threshold) for existing in title_entries):
+            stats["標題相似重複"] += 1
+            continue
+        if url_key:
+            seen_urls.add(url_key)
+        if title_key:
+            seen_title_keys.add(title_key)
+            title_entries.append(candidate)
+        deduped.append(candidate)
+    return deduped, stats
+
+
+
+def _canonical_url_from_html(html: str, base_url: str) -> str:
+    for pattern in (
+        r'<link[^>]+rel=["\'][^"\']*canonical[^"\']*["\'][^>]+href=["\']([^"\']+)',
+        r'<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\'][^"\']*canonical[^"\']*["\']',
+        r'<meta[^>]+property=["\']og:url["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:url["\']',
+    ):
+        match = re.search(pattern, html or "", flags=re.IGNORECASE)
+        if match:
+            return urllib.parse.urljoin(base_url, unescape(match.group(1)).strip())
+    return ""
+
+
+def _resolve_google_news_article_url(candidate: dict, session: requests.Session) -> str:
+    original_url = _clean_candidate_url(candidate.get("url", ""))
+    if "news.google.com" not in _domain_from_url(original_url):
+        return original_url if _is_article_level_url(original_url) else ""
+    existing = _clean_candidate_url(candidate.get("resolved_article_url", ""))
+    if _is_article_level_url(existing):
+        return existing
+    started = time.perf_counter()
+    candidate["google_news_original_url"] = original_url
+    try:
+        response = session.get(
+            original_url,
+            timeout=PREFETCH_TIMEOUT_SECONDS,
+            headers={"Accept": "text/html,application/xhtml+xml,*/*"},
+            allow_redirects=True,
+        )
+        candidates = [getattr(response, "url", "")]
+        for hop in getattr(response, "history", []) or []:
+            candidates.append(getattr(hop, "headers", {}).get("Location", ""))
+            candidates.append(getattr(hop, "url", ""))
+        candidates.append(_canonical_url_from_html(getattr(response, "text", ""), getattr(response, "url", original_url)))
+        for value in candidates:
+            resolved = _clean_candidate_url(value)
+            if _is_article_level_url(resolved) and "news.google.com" not in _domain_from_url(resolved):
+                candidate["resolved_article_url"] = resolved
+                candidate["google_news_resolution_status"] = "resolved"
+                candidate["google_news_resolution_error"] = ""
+                candidate["google_news_resolution_elapsed_seconds"] = round(time.perf_counter() - started, 3)
+                candidate["_resolved_article_html"] = getattr(response, "text", "")
+                candidate["_resolved_article_content_type"] = getattr(response, "headers", {}).get("Content-Type", "")
+                return resolved
+        candidate["google_news_resolution_status"] = "unresolved_keep_google_news_url"
+        candidate["google_news_resolution_error"] = "no_article_level_redirect_or_canonical"
+    except Exception as exc:
+        candidate["google_news_resolution_status"] = "unresolved_keep_google_news_url"
+        candidate["google_news_resolution_error"] = str(exc)[:180]
+    candidate["google_news_resolution_elapsed_seconds"] = round(time.perf_counter() - started, 3)
+    return ""
+
+
+def _prefetch_url_for_candidate(candidate: dict, session: requests.Session | None = None) -> str:
+    if session is not None and "news.google.com" in _domain_from_url(candidate.get("url", "")):
+        _resolve_google_news_article_url(candidate, session)
+    for raw_url in (candidate.get("resolved_article_url", ""), candidate.get("source_href", ""), candidate.get("url", "")):
+        url = _clean_candidate_url(raw_url)
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        if "news.google.com" in parsed.netloc.casefold():
+            continue
+        if parsed.path in {"", "/"}:
+            continue
+        return url
+    return ""
+
+
+def _extract_prefetch_text(html: str) -> str:
+    html = (html or "")[: PREFETCH_MAX_CHARS * 4]
+    pieces: list[str] = []
+    for pattern in (
+        r'<meta[^>]+(?:name|property)=["\'](?:description|og:description|twitter:description)["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:name|property)=["\'](?:description|og:description|twitter:description)["\']',
+        r"<title[^>]*>(.*?)</title>",
+    ):
+        pieces.extend(re.findall(pattern, html, flags=re.IGNORECASE | re.DOTALL))
+    cleaned_html = re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", html)
+    paragraphs = re.findall(r"(?is)<p[^>]*>(.*?)</p>", cleaned_html)
+    pieces.extend(paragraphs[:10])
+    text = " ".join(_clean_text(unescape(piece)) for piece in pieces)
+    return _shorten(text, PREFETCH_MAX_CHARS)
+
+
+def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> dict:
+    started = time.perf_counter()
+    url = _prefetch_url_for_candidate(candidate, session)
+    if not url:
+        return {"status": "skipped_no_direct_url", "chars": 0, "elapsed_seconds": 0.0, "reason": "no_direct_article_url"}
+    try:
+        resolved_html = candidate.pop("_resolved_article_html", "")
+        resolved_content_type = candidate.pop("_resolved_article_content_type", "").casefold()
+        if resolved_html:
+            article_text = _extract_prefetch_text(resolved_html)
+            if len(article_text) >= 120:
+                candidate["prefetched_text_snippet"] = _shorten(article_text, REPORT_SNIPPET_CHARS)
+                candidate["snippet"] = _shorten(f"{candidate.get('snippet', '')} {article_text}", REPORT_SNIPPET_CHARS)
+                candidate.pop("_selection_text_cache", None)
+                candidate.pop("_selection_text_fingerprint", None)
+                candidate.pop("_score_cache", None)
+                candidate.pop("_score_cache_fingerprint", None)
+                candidate.pop("_analysis_cache", None)
+                candidate.pop("_analysis_cache_fingerprint", None)
+                return {"status": "success", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "resolved_google_news_redirect"}
+            if resolved_content_type and not any(kind in resolved_content_type for kind in ("html", "text", "xml")):
+                return {"status": "skipped_content_type", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": resolved_content_type[:80]}
+        response = session.get(
+            url,
+            timeout=PREFETCH_TIMEOUT_SECONDS,
+            headers={"Accept": "text/html,application/xhtml+xml,text/plain,*/*"},
+        )
+        content_type = response.headers.get("Content-Type", "").casefold()
+        if response.status_code >= 400:
+            return {"status": "failed_http", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": f"http_{response.status_code}"}
+        if content_type and not any(kind in content_type for kind in ("html", "text", "xml")):
+            return {"status": "skipped_content_type", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": content_type[:80]}
+        article_text = _extract_prefetch_text(response.text)
+        if len(article_text) < 120:
+            return {"status": "failed_too_short", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "too_short"}
+        candidate["prefetched_text_snippet"] = _shorten(article_text, REPORT_SNIPPET_CHARS)
+        candidate["snippet"] = _shorten(f"{candidate.get('snippet', '')} {article_text}", REPORT_SNIPPET_CHARS)
+        candidate.pop("_selection_text_cache", None)
+        candidate.pop("_selection_text_fingerprint", None)
+        candidate.pop("_score_cache", None)
+        candidate.pop("_score_cache_fingerprint", None)
+        candidate.pop("_analysis_cache", None)
+        candidate.pop("_analysis_cache_fingerprint", None)
+        return {"status": "success", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": ""}
+    except Exception as exc:
+        return {"status": "failed_exception", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": str(exc)[:160]}
