@@ -18,17 +18,17 @@ import streamlit_app as app
 
 EXPECTED_SCENARIO_SHA256 = {
     "weekly_without_journal": (
-        "4af83fc46403f30fc18e5325b271a3ea1771dedad1434a78cc33b5095c227315"
+        "3ce9a0f97c73f7b64d6e428fd365563f23da2222b893fcd952b3fc5ac6055706"
     ),
     "weekly_with_journal": (
-        "aebe61bc5fac66d6bf3b661358e84e836dff75c31235677dae6a5786ce6ea532"
+        "dde6a11079671b63bbe4c74c00ddb50112933a074d77b5286faab227ac7b752b"
     ),
     "annual_with_journal": (
-        "ae09494de75928acf174787b877e6382c443adb97b6cdb1b8d75c017d00ee7ea"
+        "e9d37906b8e0a6741492b615000b176fb3eaacba10d548c98e4703628d4f2e35"
     ),
 }
 EXPECTED_AGGREGATE_SHA256 = (
-    "4fb16c0394609d565f08d07feb7a29cef20abd04e8b7d936cf9e1868868547aa"
+    "2e4448e4811eaa92eb7b72add44e17fec33282f74d5ea29736ed944b71d257eb"
 )
 
 
@@ -352,7 +352,7 @@ class ConsolidatedReportPostprocessorGoldenTests(unittest.TestCase):
         self.assertTrue(
             annual["id_reconciliation"]["after_reconcile"]["valid"]
         )
-        self.assertEqual(annual["id_validation"]["missing_ids"], [3])
+        self.assertEqual(annual["id_validation"]["missing_ids"], [])
         self.assertIn(
             "Hitachi Rail",
             annual["steps"]["supplemental_sources"],

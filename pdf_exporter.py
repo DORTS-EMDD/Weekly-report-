@@ -104,7 +104,7 @@ def streamlit_markdown_to_pdf_bytes(
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.lib.styles import ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, KeepTogether
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 
     md = marker_cleaner(md)
     cjk_font, latin_font = font_registrar()
@@ -149,6 +149,7 @@ def streamlit_markdown_to_pdf_bytes(
     story = []
     raw_lines = md.splitlines()
     idx = 0
+    previous_blank = False
     while idx < len(raw_lines):
         raw_line = raw_lines[idx]
         line = raw_line.strip()
@@ -156,20 +157,21 @@ def streamlit_markdown_to_pdf_bytes(
             idx += 1
             continue
         if not line or line == "---":
-            story.append(Spacer(1, 4))
+            if not previous_blank:
+                story.append(Spacer(1, 3))
+            previous_blank = True
             idx += 1
             continue
+        previous_blank = False
         if line.startswith("📊") and idx + 1 < len(raw_lines):
             next_idx = idx + 1
             while next_idx < len(raw_lines) and not raw_lines[next_idx].strip():
                 next_idx += 1
             next_line = raw_lines[next_idx].strip() if next_idx < len(raw_lines) else ""
             if next_line.startswith("⏰"):
-                story.append(KeepTogether([
-                    Paragraph(rich_text_renderer(line_compactor(line), cjk_font, latin_font), styles["BodyText"]),
-                    Spacer(1, 4),
-                    Paragraph(rich_text_renderer(line_compactor(next_line), cjk_font, latin_font), styles["BodyText"]),
-                ]))
+                story.append(Paragraph(rich_text_renderer(line_compactor(line), cjk_font, latin_font), styles["BodyText"]))
+                story.append(Spacer(1, 3))
+                story.append(Paragraph(rich_text_renderer(line_compactor(next_line), cjk_font, latin_font), styles["BodyText"]))
                 idx = next_idx + 1
                 continue
         if line.startswith("# "):

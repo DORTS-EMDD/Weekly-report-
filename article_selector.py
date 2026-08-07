@@ -465,6 +465,22 @@ MAJOR_ACCIDENT_SEVERITY_TERMS = [
     "脱線", "負傷", "탈선", "부상", "脱轨", "受伤",
 ]
 
+MAJOR_ACCIDENT_DIRECT_TERMS = [
+    "derailment", "derailed", "train-to-train collision", "trains collided",
+    "collision", "collided", "crash", "major fire", "train fire", "station fire",
+    "mass evacuation", "official investigation", "formal investigation",
+    "safety investigation", "investigation launched", "死亡", "重傷", "多人受傷",
+    "多人重傷", "出軌", "脫軌", "列車碰撞", "列車相撞", "重大火災", "大量疏散",
+    "正式調查", "事故調查", "安全調查",
+]
+
+POST_INCIDENT_POLICY_TERMS = [
+    "after the accident", "after collision", "following the incident", "in response to",
+    "safety improvement", "improve safety", "safety measures", "safety plan",
+    "safety review", "policy response", "事故後", "事故後續", "安全改善", "安全措施",
+    "安全提升", "改善計畫", "改善方案", "檢討", "政策回應", "治理措施",
+]
+
 SINGLE_PERSON_INCIDENT_TERMS = [
     "person struck by train", "person hit by train", "struck by a train",
     "hit by a train", "trespass", "trespasser", "police investigation",
@@ -1133,7 +1149,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if not date_obj:
             candidate["date_validation"] = "invalid_or_missing"
             return _reject("日期不明或無法判斷")
-        cutoff_date = today - datetime.timedelta(days=max(1, min(int(lookback_days), 365)) + 3)
+        cutoff_date = today - datetime.timedelta(days=max(1, min(int(lookback_days), 365)))
         if date_obj < cutoff_date:
             candidate["date_validation"] = "out_of_range_old"
             return _reject("日期不符搜尋期間")
@@ -1455,9 +1471,48 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
 
 
+    def _is_post_incident_policy_response(candidate: dict) -> bool:
+        text = _candidate_selection_text(candidate)
+        title = str(candidate.get("title", "") or "")
+        policy_action = _contains_any_term(
+            text,
+            POST_INCIDENT_POLICY_TERMS + HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS,
+        )
+        current_accident = _contains_any_term(
+            title,
+            [
+                "derailment", "derailed", "collision", "collided", "crash", "train fire",
+                "station fire", "mass evacuation", "fatal", "killed", "serious injury",
+                "multiple injuries", "death", "出軌", "脫軌", "碰撞", "火災", "大量疏散",
+                "死亡", "重傷", "多人受傷",
+            ],
+        ) and not _contains_any_term(title, POST_INCIDENT_POLICY_TERMS)
+        return policy_action and not current_accident and _contains_any_term(
+            text,
+            [
+                "improve", "improvement", "measure", "plan", "review", "upgrade", "enhance",
+                "policy", "response", "改善", "措施", "計畫", "檢討", "提升", "部署",
+            ],
+        )
+
+
+    def _has_major_accident_evidence(fragment: str) -> bool:
+        if _contains_any_term(fragment, MAJOR_ACCIDENT_DIRECT_TERMS):
+            return True
+        if re.search(r"\b\d{1,3}\+?\s+(?:people\s+)?(?:were\s+)?injured\b", fragment or "", flags=re.IGNORECASE):
+            return True
+        if _contains_any_term(fragment, ["dozens injured", "dozens of people injured", "multiple injured", "多人受傷", "數十人受傷"]):
+            return True
+        if _contains_any_term(fragment, ["major safety consequence", "major safety consequences", "重大安全後果", "重大安全影響"]):
+            return True
+        return _contains_any_term(fragment, ["train fire", "station fire", "subway fire", "metro fire", "列車火災", "車站火災"])
+
+
     def _compute_passes_major_accident_gate(candidate: dict) -> bool:
         text = _candidate_selection_text(candidate)
         if not _candidate_urban_rail_gate(candidate):
+            return False
+        if _is_post_incident_policy_response(candidate):
             return False
         if _contains_any_term(text, NON_ACCIDENT_CONTEXT_TERMS):
             return False
@@ -1473,10 +1528,14 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             if not has_accident_context:
                 continue
             has_severity = (
-                _contains_any_term(fragment, MAJOR_ACCIDENT_SEVERITY_TERMS)
+                _has_major_accident_evidence(fragment)
                 or (
                     _contains_any_term(fragment, EQUIPMENT_FAILURE_TERMS)
-                    and _contains_any_term(fragment, HIGH_IMPACT_ACCIDENT_TERMS)
+                    and _contains_any_term(fragment, [
+                        "evacuation", "evacuated", "injury", "injured", "fatal", "death",
+                        "fire", "collision", "derailment", "official investigation",
+                        "安全後果", "安全調查", "疏散", "受傷", "死亡",
+                    ])
                 )
             )
             if not has_severity:
@@ -1695,12 +1754,35 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         ]
         if primary_category == "excluded":
             reasons.setdefault("no_category_gate", "未通過重大事故、技術新知、營運爭議或營運政策 gate。")
+        original_category = (
+            candidate.get("classification")
+            or candidate.get("primary_category")
+            or candidate.get("preliminary_type")
+            or ""
+        )
+        category_reclassification = None
+        if original_category in ADVANCED_TYPES and original_category != primary_category:
+            supporting_terms = [
+                reason for key, reason in reasons.items()
+                if key in gates and reason
+            ]
+            rule = "category_gate_priority"
+            if original_category == "重大事故" and primary_category == "營運政策" and _is_post_incident_policy_response(candidate):
+                rule = "post_incident_policy_response_overrides_accident"
+            category_reclassification = {
+                "original_category": original_category,
+                "new_category": primary_category,
+                "rule": rule,
+                "supporting_evidence": supporting_terms,
+                "python_rewrite": True,
+            }
         result = {
             "category_gates": gates,
             "category_gate_reasons": reasons,
             "canonical_tags": canonical_tags,
             "primary_category": primary_category,
             "alternative_category_flags": alternatives,
+            "category_reclassification": category_reclassification,
         }
         analysis_cache["category_gate_payload"] = dict(result)
         return result
@@ -2386,6 +2468,33 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return _candidate_system_theme(candidate)
 
 
+    def _candidate_injury_band(candidate: dict) -> str:
+        text = _candidate_selection_text(candidate)
+        if _contains_any_term(text, ["fatal", "death", "killed", "死亡"]):
+            return "fatality"
+        match = re.search(
+            r"\b(\d{1,3})\s*(?:people|persons|passengers|人)?\s*(?:were\s+)?injured\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            number = int(match.group(1))
+            return "1" if number == 1 else "2-9" if number < 10 else "10+"
+        if _contains_any_term(text, ["dozens injured", "dozens of people injured", "multiple injuries", "多人受傷", "數十人受傷"]):
+            return "10+"
+        if _contains_any_term(text, ["serious injury", "serious injuries", "hospitalized", "hospitalised", "重傷", "送醫"]):
+            return "serious_or_hospitalized"
+        return "none"
+
+
+    def _injury_bands_conflict(left: dict, right: dict) -> bool:
+        bands = {
+            _candidate_injury_band(left),
+            _candidate_injury_band(right),
+        }
+        return "fatality" in bands and len(bands) > 1
+
+
     def _candidate_action_key(candidate: dict) -> str:
         text = _candidate_selection_text(candidate)
         if _contains_any_term(text, ["signalling", "signaling", "train control", "號誌", "信號"]) and _contains_any_term(text, [
@@ -2422,6 +2531,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "austin": "united-states", "washington": "united-states", "new york": "united-states",
             "toronto": "canada", "vancouver": "canada", "berlin": "germany",
             "berlin-adlershof": "germany", "northern-ireland": "united-kingdom",
+            "gelsenkirchen": "germany",
         }
         if not specific:
             specific = {
@@ -2451,6 +2561,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "geo_key": _canonical_event_geo(candidate),
             "asset_key": _candidate_system_theme(candidate),
             "action_key": _candidate_action_key(candidate),
+            "incident_key": _candidate_incident_type(candidate),
+            "injury_band": _candidate_injury_band(candidate),
             "category_key": candidate.get("classification") or candidate.get("primary_category") or candidate.get("preliminary_type", ""),
             "date_bucket": date_bucket,
         }
@@ -2469,6 +2581,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             ("vancouver", ["vancouver", "broadway subway", "溫哥華"]),
             ("toronto", ["toronto", "finch west", "多倫多"]),
             ("northern-ireland", ["northern ireland", "belfast", "北愛爾蘭", "貝爾法斯特"]),
+            ("gelsenkirchen", ["gelsenkirchen", "蓋爾森基興"]),
             ("berlin", ["berlin", "柏林"]),
         ]
         for canonical, terms in priority_locations:
@@ -2554,7 +2667,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate.get("classification"), selected_item.get("classification"),
             candidate.get("primary_category"), selected_item.get("primary_category"),
         }
-        date_close = _event_date_close(candidate, selected_item, days=7 if is_accident else 3)
+        if is_accident and _injury_bands_conflict(candidate, selected_item):
+            return False
+        date_close = _event_date_close(candidate, selected_item, days=1 if is_accident else 3)
         if (
             date_close
             and candidate_geo
@@ -3315,6 +3430,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_candidate_system_theme": _candidate_system_theme,
         "_candidate_operator_key": _candidate_operator_key,
         "_candidate_incident_type": _candidate_incident_type,
+        "_candidate_injury_band": _candidate_injury_band,
         "_candidate_action_key": _candidate_action_key,
         "_canonical_event_geo": _canonical_event_geo,
         "build_event_fingerprint": build_event_fingerprint,

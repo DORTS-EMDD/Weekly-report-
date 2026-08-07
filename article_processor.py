@@ -260,20 +260,10 @@ def _region_guess_from_candidate(candidate: dict) -> str:
     explicit_event_guess = _explicit_event_region_hint(f"{title} {snippet}")
     if explicit_event_guess:
         return explicit_event_guess
-
-    query_region = str(candidate.get("query_region", "") or "").strip()
-    if query_region and query_region not in {"global", "unplanned", "未判定", "國際", "國際研究"}:
-        return query_region
-    query_guess = guess_region_from_text(candidate.get("query", ""))
-    if query_guess != "未判定":
-        return query_guess
-
-    title_guess = guess_region_from_text(title)
-    if title_guess != "未判定":
-        return title_guess
-    snippet_guess = guess_region_from_text(snippet)
-    if snippet_guess != "未判定":
-        return snippet_guess
+    for value in (title, snippet):
+        text_guess = guess_region_from_text(value)
+        if text_guess != "未判定":
+            return text_guess
 
     source_guess = guess_region_from_text(candidate.get("source", ""))
     if source_guess != "未判定":
@@ -282,6 +272,10 @@ def _region_guess_from_candidate(candidate: dict) -> str:
     if domain_guess:
         return domain_guess
 
+    existing = str(candidate.get("region", "") or "").strip()
+    if existing not in {"", "未判定", "國際", "國際研究"}:
+        return existing
+
     path_text = " ".join(
         urlparse(candidate.get(key, "") or "").path.replace("/", " ")
         for key in ("url", "source_href")
@@ -289,13 +283,58 @@ def _region_guess_from_candidate(candidate: dict) -> str:
     path_guess = guess_region_from_text(path_text)
     if path_guess != "未判定":
         return path_guess
+    query_region = str(candidate.get("query_region", "") or "").strip()
+    if query_region and query_region not in {"global", "unplanned", "未判定", "國際", "國際研究"}:
+        return query_region
+    query_guess = guess_region_from_text(candidate.get("query", ""))
+    return query_guess if query_guess != "未判定" else "未判定"
+
+
+def _region_resolution(candidate: dict) -> tuple[str, str, str]:
+    title = str(candidate.get("title", "") or "")
+    snippet = str(candidate.get("snippet", "") or "")
+    explicit_event_guess = _explicit_event_region_hint(f"{title} {snippet}")
+    if explicit_event_guess:
+        return explicit_event_guess, "title_snippet_explicit_event", f"{title} {snippet}".strip()
+    for field_name, value in (("title", title), ("snippet", snippet)):
+        text_guess = guess_region_from_text(value)
+        if text_guess != "未判定":
+            return text_guess, f"{field_name}_city_system_operator", value
+    source = str(candidate.get("source", "") or "")
+    source_guess = guess_region_from_text(source)
+    if source_guess != "未判定":
+        return source_guess, "official_operator_or_source", source
+    domain_guess = _region_from_domain_hints(candidate)
+    if domain_guess:
+        evidence = " ".join(
+            str(candidate.get(key, "") or "")
+            for key in ("source_domain", "source_href", "url")
+        ).strip()
+        return domain_guess, "official_source_domain", evidence
     existing = str(candidate.get("region", "") or "").strip()
-    return existing if existing not in {"", "未判定", "國際研究"} else "未判定"
+    if existing not in {"", "未判定", "國際", "國際研究"}:
+        return existing, "candidate_region", existing
+    path_text = " ".join(
+        urlparse(candidate.get(key, "") or "").path.replace("/", " ")
+        for key in ("url", "source_href")
+    )
+    path_guess = guess_region_from_text(path_text)
+    if path_guess != "未判定":
+        return path_guess, "source_url_path", path_text
+    query_region = str(candidate.get("query_region", "") or "").strip()
+    if query_region and query_region not in {"global", "unplanned", "未判定", "國際", "國際研究"}:
+        return query_region, "query_region_fallback", query_region
+    query_guess = guess_region_from_text(candidate.get("query", ""))
+    if query_guess != "未判定":
+        return query_guess, "query_text_fallback", str(candidate.get("query", "") or "")
+    return "未判定", "unresolved", ""
 
 
 def _canonical_candidate_region(candidate: dict) -> str:
-    region = str(candidate.get("region", "") or "").strip()
-    guessed = _region_guess_from_candidate(candidate)
+    original_region = str(candidate.get("region", "") or "").strip()
+    query_region = str(candidate.get("query_region", "") or "").strip()
+    guessed, method, evidence = _region_resolution(candidate)
+    region = original_region
     if guessed == "巴西":
         region = "巴西"
     elif guessed != "未判定" and (not region or region in {"未判定", "國際", "國際研究"} or region != guessed):
@@ -305,6 +344,15 @@ def _canonical_candidate_region(candidate: dict) -> str:
     if not region:
         region = "未判定"
     candidate["region"] = region
+    candidate["resolved_region"] = region
+    candidate["region_resolution_method"] = method
+    candidate["region_resolution_evidence"] = evidence
+    candidate["region_query_override"] = bool(
+        query_region
+        and query_region not in {"global", "unplanned", "未判定", "國際", "國際研究"}
+        and method not in {"query_region_fallback", "query_text_fallback"}
+        and region != query_region
+    )
     return region
 
 
@@ -594,6 +642,12 @@ def _candidate_date_obj(date_text: str) -> datetime.date | None:
     text = (date_text or "").strip()
     if not text or "未知" in text:
         return None
+    date_match = re.search(r"(?<!\d)(20\d{2})[-/](\d{1,2})[-/](\d{1,2})(?!\d)", text)
+    if date_match:
+        try:
+            return datetime.date(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)))
+        except ValueError:
+            return None
     try:
         return parsedate_to_datetime(text).date()
     except Exception:
@@ -602,7 +656,7 @@ def _candidate_date_obj(date_text: str) -> datetime.date | None:
         return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).date()
     except Exception:
         pass
-    for pattern in (r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", r"(\d{4})年(\d{1,2})月(\d{1,2})日"):
+    for pattern in (r"(\d{4})年(\d{1,2})月(\d{1,2})日",):
         match = re.search(pattern, text)
         if match:
             try:

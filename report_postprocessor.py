@@ -3,6 +3,7 @@
 import datetime
 import re
 from dataclasses import dataclass
+from html import unescape
 from typing import Callable
 
 from article_processor import (
@@ -494,7 +495,7 @@ def _operational_block_sort_key(block: str) -> tuple[str, str]:
 
 def _operational_blocks(section_text: str) -> list[str]:
     blocks = re.findall(
-        r"(?ms)^\s*(🔹\s*\[(?:營運政策|營運爭議)\].*?)"
+        r"(?ms)^((?:(?:\s*(?:<!--\s*candidate_id\s*:\s*\d+\s*-->|&lt;!--\s*candidate_id\s*:\s*\d+\s*--&gt;)\s*\n)*)\s*🔹\s*\[(?:營運政策|營運爭議)\].*?)"
         r"(?=^\s*🔹\s*\[[^\]]+\]|^\s*#{0,6}\s*[一二三四五六七八九十]\s*、|^\s*📊|^\s*⏰|\Z)",
         section_text or "",
     )
@@ -727,9 +728,11 @@ def normalize_electromechanical_system_value(value: str, context: str = "") -> s
     placeholders = {
         "未明確載明機電系統", "未明確載明", "未載明", "不明", "未知", "無", "n/a", "na", "-",
     }
+    if "之" in raw_value and any(mark in raw_value for mark in ("，", ",", "。")):
+        return raw_value
     tokens = [
-        token.strip(" \t\r\n、,，;；。")
-        for token in re.split(r"[、,，;；]+", raw_value)
+        token.strip(" \t\r\n、;；。")
+        for token in re.split(r"[、;；]+", raw_value)
     ]
     concrete_tokens = [token for token in tokens if token and token.casefold() not in placeholders]
     retained = concrete_tokens or [token for token in tokens if token]
@@ -1048,6 +1051,9 @@ def normalize_final_report_md(md: str) -> str:
             system_value = normalize_electromechanical_system_value(field_text, context_window)
             if system_value:
                 output.extend([f"• 相關機電系統：{system_value}", ""])
+        elif label == "發布/事件日期":
+            normalized_date = _normalize_report_date_text(field_text)
+            output.extend([f"• 發布/事件日期：{normalized_date if normalized_date != '日期未知' else '日期未明'}", ""])
         else:
             if field_text:
                 output.extend([f"• {label}：{field_text}", ""])
@@ -1208,7 +1214,34 @@ def count_report_items_by_category(report_md: str) -> dict[str, int]:
 
 # Extracted formal-report reconciliation and diagnostics.
 
-# Extracted formal-report reconciliation and diagnostics.
+def _parse_report_article_blocks(report_md: str) -> list[dict]:
+    marker_pattern = re.compile(r'<!--\s*candidate_id\s*:\s*(\d+)\s*-->|&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;', flags=re.IGNORECASE)
+    blocks: list[dict] = []
+    current_ids: list[int] = []
+    current_lines: list[str] = []
+
+    def _flush() -> None:
+        nonlocal current_ids, current_lines
+        if current_ids:
+            blocks.append({"candidate_ids": tuple(current_ids), "body": "\n".join(current_lines).strip()})
+        current_ids = []
+        current_lines = []
+
+    for raw_line in (report_md or "").splitlines():
+        stripped = raw_line.strip()
+        marker_match = marker_pattern.fullmatch(stripped)
+        if marker_match:
+            if current_ids and current_lines:
+                _flush()
+            current_ids.append(int(marker_match.group(1) or marker_match.group(2)))
+            continue
+        if current_ids and stripped.startswith(("## ", "### ", "📊", "⏰")) and not current_lines:
+            _flush()
+            continue
+        if current_ids:
+            current_lines.append(raw_line)
+    _flush()
+    return blocks
 
 def build_long_term_coverage_warning(candidates: list[dict], *, context: ReportPostprocessContext) -> dict:
     if context.lookback_int not in ADVANCED_LOOKBACK_OPTIONS:
@@ -1863,7 +1896,14 @@ def repair_report_region_lines(report_md: str, selected_candidates: list[dict], 
 def formal_title_from_candidate(candidate: dict, *, context: ReportPostprocessContext) -> str:
     category = candidate.get('classification') or candidate.get('preliminary_type') or context.infer_preliminary_type(candidate)
     text = context.candidate_selection_text(candidate)
-    original_title = _clean_text(candidate.get('title', ''))
+    original_title = _clean_text(unescape(str(candidate.get('title', '') or '')))
+    lower_text = text.casefold()
+    if 'bakerloo' in lower_text:
+        return 'Bakerloo Line 機廠及側線可行性研究'
+    if 'buangkok' in lower_text:
+        return 'Buangkok MRT 站相關都市軌道資訊'
+    if 'gelsenkirchen' in lower_text:
+        return 'Gelsenkirchen 電車碰撞事故'
     if _contains_any_term(text, ['frauscher', 'axle counter', 'axle counters']):
         return 'Frauscher 車軸計數器應用於電車號誌現代化'
     if _contains_any_term(text, ['finch west', 'hitachi']):
@@ -1878,6 +1918,8 @@ def formal_title_from_candidate(candidate: dict, *, context: ReportPostprocessCo
         return '巴塞爾電車碰撞事故'
     if _contains_any_term(text, ['leipzig']) and category == '重大事故':
         return '萊比錫路面電車營運安全事件'
+    if category == '重大事故' and _contains_any_term(text, ['collision', 'crash', 'derailment', 'fire', '碰撞', '撞擊', '出軌', '火災']):
+        return f'都市軌道事故：{original_title}' if original_title else '都市軌道事故'
     if original_title and (not _title_needs_repair(original_title, category)):
         if _looks_like_english_title(original_title):
             return chinese_fallback_title(category, original_title)
@@ -1895,11 +1937,14 @@ def repair_generic_report_titles(report_md: str, selected_candidates: list[dict]
         heading = parts[idx]
         body = parts[idx + 1] if idx + 1 < len(parts) else ''
         match = re.match('^(🔹\\s*\\[([^\\]]+)\\]\\s*)(.*)$', heading.strip())
-        if match and (not _has_valid_chinese_report_title(match.group(3))) and _title_needs_repair(match.group(3), match.group(2)):
+        if match:
             block = heading + body
             matched = next((candidate for candidate in selected_candidates if _report_block_matches_candidate(block, candidate, context=context)), None)
             if matched:
-                heading = f'{match.group(1)}{formal_title_from_candidate(matched, context=context)}'
+                candidate_text = f"{matched.get('title', '')} {matched.get('snippet', '')}".casefold()
+                entity_conflict = 'buangkok' in candidate_text and any(alias in heading.casefold() for alias in ('武吉班讓', 'bukit panjang'))
+                if entity_conflict or ((not _has_valid_chinese_report_title(match.group(3))) and _title_needs_repair(match.group(3), match.group(2))):
+                    heading = f'{match.group(1)}{formal_title_from_candidate(matched, context=context)}'
         output.extend([heading, body])
     return ''.join(output)
 
@@ -1911,42 +1956,96 @@ def _extract_marked_candidate_blocks(report_md: str, *, context: ReportPostproce
     pattern = re.compile('<!--\\s*candidate_id\\s*:\\s*(\\d+)\\s*-->\\s*(.*?)(?=<!--\\s*candidate_id\\s*:|^\\s*#{0,6}\\s*[一二三四五六七八九十]\\s*、|^\\s*📊|^\\s*⏰|\\Z)', flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
     blocks: dict[int, str] = {}
     duplicates: list[int] = []
-    for match in pattern.finditer(report_md or ''):
-        candidate_id = int(match.group(1))
-        if candidate_id in blocks:
-            duplicates.append(candidate_id)
-            continue
-        blocks[candidate_id] = match.group(2).strip()
+    for record in _parse_report_article_blocks(report_md):
+        for candidate_id in record['candidate_ids']:
+            if candidate_id in blocks:
+                duplicates.append(candidate_id)
+                continue
+            blocks[candidate_id] = record['body']
     return (blocks, sorted(set(duplicates)))
 
 def _candidate_source_line(candidate: dict, *, context: ReportPostprocessContext) -> str:
     source_url = _effective_source_url(candidate)
-    source_display = candidate.get('source_display') or candidate.get('source') or _domain_from_url(source_url) or '原始來源'
-    item_date = candidate.get('date') or '日期未知'
+    source_display = unescape(str(candidate.get('source_display') or candidate.get('source') or _domain_from_url(source_url) or '原始來源'))
+    item_date = _normalize_report_date_text(str(candidate.get('date') or ''))
+    if item_date == '日期未知':
+        item_date = '日期未明'
     return f'• 資料來源：{source_display}，{item_date}，{source_url}'
 
+
+def _fallback_reason(candidate: dict, *, context: ReportPostprocessContext) -> str:
+    del context
+    title = unescape(str(candidate.get('title', '') or '')).strip()
+    source_url = _effective_source_url(candidate)
+    if not title:
+        return 'missing_title'
+    if not _extract_complete_url(source_url):
+        return 'missing_source_url'
+    if _normalize_report_date_text(str(candidate.get('date') or '')) == '日期未知':
+        return 'invalid_or_missing_date'
+    return ''
+
+
+def _fallback_summary(candidate: dict) -> str:
+    for key in ('summary_zh', 'snippet_zh', 'summary'):
+        value = unescape(str(candidate.get(key, '') or ''))
+        value = re.sub(r'<[^>]+>', ' ', value)
+        value = _short_formal_sentence(value, 360)
+        if len(re.findall(r'[\u3400-\u9fff]', value)) >= 8:
+            return value
+    title = unescape(str(candidate.get('title', '') or '')).strip()
+    if len(re.findall(r'[\u3400-\u9fff]', title)) >= 4:
+        return f'{title}；原始資料未提供可核實的完整摘要。'
+    return '原始候選資料僅提供可核實標題與來源，摘要未予補充。'
+
+
+def _fallback_insight(category: str, candidate: dict) -> str:
+    supplied = unescape(str(candidate.get('taipei_insight', '') or '')).strip()
+    if len(re.findall(r'[\u3400-\u9fff]', supplied)) >= 6:
+        return _short_formal_sentence(supplied, 180)
+    return {
+        '技術新知': '可作為相關設備與系統整合案例之參考。',
+        '重大事故': '應持續核對事故經過、技術原因與安全改善措施。',
+        '營運政策': '可作為都市軌道營運治理與安全改善之追蹤案例。',
+        '營運爭議': '可作為都市軌道營運協調與影響評估之追蹤案例。',
+        '規範更新': '可供後續核對規範變更內容及適用範圍。',
+    }.get(category, '後續內容仍應以原始來源核實。')
+
 def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext) -> str:
+    if _fallback_reason(candidate, context=context):
+        return ''
     candidate_id = int(candidate.get('candidate_id') or candidate.get('id') or 0)
     category = candidate.get('classification') or candidate.get('preliminary_type') or context.infer_preliminary_type(candidate)
     title = formal_title_from_candidate(candidate, context=context)
-    summary = _clean_text(candidate.get('snippet', '')) or _clean_text(candidate.get('title', ''))
-    summary = _short_formal_sentence(summary, 360) or '候選資料僅提供標題與來源，未提供更多可核實細節。'
-    return '\n'.join([f'<!-- candidate_id: {candidate_id} -->', f'🔹 [{category}] {title}', '', f"• 發布/事件日期：{candidate.get('date') or '日期未知'}", '', f'• 國家/地區：{_candidate_region_display(candidate, context=context)}', '', '• 相關機電系統：依原始候選資料所示之都市軌道系統', '', '• 事件摘要：', summary, '', '• 臺北捷運局啟示：', '本案可納入後續技術、營運或安全追蹤，具體內容以原始來源為準。', '', _candidate_source_line(candidate, context=context), '', '________________________________________'])
+    date_value = _normalize_report_date_text(str(candidate.get('date') or ''))
+    if date_value == '日期未知':
+        date_value = '日期未明'
+    return '\n'.join([f'<!-- candidate_id: {candidate_id} -->', f'🔹 [{category}] {title}', '', f'• 發布/事件日期：{date_value}', '', f'• 國家/地區：{_candidate_region_display(candidate, context=context)}', '', '• 相關機電系統：依原始候選資料所示之都市軌道系統', '', '• 事件摘要：', _fallback_summary(candidate), '', '• 臺北捷運局啟示：', _fallback_insight(category, candidate), '', _candidate_source_line(candidate, context=context), '', '________________________________________'])
 
-def _force_candidate_fields_in_block(block: str, candidate: dict, *, context: ReportPostprocessContext) -> str:
-    normalized = normalize_final_report_md(block or '')
+def _force_candidate_fields_in_block(block: str, candidate: dict | list[dict], *, context: ReportPostprocessContext) -> str:
+    candidates = candidate if isinstance(candidate, list) else [candidate]
+    candidates = [item for item in candidates if item]
+    if not candidates:
+        return ''
+    normalized = normalize_final_report_md(unescape(block or ''))
     if not re.search('(?m)^🔹\\s*\\[[^\\]]+\\]', normalized):
-        return _fallback_report_block(candidate, context=context)
-    candidate_id = int(candidate.get('candidate_id') or candidate.get('id') or 0)
-    category = candidate.get('classification') or candidate.get('preliminary_type') or context.infer_preliminary_type(candidate)
-    normalized = REPORT_CANDIDATE_ID_PATTERN.sub('', normalized).strip()
+        return ''
+    category = candidates[0].get('classification') or candidates[0].get('preliminary_type') or context.infer_preliminary_type(candidates[0])
+    normalized = re.sub(r'(?mi)^\s*(?:<!--\s*candidate_id.*?-->|&lt;!--.*?--&gt;)\s*$', '', normalized).strip()
     normalized = re.sub('(?m)^(🔹\\s*)\\[[^\\]]+\\]', f'\\1[{category}]', normalized, count=1)
-    source_line = _candidate_source_line(candidate, context=context)
+    source_lines = [_candidate_source_line(item, context=context) for item in candidates if _effective_source_url(item)]
+    source_line = '；'.join(line.replace('• 資料來源：', '') for line in source_lines)
+    source_line = f'• 資料來源：{source_line}' if source_line else ''
     if re.search('(?m)^•\\s*資料來源\\s*[：:].*$', normalized):
-        normalized = re.sub('(?m)^•\\s*資料來源\\s*[：:].*$', source_line, normalized, count=1)
-    else:
+        if source_line:
+            normalized = re.sub('(?m)^•\\s*資料來源\\s*[：:].*$', source_line, normalized, count=1)
+    elif source_line:
         normalized = normalized.rstrip() + f'\n\n{source_line}'
-    return f'<!-- candidate_id: {candidate_id} -->\n{normalized}'.strip()
+    marker_lines = '\n'.join(
+        f'<!-- candidate_id: {int(item.get("candidate_id") or item.get("id") or 0)} -->'
+        for item in candidates
+    )
+    return f'{marker_lines}\n{normalized}'.strip()
 
 def _extract_research_section_for_reconcile(report_md: str, *, context: ReportPostprocessContext) -> str:
     match = re.search('(?ms)^\\s*#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:國際學術期刊|技術研究補充)\\s*$.*?(?=^\\s*📊|^\\s*⏰|\\Z)', report_md or '')
@@ -1955,16 +2054,61 @@ def _extract_research_section_for_reconcile(report_md: str, *, context: ReportPo
 def reconcile_report_candidate_output(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> tuple[str, dict]:
     selected_candidates = ensure_selected_candidate_ids(selected_candidates)
     initial_validation = validate_report_candidate_ids(report_md, selected_candidates)
-    marked_blocks, extracted_duplicates = _extract_marked_candidate_blocks(report_md, context=context)
+    parsed_blocks = _parse_report_article_blocks(report_md)
     selected_map = {int(item.get('candidate_id') or item.get('id') or 0): item for item in selected_candidates or []}
-    accepted_blocks: dict[int, str] = {}
+    selected_order = {candidate_id: index for index, candidate_id in enumerate(selected_map)}
+    records: list[dict] = []
+    seen_ids: set[int] = set()
     fallback_ids: list[int] = []
+    skipped_ids: list[int] = []
+    fallback_reason_counts: dict[str, int] = {}
+    warnings: list[str] = []
+    for parsed in parsed_blocks:
+        candidate_ids = tuple(parsed.get('candidate_ids', ()))
+        candidates = [selected_map.get(candidate_id) for candidate_id in candidate_ids]
+        if not candidate_ids or any(candidate_id not in selected_map for candidate_id in candidate_ids) or len(set(candidate_ids)) != len(candidate_ids) or seen_ids.intersection(candidate_ids):
+            warnings.append('報告 block 含未知、重複或無效 candidate_id。')
+            continue
+        normalized = normalize_final_report_md(unescape(parsed.get('body', '') or ''))
+        required_fields = all(re.search(pattern, normalized, flags=re.MULTILINE) for pattern in (
+            r'^🔹\s*\[[^\]]+\]', r'^•\s*發布/事件日期\s*[：:]', r'^•\s*事件摘要\s*[：:]', r'^•\s*資料來源\s*[：:]',
+        ))
+        if not required_fields:
+            warnings.append('報告 block 缺少必要欄位，改用保守 fallback。')
+            for candidate_id in candidate_ids:
+                if candidate_id in selected_map:
+                    fallback_ids.append(candidate_id)
+                    fallback_reason_counts['invalid_or_unparseable_model_block'] = fallback_reason_counts.get('invalid_or_unparseable_model_block', 0) + 1
+            continue
+        preserved = _force_candidate_fields_in_block(parsed.get('body', ''), [item for item in candidates if item], context=context)
+        if not preserved:
+            for candidate_id in candidate_ids:
+                fallback_ids.append(candidate_id)
+                fallback_reason_counts['invalid_or_unparseable_model_block'] = fallback_reason_counts.get('invalid_or_unparseable_model_block', 0) + 1
+            continue
+        seen_ids.update(candidate_ids)
+        records.append({
+            'candidate_ids': candidate_ids,
+            'category': (candidates[0] or {}).get('classification') or (candidates[0] or {}).get('preliminary_type') or context.infer_preliminary_type(candidates[0] or {}),
+            'text': preserved,
+            'model': True,
+        })
     for candidate_id, candidate in selected_map.items():
-        if candidate_id in marked_blocks and candidate_id not in extracted_duplicates:
-            accepted_blocks[candidate_id] = _force_candidate_fields_in_block(marked_blocks[candidate_id], candidate, context=context)
-        else:
-            accepted_blocks[candidate_id] = _fallback_report_block(candidate, context=context)
+        if candidate_id in seen_ids:
+            continue
+        reason = _fallback_reason(candidate, context=context) or 'missing_model_candidate'
+        fallback_reason_counts[reason] = fallback_reason_counts.get(reason, 0) + 1
+        fallback_block = _fallback_report_block(candidate, context=context)
+        if fallback_block:
             fallback_ids.append(candidate_id)
+            records.append({
+                'candidate_ids': (candidate_id,),
+                'category': candidate.get('classification') or candidate.get('preliminary_type') or context.infer_preliminary_type(candidate),
+                'text': fallback_block,
+                'model': False,
+            })
+        else:
+            skipped_ids.append(candidate_id)
     sections: list[str] = [f'# {context.report_title}', f'> 資料涵蓋期間：{context.date_range}', f'> 報導範圍：{context.report_scope_label}']
     category_groups = [('一、技術新知', {'技術新知'}), ('二、重大事故', {'重大事故'}), ('三、營運議題', {'營運政策', '營運爭議'})]
     if context.standards_enabled or '規範更新' in context.selected_types:
@@ -1972,7 +2116,14 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
     for heading, categories in category_groups:
         if not categories.intersection(context.selected_types):
             continue
-        section_blocks = [accepted_blocks[int(item.get('candidate_id') or item.get('id') or 0)] for item in selected_candidates if (item.get('classification') or item.get('preliminary_type')) in categories]
+        section_blocks = [
+            record['text']
+            for record in sorted(
+                records,
+                key=lambda item: min(selected_order.get(candidate_id, 10**9) for candidate_id in item['candidate_ids']),
+            )
+            if record['category'] in categories
+        ]
         sections.extend(['', f'## {heading}', ''])
         if section_blocks:
             sections.append('\n\n'.join(section_blocks))
@@ -1986,7 +2137,26 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         sections.extend(['', research_section])
     reconciled = re.sub('\\n{3,}', '\n\n', '\n'.join(sections)).strip()
     final_validation = validate_report_candidate_ids(reconciled, selected_candidates)
-    diagnostics = {'before_reconcile': initial_validation, 'fallback_candidate_ids': fallback_ids, 'accepted_model_candidate_ids': sorted(set(selected_map) - set(fallback_ids)), 'after_reconcile': final_validation}
+    category_counts = count_report_items_by_category(reconciled)
+    diagnostics = {
+        'before_reconcile': initial_validation,
+        'fallback_candidate_ids': sorted(set(fallback_ids)),
+        'skipped_fallback_candidate_ids': sorted(set(skipped_ids)),
+        'accepted_model_candidate_ids': sorted({candidate_id for record in records if record['model'] for candidate_id in record['candidate_ids']}),
+        'model_report_block_count': len(parsed_blocks),
+        'preserved_model_block_count': sum(1 for record in records if record['model']),
+        'fallback_block_count': sum(1 for record in records if not record['model']),
+        'fallback_reason_counts': fallback_reason_counts,
+        'merged_event_groups': [list(record['candidate_ids']) for record in records if record['model'] and len(record['candidate_ids']) > 1],
+        'final_unique_article_count': len(records),
+        'final_count_by_category': category_counts,
+        'final_count_by_section': {
+            heading: sum(1 for record in records if record['category'] in categories)
+            for heading, categories in category_groups
+        },
+        'postprocess_warnings': warnings,
+        'after_reconcile': final_validation,
+    }
     return (reconciled, diagnostics)
 
 def identify_dropped_selected_candidates(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> list[dict]:
@@ -1994,10 +2164,14 @@ def identify_dropped_selected_candidates(report_md: str, selected_candidates: li
     return [candidate for candidate in selected_candidates or [] if int(candidate.get('candidate_id') or candidate.get('id') or 0) in missing_ids]
 
 def restore_missing_selected_report_items(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> tuple[str, list[dict]]:
-    dropped = identify_dropped_selected_candidates(report_md, selected_candidates, context=context)
     reconciled, diagnostics = reconcile_report_candidate_output(report_md, selected_candidates, context=context)
     context.id_validation_target.clear()
     context.id_validation_target.update(diagnostics)
+    dropped_ids = set(diagnostics.get('fallback_candidate_ids', [])) | set(diagnostics.get('skipped_fallback_candidate_ids', []))
+    dropped = [
+        candidate for candidate in selected_candidates or []
+        if int(candidate.get('candidate_id') or candidate.get('id') or 0) in dropped_ids
+    ]
     return (reconciled, dropped)
 
 # Extracted formal-report reconciliation and diagnostics.

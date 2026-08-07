@@ -845,6 +845,15 @@ def build_pipeline_debug_stats(
                 continue
             reason = gate_reasons.get(gate_name) or "未通過該分類 gate"
             gate_failure_reason_stats[category][reason] = gate_failure_reason_stats[category].get(reason, 0) + 1
+    category_reclassification_records = [
+        item.get("category_reclassification")
+        for item in (filtered_candidates or []) + (excluded_candidates or [])
+        if item.get("category_reclassification")
+    ]
+    region_resolution_method_counts: dict[str, int] = {}
+    for item in (filtered_candidates or []) + (excluded_candidates or []):
+        method = item.get("region_resolution_method") or "未記錄"
+        region_resolution_method_counts[method] = region_resolution_method_counts.get(method, 0) + 1
     return {
         "pipeline_counts": {
             "raw": len(raw_candidates or []),
@@ -859,7 +868,13 @@ def build_pipeline_debug_stats(
         "top_excluded_valuable_candidates": build_top_excluded_valuable_candidates(excluded_candidates, 20),
         "page_type_exclusion_counts": _count_by(excluded_candidates, "page_type"),
         "no_category_gate_count": sum(1 for item in excluded_candidates or [] if item.get("final_exclude_reason") == "no_category_gate" or item.get("exclude_reason") == "no_category_gate"),
+        "out_of_range_excluded_count": sum(
+            1 for item in excluded_candidates or []
+            if item.get("date_validation") in {"out_of_range_old", "future_date"}
+        ),
         "category_gate_pass_counts": category_gate_pass_counts,
+        "category_reclassification_records": category_reclassification_records,
+        "region_resolution_method_counts": region_resolution_method_counts,
         "A_candidate_count": sum(1 for item in filtered_candidates or [] if item.get("candidate_level") == "A"),
         "B_candidate_count": sum(1 for item in filtered_candidates or [] if item.get("candidate_level") == "B"),
         "C_candidate_count": sum(1 for item in filtered_candidates or [] if item.get("candidate_level") == "C"),
@@ -2363,6 +2378,7 @@ if generate_btn:
             validated_report, dropped_selected_candidates = restore_missing_selected_report_items(
                 validated_report, selected_candidates
             )
+            reconciliation_diagnostics = dict(LAST_REPORT_ID_VALIDATION)
             validated_report = repair_report_region_lines(validated_report, selected_candidates)
             validated_report = repair_generic_report_titles(validated_report, selected_candidates)
             validated_report = merge_operational_report_sections(validated_report)
@@ -2389,9 +2405,14 @@ if generate_btn:
             pdf_bytes = try_markdown_to_pdf_bytes(clean_report)
             dropped_selected_ids = [int(item.get("id", 0) or 0) for item in dropped_selected_candidates]
             dropped_selected_titles = [item.get("title", "") for item in dropped_selected_candidates]
+            skipped_fallback_ids = set(reconciliation_diagnostics.get("skipped_fallback_candidate_ids", []))
             dropped_selected_reasons = [
-                "MaiAgent 重試後仍未輸出該 candidate_id；已依原始候選資料產生保守 fallback。"
-                for _ in dropped_selected_candidates
+                (
+                    "資訊不足，未建立 fallback block。"
+                    if int(item.get("id", 0) or 0) in skipped_fallback_ids
+                    else "MaiAgent block 缺失或驗證失敗，已建立保守 fallback block。"
+                )
+                for item in dropped_selected_candidates
             ]
             formal_count = count_report_items(clean_report)
             postprocess_news_count_delta = formal_count - maiagent_report_response_count
@@ -2451,6 +2472,15 @@ if generate_btn:
                 "validated_report_count": validated_report_count,
                 "clean_report_marker_count": len(extract_report_candidate_ids(clean_report)),
                 "report_id_reconciliation": LAST_REPORT_ID_VALIDATION,
+                "model_report_block_count": reconciliation_diagnostics.get("model_report_block_count", 0),
+                "preserved_model_block_count": reconciliation_diagnostics.get("preserved_model_block_count", 0),
+                "fallback_block_count": reconciliation_diagnostics.get("fallback_block_count", 0),
+                "fallback_reason_counts": reconciliation_diagnostics.get("fallback_reason_counts", {}),
+                "merged_event_groups": reconciliation_diagnostics.get("merged_event_groups", []),
+                "final_unique_article_count": reconciliation_diagnostics.get("final_unique_article_count", formal_count),
+                "final_count_by_category": reconciliation_diagnostics.get("final_count_by_category", category_counts),
+                "final_count_by_section": reconciliation_diagnostics.get("final_count_by_section", {}),
+                "postprocess_warnings": reconciliation_diagnostics.get("postprocess_warnings", []),
                 "prompt_chars": prompt_chars,
                 "raw_chars": raw_chars,
                 "maiagent_call_count": maiagent_call_count,
@@ -2506,7 +2536,10 @@ if generate_btn:
                 "backfill_reason": LAST_PYTHON_SELECTION_DEBUG.get("backfill_reason", ""),
                 "page_type_exclusion_counts": pipeline_debug_stats.get("page_type_exclusion_counts", {}),
                 "no_category_gate_count": pipeline_debug_stats.get("no_category_gate_count", 0),
+                "out_of_range_excluded_count": pipeline_debug_stats.get("out_of_range_excluded_count", 0),
                 "category_gate_pass_counts": pipeline_debug_stats.get("category_gate_pass_counts", {}),
+                "category_reclassification_records": pipeline_debug_stats.get("category_reclassification_records", []),
+                "region_resolution_method_counts": pipeline_debug_stats.get("region_resolution_method_counts", {}),
                 "A_candidate_count": pipeline_debug_stats.get("A_candidate_count", 0),
                 "B_candidate_count": pipeline_debug_stats.get("B_candidate_count", 0),
                 "C_candidate_count": pipeline_debug_stats.get("C_candidate_count", 0),
