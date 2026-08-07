@@ -11,7 +11,6 @@ VISIBLE_REPORT_TYPE_GROUPS = (
     ("技術新知", ("技術新知",)),
     ("重大事故", ("重大事故",)),
     ("營運議題", ("營運政策", "營運爭議")),
-    ("規範更新", ("規範更新",)),
 )
 
 
@@ -64,6 +63,7 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
 
     def select_all_report_types() -> None:
         st.session_state["selected_types_state"] = context.advanced_types.copy()
+        st.session_state["type_規範更新"] = True
         for group_label, report_types in VISIBLE_REPORT_TYPE_GROUPS:
             st.session_state[f"type_{group_label}"] = True
             for report_type in report_types:
@@ -71,6 +71,7 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
 
     def clear_selected_report_types() -> None:
         st.session_state["selected_types_state"] = []
+        st.session_state["type_規範更新"] = False
         for report_type in context.advanced_types:
             st.session_state[f"type_{report_type}"] = False
         for group_label, _ in VISIBLE_REPORT_TYPE_GROUPS:
@@ -144,6 +145,10 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         )
 
         selected_types = []
+        standards_selected_state = bool(
+            st.session_state.get("type_規範更新", False)
+            or "規範更新" in st.session_state.get("selected_types_state", [])
+        )
         period_summary = context.report_period_labels.get(int(lookback_days), "報告")
         group_defaults = selected_group_defaults()
         selected_type_count = sum(group_defaults.values())
@@ -180,15 +185,6 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             for report_type in report_types:
                 if report_type != group_label:
                     st.session_state[f"type_{report_type}"] = group_selected
-
-        st.session_state["selected_types_state"] = selected_types
-        if not selected_types:
-            st.warning("⚠️ 請至少選擇一種新聞類型。")
-
-        standards_enabled = "規範更新" in selected_types
-        standard_count = sum(
-            len(values) for values in context.standards_watchlist.values()
-        )
 
         st.markdown("### 🌏 追蹤範圍")
         scope_mode = st.radio(
@@ -272,18 +268,28 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         if scope_mode != "全球（安全白名單來源）" and not selected_regions:
             st.warning("請至少選擇一個國家/地區。")
 
-        if standards_enabled:
-            st.markdown("### 📚 規範追蹤")
-            st.caption(f"已啟用，{standard_count} 項標準")
-            with st.expander("查看規範追蹤清單", expanded=False):
-                for category, standards in context.standards_watchlist.items():
-                    st.markdown(f"**{category}**：{', '.join(standards)}")
-            st.caption(
-                "規範追蹤僅作為更新監測清單；若未查得明確修訂、公告、"
-                "草案、徵詢或新版發布，不會列入正式週報。"
-            )
-
+        standard_count = sum(
+            len(values) for values in context.standards_watchlist.values()
+        )
         with st.expander("⚙️ 進階設定", expanded=False):
+            standards_enabled = st.checkbox(
+                "規範更新",
+                value=standards_selected_state,
+                key="type_規範更新",
+                help="啟用規範更新監測與規範追蹤清單；預設關閉。",
+            )
+            if standards_enabled:
+                selected_types.append("規範更新")
+                st.markdown("### 📚 規範追蹤")
+                st.caption(f"已啟用，{standard_count} 項標準")
+                with st.expander("查看規範追蹤清單", expanded=False):
+                    for category, standards in context.standards_watchlist.items():
+                        st.markdown(f"**{category}**：{', '.join(standards)}")
+                st.caption(
+                    "規範追蹤僅作為更新監測清單；若未查得明確修訂、公告、"
+                    "草案、徵詢或新版發布，不會列入正式週報。"
+                )
+
             include_research_supplement = st.checkbox(
                 "國際學術期刊補充（近 90 天）",
                 value=bool(
@@ -319,6 +325,10 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
                 st.caption(
                     "目前會顯示預先產製展示報告，不是即時搜尋結果。"
                 )
+
+        st.session_state["selected_types_state"] = selected_types
+        if not selected_types:
+            st.warning("⚠️ 請至少選擇一種新聞類型。")
 
         st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統")
 

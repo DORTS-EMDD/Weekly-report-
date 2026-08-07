@@ -14,7 +14,7 @@ import streamlit_sidebar_ui
 
 
 EXPECTED_SIDEBAR_SHA256 = (
-    "10a5e20233af57e6c1b60be9342002bddab9b5f06f7bd4e8556898ebf324fe8a"
+    "2088195ca873b711f089e39172f3e231a71587ca36057d7e2ae65e006371ce89"
 )
 EXPECTED_DASHBOARD_SHA256 = (
     "4dfa770f9ada8fa1723858dd78af7d40e7a27f8d9daea414d7b3c9e7e87f3d93"
@@ -338,6 +338,24 @@ class StreamlitUiModuleTests(unittest.TestCase):
             "result": result.__dict__,
         }
         self.assertEqual(_sha256(snapshot), EXPECTED_SIDEBAR_SHA256)
+
+    def test_standards_update_is_advanced_and_off_by_default(self):
+        recorder, result = self._render_sidebar()
+        self.assertFalse(result.standards_enabled)
+        advanced_index = next(
+            index
+            for index, call in enumerate(recorder.calls)
+            if call["name"] == "expander"
+            and call["args"][0] == "⚙️ 進階設定"
+        )
+        standards_index = next(
+            index
+            for index, call in enumerate(recorder.calls)
+            if call["name"] == "checkbox"
+            and call["kwargs"].get("key") == "type_規範更新"
+        )
+        self.assertGreater(standards_index, advanced_index)
+        self.assertFalse(recorder.session_state["type_規範更新"])
 
     def test_sidebar_v2_visible_periods_and_legacy_state(self):
         for legacy_value in (14, 90, 180, 365, None, "invalid"):
