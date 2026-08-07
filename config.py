@@ -93,7 +93,7 @@ def get_research_supplement_lookback_days(days: int) -> int:
     return 90
 
 def research_supplement_allowed_for_report(days: int) -> bool:
-    return int(days or 0) in {90, 180, 365}
+    return int(days or 0) in {7, 14, 30, 90, 180, 365}
 
 ADVANCED_REGIONS = [
     "日本", "韓國", "新加坡", "香港", "澳洲", "英國", "法國", "德國",

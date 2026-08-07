@@ -6,6 +6,7 @@ import json
 import re
 import time
 import urllib.parse
+from collections import Counter
 from urllib.parse import urlparse
 
 from config import *
@@ -352,6 +353,10 @@ REPORT_SELECTION_DEBUG_DEFAULT = {
     "B_backfill_appended_ids": [],
     "B_backfill_append_stage": "",
     "duplicate_event_records": [],
+    "operational_coverage_triggered": False,
+    "operational_coverage_added": False,
+    "operational_coverage_category": "",
+    "operational_coverage_replaced_id": "",
 }
 
 URBAN_RAIL_MODE_TERMS.extend(["metros"])
@@ -525,11 +530,11 @@ ROAD_INTERFACE_ACCIDENT_TERMS = [
 DISPUTE_SIGNAL_TERMS = [
     "strike", "industrial action", "union dispute", "labor dispute", "labour dispute",
     "lawsuit", "court order", "judicial order", "contract dispute", "procurement dispute",
-    "tender dispute", "budget dispute", "cost overrun", "project delay",
+    "tender dispute", "budget dispute", "cost overrun", "project delay", "arbitration",
     "organized protest", "organised protest", "service disruption",
     "罷工", "工業行動", "工會爭議", "勞資爭議", "訴訟", "司法命令",
     "合約爭議", "採購爭議", "招標爭議", "預算爭議", "成本超支",
-    "工程延誤", "組織性抗議", "服務中斷",
+    "工程延誤", "組織性抗議", "服務中斷", "仲裁",
 ]
 
 DISPUTE_ACTOR_TERMS = [
@@ -547,12 +552,36 @@ DISPUTE_IMPACT_TERMS = [
     "專案", "工程", "工期", "治理",
 ]
 
+DISPUTE_SECONDARY_IMPACT_TERMS = [
+    "service", "delay", "delayed", "disruption", "suspended", "cost", "contract",
+    "procurement", "project", "construction", "schedule", "governance", "capacity",
+    "服務", "延誤", "延宕", "中斷", "停駛", "成本", "合約", "採購", "專案",
+    "工程", "工期", "治理", "運能",
+]
+
+DISPUTE_SECONDARY_SIGNAL_TERMS = [
+    term for term in DISPUTE_SIGNAL_TERMS if term not in {"project delay", "工程延誤"}
+]
+
+POLICY_DOMINANT_TERMS = [
+    "fare reform", "fare adjustment", "fare policy", "operating hours", "service change",
+    "service restructuring", "line opening", "line extension", "capacity increase",
+    "route restructuring", "budget approval", "funding approval", "regulatory approval",
+    "government approved", "approved by the government", "policy decision", "governance",
+    "票價改革", "票價調整", "營運時間", "服務調整", "服務重整", "路線延伸", "運能提升",
+    "路線重整", "預算核准", "經費核定", "法規核准", "政府核准", "政策決定", "治理",
+]
+
 HIGH_VALUE_POLICY_GATE_TERMS = STRICT_HIGH_VALUE_POLICY_TEXT_TERMS + [
     "new line opening", "new system opening", "service begins", "fleet replacement plan",
     "fleet renewal plan", "station group", "system upgrade", "signal upgrade",
-    "track upgrade", "route restructuring", "major service change",
+    "track upgrade", "route restructuring", "major service change", "fare reform",
+    "fare adjustment", "fare policy", "operating hours", "service restructuring",
+    "line extension", "capacity increase", "budget approval", "funding approval",
+    "regulatory approval", "government approved", "governance",
     "新線通車", "新系統通車", "服務重整", "重大服務調整", "車隊汰換計畫",
-    "車隊更新計畫", "路線重整", "系統升級", "號誌升級", "軌道升級",
+    "車隊更新計畫", "路線重整", "系統升級", "號誌升級", "軌道升級", "票價改革",
+    "票價調整", "營運時間", "服務調整", "路線延伸", "運能提升", "預算核准", "政府核准",
 ]
 
 CANONICAL_TAG_PATTERNS: list[tuple[str, list[str]]] = [
@@ -1475,7 +1504,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return _cached_candidate_bool(candidate, "passes_major_accident_gate", _compute_passes_major_accident_gate)
 
 
-    def _compute_passes_operational_dispute_gate(candidate: dict) -> bool:
+    def _compute_passes_operational_dispute_primary_gate(candidate: dict) -> bool:
         text = _candidate_selection_text(candidate)
         if not _candidate_urban_rail_gate(candidate):
             return False
@@ -1488,8 +1517,90 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
 
 
+    def _passes_operational_dispute_primary_gate(candidate: dict) -> bool:
+        return _cached_candidate_bool(
+            candidate,
+            "passes_operational_dispute_primary_gate",
+            _compute_passes_operational_dispute_primary_gate,
+        )
+
+
+    def _has_valid_operational_metadata(candidate: dict) -> bool:
+        return bool(
+            _candidate_date_obj(candidate.get("date", ""))
+            and _has_source_reference(candidate)
+        )
+
+
+    def _compute_passes_operational_dispute_secondary_gate(candidate: dict) -> bool:
+        text = _candidate_selection_text(candidate)
+        title_snippet = f"{candidate.get('title', '')} {candidate.get('snippet', '')}"
+        if not _candidate_urban_rail_gate(candidate):
+            return False
+        if not _has_valid_operational_metadata(candidate):
+            return False
+        if candidate.get("source_tier") not in {"A_official", "B_professional"}:
+            return False
+        if _contains_any_term(text, LOW_REPORT_VALUE_TERMS + LOW_QUALITY_CONTENT_TERMS):
+            return False
+        if not _contains_any_term(text, DISPUTE_SECONDARY_SIGNAL_TERMS):
+            return False
+        if not _contains_any_term(text, DISPUTE_SECONDARY_IMPACT_TERMS):
+            return False
+        return _contains_any_term(
+            title_snippet,
+            [
+                "arbitration", "lawsuit", "court", "strike", "dispute", "protest",
+                "contract", "procurement", "delays", "delayed", "suspended",
+                "terminated", "cancelled", "canceled", "awarded", "rejected",
+                "decision", "action", "仲裁", "訴訟", "法院", "罷工", "爭議",
+                "抗議", "合約", "延誤", "停駛", "裁決", "決議",
+            ],
+        )
+
+
+    def _passes_operational_dispute_secondary_gate(candidate: dict) -> bool:
+        return _cached_candidate_bool(
+            candidate,
+            "passes_operational_dispute_secondary_gate",
+            _compute_passes_operational_dispute_secondary_gate,
+        )
+
+
+    def _compute_passes_operational_dispute_gate(candidate: dict) -> bool:
+        return (
+            _passes_operational_dispute_primary_gate(candidate)
+            or _passes_operational_dispute_secondary_gate(candidate)
+        )
+
+
     def _passes_operational_dispute_gate(candidate: dict) -> bool:
-        return _cached_candidate_bool(candidate, "passes_operational_dispute_gate", _compute_passes_operational_dispute_gate)
+        return _cached_candidate_bool(
+            candidate,
+            "passes_operational_dispute_gate",
+            _compute_passes_operational_dispute_gate,
+        )
+
+
+    def _is_dispute_dominant(candidate: dict) -> bool:
+        return _passes_operational_dispute_gate(candidate)
+
+
+    def _is_policy_dominant(candidate: dict) -> bool:
+        title_snippet = f"{candidate.get('title', '')} {candidate.get('snippet', '')}"
+        return (
+            _candidate_urban_rail_gate(candidate)
+            and _contains_any_term(title_snippet, POLICY_DOMINANT_TERMS)
+            and _contains_any_term(
+                title_snippet,
+                [
+                    "approved", "approve", "adopted", "announced", "introduced", "reform",
+                    "opening", "opened", "extension", "increase", "change", "decision",
+                    "核准", "核定", "通車", "開通", "改革", "調整", "延伸", "提升",
+                    "決定", "公告",
+                ],
+            )
+        )
 
 
     def _is_short_term_service_notice(candidate: dict) -> bool:
@@ -1508,9 +1619,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         text = _candidate_selection_text(candidate)
         if not _candidate_urban_rail_gate(candidate):
             return False
+        if not _has_valid_operational_metadata(candidate):
+            return False
         if _is_short_term_service_notice(candidate):
             return False
-        if _passes_technical_triad(candidate) or _passes_major_accident_gate(candidate) or _passes_operational_dispute_gate(candidate):
+        if _passes_major_accident_gate(candidate) or _is_dispute_dominant(candidate):
+            return False
+        if _passes_technical_triad(candidate) and not _is_policy_dominant(candidate):
             return False
         if _contains_any_term(text, LOW_REPORT_VALUE_TERMS + LOW_QUALITY_CONTENT_TERMS):
             return False
@@ -1548,7 +1663,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         elif _technical_system_gate(candidate) or _technical_action_gate(candidate):
             reasons["technology"] = "技術三聯條件不完整。"
         if gates["operational_dispute"]:
-            reasons["operational_dispute"] = "具衝突主體、爭議議題及服務/合約/成本/治理影響。"
+            if _passes_operational_dispute_primary_gate(candidate):
+                reasons["operational_dispute"] = "具衝突主體、爭議議題及服務/合約/成本/治理影響。"
+            else:
+                reasons["operational_dispute"] = "具都市軌道、日期、A/B來源、爭議訊號及營運影響（次級 gate）。"
         elif _contains_any_term(text, DISPUTE_SIGNAL_TERMS):
             reasons["operational_dispute"] = "有爭議詞但缺少明確主體或營運影響。"
         if gates["operational_policy"]:
@@ -1559,9 +1677,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         primary_category = "excluded"
         for key, label in (
             ("major_accident", "重大事故"),
-            ("technology", "技術新知"),
             ("operational_dispute", "營運爭議"),
             ("operational_policy", "營運政策"),
+            ("technology", "技術新知"),
         ):
             if gates.get(key):
                 primary_category = label
@@ -1569,9 +1687,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         alternatives = [
             label for key, label in (
                 ("major_accident", "重大事故"),
-                ("technology", "技術新知"),
                 ("operational_dispute", "營運爭議"),
                 ("operational_policy", "營運政策"),
+                ("technology", "技術新知"),
             )
             if gates.get(key) and label != primary_category
         ]
@@ -1851,6 +1969,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             flags.append("high_value_policy")
         if _passes_operational_dispute_gate(candidate):
             flags.append("operational_dispute_gate")
+        if _passes_operational_dispute_secondary_gate(candidate):
+            flags.append("operational_dispute_secondary_gate")
         if _is_low_value_ceremonial_candidate(candidate):
             flags.append("low_value_ceremonial")
         if _contains_any_term(text, LOW_VALUE_POLICY_TERMS) or information_issue in {"日常服務推播", "低價值路線公告"}:
@@ -2880,6 +3000,85 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return debug
 
 
+    def _qualifying_operational_coverage_candidate(candidate: dict, selected: list[dict]) -> dict | None:
+        candidate = dict(candidate)
+        classification = _selection_classification(candidate)
+        if classification not in {"營運政策", "營運爭議"} or classification not in selected_types:
+            return None
+        candidate["classification"] = classification
+        if candidate.get("source_tier") not in {"A_official", "B_professional"}:
+            return None
+        if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
+            return None
+        if _is_low_value_python_selection_candidate(candidate):
+            return None
+        if classification == "營運政策" and not _passes_high_value_policy_gate(candidate):
+            return None
+        if classification == "營運爭議" and not _passes_operational_dispute_gate(candidate):
+            return None
+        level = candidate.get("candidate_level") or _candidate_level(candidate)
+        if level not in {"A", "B"}:
+            return None
+        if _is_duplicate_selected_event(candidate, selected):
+            return None
+        candidate["candidate_level"] = level
+        candidate["include_in_report"] = True
+        candidate["selection_stage"] = "operational_coverage_protection"
+        candidate["selected_reason"] = (
+            f"營運議題覆蓋保護：{classification}；level={level}；"
+            f"score={candidate.get('python_score', 0)}；tier={candidate.get('source_tier', '')}"
+        )
+        return candidate
+
+
+    def _ensure_operational_topic_coverage(
+        selected: list[dict],
+        model_candidates: list[dict],
+        max_items: int,
+        debug: dict,
+    ) -> list[dict]:
+        if not {"營運政策", "營運爭議"}.issubset(set(selected_types)):
+            return selected
+        if any(item.get("classification") in {"營運政策", "營運爭議"} for item in selected):
+            return selected
+        debug["operational_coverage_triggered"] = True
+        coverage_pool = [
+            candidate
+            for candidate in (
+                _qualifying_operational_coverage_candidate(raw_candidate, selected)
+                for raw_candidate in model_candidates or []
+            )
+            if candidate is not None
+        ]
+        if not coverage_pool:
+            return selected
+        coverage_candidate = min(coverage_pool, key=_python_selection_sort_key)
+        if len(selected) < max_items:
+            selected.append(coverage_candidate)
+        else:
+            classification_counts = Counter(item.get("classification") for item in selected)
+            removable = [
+                item
+                for item in selected
+                if item.get("classification") != "重大事故"
+                and not (
+                    item.get("classification") == "技術新知"
+                    and classification_counts.get("技術新知", 0) <= 1
+                )
+            ]
+            if not removable:
+                removable = [item for item in selected if item.get("classification") != "重大事故"]
+            if not removable:
+                return selected
+            removed = min(removable, key=_python_selection_sort_key)
+            selected.remove(removed)
+            selected.append(coverage_candidate)
+            debug["operational_coverage_replaced_id"] = removed.get("id", "")
+        debug["operational_coverage_added"] = True
+        debug["operational_coverage_category"] = coverage_candidate.get("classification", "")
+        return selected
+
+
     def _select_from_grouped_pools(grouped: dict[str, list[dict]], max_items: int) -> list[dict]:
         selected: list[dict] = []
         if len(selected_types) <= 1:
@@ -3012,6 +3211,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             grouped[category] = sorted(grouped[category], key=_python_selection_sort_key)
 
         selected = _select_from_grouped_pools(grouped, max_items)
+        selected = _ensure_operational_topic_coverage(
+            selected,
+            model_candidates or [],
+            max_items,
+            LAST_PYTHON_SELECTION_DEBUG,
+        )
         LAST_PYTHON_SELECTION_DEBUG["strict_selected_count"] = len(selected)
         selected = _backfill_borderline_candidates(selected, model_candidates or [], min_items, max_items, LAST_PYTHON_SELECTION_DEBUG)
         LAST_PYTHON_SELECTION_DEBUG["final_selected_count"] = len(selected)
@@ -3063,7 +3268,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_compute_passes_major_accident_gate": _compute_passes_major_accident_gate,
         "_passes_major_accident_gate": _passes_major_accident_gate,
         "_compute_passes_operational_dispute_gate": _compute_passes_operational_dispute_gate,
+        "_compute_passes_operational_dispute_primary_gate": _compute_passes_operational_dispute_primary_gate,
+        "_passes_operational_dispute_primary_gate": _passes_operational_dispute_primary_gate,
+        "_compute_passes_operational_dispute_secondary_gate": _compute_passes_operational_dispute_secondary_gate,
+        "_passes_operational_dispute_secondary_gate": _passes_operational_dispute_secondary_gate,
         "_passes_operational_dispute_gate": _passes_operational_dispute_gate,
+        "_is_dispute_dominant": _is_dispute_dominant,
+        "_is_policy_dominant": _is_policy_dominant,
         "_is_short_term_service_notice": _is_short_term_service_notice,
         "_compute_passes_high_value_policy_gate": _compute_passes_high_value_policy_gate,
         "_passes_high_value_policy_gate": _passes_high_value_policy_gate,
@@ -3134,6 +3345,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_borderline_cap": _borderline_cap,
         "_selection_debug_reset": _selection_debug_reset,
         "_select_from_grouped_pools": _select_from_grouped_pools,
+        "_qualifying_operational_coverage_candidate": _qualifying_operational_coverage_candidate,
+        "_ensure_operational_topic_coverage": _ensure_operational_topic_coverage,
         "_backfill_borderline_candidates": _backfill_borderline_candidates,
         "select_candidates_by_python": select_candidates_by_python
     }

@@ -7,6 +7,12 @@ import streamlit as st
 
 
 VISIBLE_LOOKBACK_DAYS = (7, 30)
+VISIBLE_REPORT_TYPE_GROUPS = (
+    ("技術新知", ("技術新知",)),
+    ("重大事故", ("重大事故",)),
+    ("營運議題", ("營運政策", "營運爭議")),
+    ("規範更新", ("規範更新",)),
+)
 
 
 @dataclass(frozen=True)
@@ -58,13 +64,32 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
 
     def select_all_report_types() -> None:
         st.session_state["selected_types_state"] = context.advanced_types.copy()
-        for report_type in context.advanced_types:
-            st.session_state[f"type_{report_type}"] = True
+        for group_label, report_types in VISIBLE_REPORT_TYPE_GROUPS:
+            st.session_state[f"type_{group_label}"] = True
+            for report_type in report_types:
+                st.session_state[f"type_{report_type}"] = True
 
     def clear_selected_report_types() -> None:
         st.session_state["selected_types_state"] = []
         for report_type in context.advanced_types:
             st.session_state[f"type_{report_type}"] = False
+        for group_label, _ in VISIBLE_REPORT_TYPE_GROUPS:
+            st.session_state[f"type_{group_label}"] = False
+
+    def selected_group_defaults() -> dict[str, bool]:
+        selected_state = set(st.session_state["selected_types_state"])
+        defaults = {}
+        for group_label, report_types in VISIBLE_REPORT_TYPE_GROUPS:
+            legacy_values = [
+                bool(st.session_state[f"type_{report_type}"])
+                for report_type in report_types
+                if f"type_{report_type}" in st.session_state
+            ]
+            defaults[group_label] = bool(
+                any(legacy_values)
+                or any(report_type in selected_state for report_type in report_types)
+            )
+        return defaults
 
     with st.sidebar:
         st.markdown(
@@ -105,7 +130,8 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         if st.session_state.get("lookback_days_state") not in visible_lookback_options:
             st.session_state["lookback_days_state"] = visible_lookback_options[0]
         st.session_state["long_term_mode"] = False
-        st.session_state["include_research_supplement"] = False
+        if "include_research_supplement" not in st.session_state:
+            st.session_state["include_research_supplement"] = False
 
         lookback_days = st.selectbox(
             "報告期間",
@@ -119,14 +145,8 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
 
         selected_types = []
         period_summary = context.report_period_labels.get(int(lookback_days), "報告")
-        selected_type_count = sum(
-            1
-            for report_type in context.advanced_types
-            if st.session_state.get(
-                f"type_{report_type}",
-                report_type in st.session_state["selected_types_state"],
-            )
-        )
+        group_defaults = selected_group_defaults()
+        selected_type_count = sum(group_defaults.values())
         st.markdown("**📰 新聞類型**")
         st.caption(f"已選 {selected_type_count} 種類型｜{period_summary}")
         with st.expander("展開選擇新聞類型", expanded=False):
@@ -143,16 +163,23 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
                 on_click=clear_selected_report_types,
             )
 
-            for report_type in context.advanced_types:
-                checked = (
-                    report_type in st.session_state["selected_types_state"]
-                )
+            for group_label, report_types in VISIBLE_REPORT_TYPE_GROUPS:
                 if st.checkbox(
-                    report_type,
-                    value=checked,
-                    key=f"type_{report_type}",
+                    group_label,
+                    value=group_defaults[group_label],
+                    key=f"type_{group_label}",
                 ):
-                    selected_types.append(report_type)
+                    selected_types.extend(report_types)
+
+        for group_label, report_types in VISIBLE_REPORT_TYPE_GROUPS:
+            group_selected = group_label in {
+                group
+                for group, types in VISIBLE_REPORT_TYPE_GROUPS
+                if any(report_type in selected_types for report_type in types)
+            }
+            for report_type in report_types:
+                if report_type != group_label:
+                    st.session_state[f"type_{report_type}"] = group_selected
 
         st.session_state["selected_types_state"] = selected_types
         if not selected_types:
@@ -257,6 +284,18 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             )
 
         with st.expander("⚙️ 進階設定", expanded=False):
+            include_research_supplement = st.checkbox(
+                "國際學術期刊補充（近 90 天）",
+                value=bool(
+                    st.session_state.get("include_research_supplement", False)
+                ),
+                key="include_research_supplement",
+                help=(
+                    "勾選後，報告會額外搜尋近 90 天的國際學術期刊，"
+                    "並以獨立補充內容呈現；不計入新聞類型統計。"
+                ),
+            )
+
             show_developer_info = st.checkbox(
                 "開發者資訊顯示",
                 value=False,
@@ -292,7 +331,7 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         scope_mode=scope_mode,
         selected_regions=selected_regions,
         long_term_mode=False,
-        include_research_supplement=False,
+        include_research_supplement=include_research_supplement,
         show_developer_info=show_developer_info,
         demo_cache_mode=demo_cache_mode,
     )

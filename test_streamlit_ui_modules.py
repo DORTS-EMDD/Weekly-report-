@@ -14,7 +14,7 @@ import streamlit_sidebar_ui
 
 
 EXPECTED_SIDEBAR_SHA256 = (
-    "d478a370c7357e54933a52a39e7580c6c066c4b2011587928fc53dd5f8bd5f28"
+    "10a5e20233af57e6c1b60be9342002bddab9b5f06f7bd4e8556898ebf324fe8a"
 )
 EXPECTED_DASHBOARD_SHA256 = (
     "4dfa770f9ada8fa1723858dd78af7d40e7a27f8d9daea414d7b3c9e7e87f3d93"
@@ -355,10 +355,10 @@ class StreamlitUiModuleTests(unittest.TestCase):
             self.assertEqual(selectbox_calls[0]["args"][1], [7, 30])
             self.assertEqual(result.lookback_days, 7)
             self.assertFalse(result.long_term_mode)
-            self.assertFalse(result.include_research_supplement)
+            self.assertTrue(result.include_research_supplement)
             self.assertEqual(recorder.session_state["lookback_days_state"], 7)
             self.assertFalse(recorder.session_state["long_term_mode"])
-            self.assertFalse(
+            self.assertTrue(
                 recorder.session_state["include_research_supplement"]
             )
 
@@ -373,7 +373,6 @@ class StreamlitUiModuleTests(unittest.TestCase):
         self.assertFalse(result.include_research_supplement)
         for hidden_text in (
             "啟用長期趨勢 / 規範追蹤模式",
-            "國際學術期刊",
             "排程說明",
             "GitHub Actions",
             "AI 模型設定",
@@ -388,6 +387,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
             "報導範圍",
             "開發者資訊顯示",
             "展覽快速版",
+            "國際學術期刊補充（近 90 天）",
         ):
             self.assertIn(retained_text, call_text)
 

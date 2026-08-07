@@ -824,6 +824,27 @@ def build_pipeline_debug_stats(
             if enabled:
                 category_gate_pass_counts[gate] = category_gate_pass_counts.get(gate, 0) + 1
     gate_pass_count = sum(1 for item in filtered_candidates or [] if any((item.get("category_gates") or {}).values()))
+    query_count_by_family = (LAST_DDGS_SEARCH_SUMMARY or {}).get("query_count_by_family", {})
+    if not query_count_by_family:
+        query_count_by_family = {
+            family: sum(1 for status in LAST_DDGS_QUERY_STATUSES if status.get("search_family") == family)
+            for family in ("policy", "dispute")
+        }
+    policy_raw_candidates = [
+        item for item in raw_candidates or [] if item.get("search_family") == "policy"
+    ]
+    dispute_raw_candidates = [
+        item for item in raw_candidates or [] if item.get("search_family") == "dispute"
+    ]
+    gate_failure_reason_stats = {"policy": {}, "dispute": {}}
+    for item in filtered_candidates or []:
+        gate_payload = item.get("category_gates") or {}
+        gate_reasons = item.get("category_gate_reasons") or {}
+        for category, gate_name in (("policy", "operational_policy"), ("dispute", "operational_dispute")):
+            if gate_payload.get(gate_name):
+                continue
+            reason = gate_reasons.get(gate_name) or "未通過該分類 gate"
+            gate_failure_reason_stats[category][reason] = gate_failure_reason_stats[category].get(reason, 0) + 1
     return {
         "pipeline_counts": {
             "raw": len(raw_candidates or []),
@@ -865,6 +886,22 @@ def build_pipeline_debug_stats(
             1 for item in filtered_candidates or []
             if (item.get("category_gates") or {}).get("major_accident")
         ),
+        "policy_query_count": int(query_count_by_family.get("policy", 0) or 0),
+        "dispute_query_count": int(query_count_by_family.get("dispute", 0) or 0),
+        "policy_raw_candidate_count": len(policy_raw_candidates),
+        "dispute_raw_candidate_count": len(dispute_raw_candidates),
+        "policy_raw_candidates": [build_candidate_card(item) for item in policy_raw_candidates],
+        "dispute_raw_candidates": [build_candidate_card(item) for item in dispute_raw_candidates],
+        "policy_gate_pass_count": sum(
+            1 for item in filtered_candidates or []
+            if (item.get("category_gates") or {}).get("operational_policy")
+        ),
+        "dispute_gate_pass_count": sum(
+            1 for item in filtered_candidates or []
+            if (item.get("category_gates") or {}).get("operational_dispute")
+        ),
+        "gate_failure_reason_stats": gate_failure_reason_stats,
+        "operational_topic_selected_count": 0,
     }
 
 
@@ -920,7 +957,13 @@ _has_single_person_incident_exception = _selector_api["_has_single_person_incide
 _compute_passes_major_accident_gate = _selector_api["_compute_passes_major_accident_gate"]
 _passes_major_accident_gate = _selector_api["_passes_major_accident_gate"]
 _compute_passes_operational_dispute_gate = _selector_api["_compute_passes_operational_dispute_gate"]
+_compute_passes_operational_dispute_primary_gate = _selector_api["_compute_passes_operational_dispute_primary_gate"]
+_passes_operational_dispute_primary_gate = _selector_api["_passes_operational_dispute_primary_gate"]
+_compute_passes_operational_dispute_secondary_gate = _selector_api["_compute_passes_operational_dispute_secondary_gate"]
+_passes_operational_dispute_secondary_gate = _selector_api["_passes_operational_dispute_secondary_gate"]
 _passes_operational_dispute_gate = _selector_api["_passes_operational_dispute_gate"]
+_is_dispute_dominant = _selector_api["_is_dispute_dominant"]
+_is_policy_dominant = _selector_api["_is_policy_dominant"]
 _is_short_term_service_notice = _selector_api["_is_short_term_service_notice"]
 _compute_passes_high_value_policy_gate = _selector_api["_compute_passes_high_value_policy_gate"]
 _passes_high_value_policy_gate = _selector_api["_passes_high_value_policy_gate"]
@@ -2059,6 +2102,16 @@ if generate_btn:
                 "model_candidate_count": 0,
                 "source_count": 0,
                 "ddgs_query_count": 0,
+                "policy_query_count": 0,
+                "dispute_query_count": 0,
+                "policy_raw_candidate_count": 0,
+                "dispute_raw_candidate_count": 0,
+                "policy_raw_candidates": [],
+                "dispute_raw_candidates": [],
+                "policy_gate_pass_count": 0,
+                "dispute_gate_pass_count": 0,
+                "gate_failure_reason_stats": {},
+                "operational_topic_selected_count": 0,
                 "candidate_card_limit": 0,
                 "candidate_card_count": 0,
                 "elapsed_seconds_total": elapsed_total,
@@ -2334,6 +2387,12 @@ if generate_btn:
             pipeline_counts = pipeline_debug_stats.setdefault("pipeline_counts", {})
             pipeline_counts["selected"] = len(selected_candidates)
             pipeline_debug_stats["selected_count"] = len(selected_candidates)
+            operational_topic_selected_count = sum(
+                1
+                for item in selected_candidates
+                if item.get("classification") in {"營運政策", "營運爭議"}
+            )
+            pipeline_debug_stats["operational_topic_selected_count"] = operational_topic_selected_count
             pipeline_debug_stats["strict_selected_count"] = LAST_PYTHON_SELECTION_DEBUG.get("strict_selected_count", 0)
             pipeline_debug_stats["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("B_added_count", 0)
             incident_coverage = build_final_incident_coverage_debug(
@@ -2385,6 +2444,16 @@ if generate_btn:
                 "ddgs_general_only_query_count": len(ddgs_general_only_queries(LAST_DDGS_QUERY_STATUSES)),
                 "ddgs_search_summary": LAST_DDGS_SEARCH_SUMMARY,
                 **LAST_DDGS_SEARCH_SUMMARY,
+                "policy_query_count": pipeline_debug_stats.get("policy_query_count", 0),
+                "dispute_query_count": pipeline_debug_stats.get("dispute_query_count", 0),
+                "policy_raw_candidates": pipeline_debug_stats.get("policy_raw_candidates", []),
+                "dispute_raw_candidates": pipeline_debug_stats.get("dispute_raw_candidates", []),
+                "policy_raw_candidate_count": pipeline_debug_stats.get("policy_raw_candidate_count", 0),
+                "dispute_raw_candidate_count": pipeline_debug_stats.get("dispute_raw_candidate_count", 0),
+                "policy_gate_pass_count": pipeline_debug_stats.get("policy_gate_pass_count", 0),
+                "dispute_gate_pass_count": pipeline_debug_stats.get("dispute_gate_pass_count", 0),
+                "gate_failure_reason_stats": pipeline_debug_stats.get("gate_failure_reason_stats", {}),
+                "operational_topic_selected_count": operational_topic_selected_count,
                 "candidate_card_limit": candidate_pool.get("candidate_card_limit", len(candidate_pool["candidate_cards"])),
                 "candidate_card_count": len(candidate_pool["candidate_cards"]),
                 "elapsed_seconds_total": timings["elapsed_seconds_total"],
