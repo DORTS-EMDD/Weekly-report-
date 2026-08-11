@@ -403,6 +403,44 @@ INNOVATION_QUANTIFIED_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 
+FORWARD_GATE_APPLICATION_OBJECT_TERMS = [
+    "rolling stock", "rail vehicle", "rail vehicles", "bogie", "wheel", "rail component",
+    "rail components", "track", "tunnel", "station", "platform", "traction power",
+    "substation", "signalling", "signaling", "communications", "depot", "ventilation",
+    "hvac", "escalator", "elevator", "maintenance equipment", "infrastructure",
+    "inspection system", "metro train", "metro trains", "subway train", "subway trains",
+]
+
+FORWARD_GATE_NOVELTY_TERMS = [
+    "novel", "newly developed", "new method", "new approach", "first application",
+    "first use", "prototype", "pilot", "demonstration", "trial", "emerging technology",
+    "innovative technology", "new material", "new coating", "new low-friction coating",
+    "new low friction coating", "new sensing method",
+    "new manufacturing method",
+]
+
+FORWARD_GATE_VALIDATION_TERMS = [
+    "tested", "test", "trial", "pilot", "pilots", "demonstrated", "validated", "validates",
+    "deployed", "implemented", "installed", "field test", "field-test", "field-tests", "operational test",
+    "prototype tested", "in-service trial", "demonstration project",
+]
+
+FORWARD_GATE_BENEFIT_TERMS = [
+    "reduce energy consumption", "reducing energy consumption", "reduce energy use",
+    "reducing energy use", "energy saving", "energy efficiency", "reduce weight",
+    "reducing weight", "reduce vehicle weight", "reducing vehicle weight", "reduce mass",
+    "reducing mass", "weight reduction", "reduce friction", "reducing friction",
+    "friction reduction", "reduce wear", "reducing wear", "wear reduction", "reduce maintenance",
+    "reducing maintenance", "reduce inspection time", "reducing inspection time",
+    "reduce manual inspection time", "reducing manual inspection time", "reduce failure",
+    "reducing failure", "reduce noise", "reducing noise", "reduce vibration", "reducing vibration",
+    "reduce emissions", "reducing emissions", "extend service life", "extending service life",
+    "improve reliability", "improving reliability", "improve efficiency", "improving efficiency",
+    "improve safety", "improving safety", "increase capacity", "increasing capacity",
+    "lower lifecycle cost", "lower life-cycle cost", "improve fire resistance",
+    "improving fire resistance", "improve thermal performance", "improving thermal performance",
+]
+
 LOW_IMPACT_ACCIDENT_TERMS = [
     "animal on tracks", "dog on tracks", "cat on tracks", "bird on tracks",
     "passenger dispute", "minor altercation", "trespasser", "small animal",
@@ -1309,7 +1347,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if not _is_urban_rail_candidate(text, source):
             return _reject("非捷運/都市軌道")
 
-        if _is_tech_news_only_mode() and not _is_technical_news_candidate(text, source):
+        is_forward_family = candidate.get("search_family") == "forward_technology"
+        if _is_tech_news_only_mode() and not is_forward_family and not _is_technical_news_candidate(text, source):
             return _reject("非技術新知")
 
         gate_info = evaluate_category_gates(candidate)
@@ -1425,6 +1464,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate.get("source_quality", ""),
             candidate.get("region", ""),
             candidate.get("classification", ""),
+            candidate.get("search_family", ""),
         )
 
 
@@ -1441,6 +1481,53 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if key not in cache:
             cache[key] = bool(compute(candidate))
         return bool(cache[key])
+
+
+    def _compute_forward_technology_gate(candidate: dict) -> dict:
+        text = _candidate_selection_text(candidate)
+        is_forward_family = candidate.get("search_family") == "forward_technology"
+        signals = {
+            "urban_rail": _candidate_urban_rail_gate(candidate),
+            "application_object": _contains_any_term(text, FORWARD_GATE_APPLICATION_OBJECT_TERMS),
+            "novelty": _contains_any_term(text, FORWARD_GATE_NOVELTY_TERMS),
+            "validation": _contains_any_term(text, FORWARD_GATE_VALIDATION_TERMS),
+            "benefit": _contains_any_term(text, FORWARD_GATE_BENEFIT_TERMS),
+            "base_quality": bool(
+                _candidate_date_obj(candidate.get("date", ""))
+                and _has_source_reference(candidate)
+                and candidate.get("source_quality") in {"A", "B"}
+                and candidate.get("source_tier") != "D_proxy_low_value"
+                and not _information_quality_issue(candidate)
+            ),
+            "project_only_clear": not _is_project_only_technical_candidate(candidate),
+        }
+        failures = []
+        if not is_forward_family:
+            failures.append("search_family 不是 forward_technology")
+        for key, reason in (
+            ("urban_rail", "缺少強都市軌道關聯"),
+            ("application_object", "缺少明確捷運應用對象"),
+            ("novelty", "缺少新方法/新技術訊號"),
+            ("validation", "缺少實際試驗/部署/驗證訊號"),
+            ("benefit", "缺少明確改善效果"),
+            ("base_quality", "來源、日期或基本內容品質不足"),
+            ("project_only_clear", "命中 project-only gate"),
+        ):
+            if not signals[key]:
+                failures.append(reason)
+        return {
+            "passes_forward_technology_gate": is_forward_family and not failures,
+            "forward_gate_signals": signals,
+            "forward_gate_failure_reasons": failures,
+        }
+
+
+    def _passes_forward_technology_gate(candidate: dict) -> bool:
+        return _cached_candidate_bool(
+            candidate,
+            "passes_forward_technology_gate",
+            lambda item: _compute_forward_technology_gate(item)["passes_forward_technology_gate"],
+        )
 
 
     def _candidate_urban_rail_gate(candidate: dict) -> bool:
@@ -1806,19 +1893,31 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return dict(cached)
         text = _candidate_selection_text(candidate)
         canonical_tags = _canonical_tags_from_text(text)
+        is_forward_family = candidate.get("search_family") == "forward_technology"
+        forward_gate_payload = (
+            _compute_forward_technology_gate(candidate)
+            if is_forward_family
+            else {}
+        )
+        passes_forward_gate = bool(forward_gate_payload.get("passes_forward_technology_gate"))
         gates = {
             "major_accident": _passes_major_accident_gate(candidate),
-            "technology": _passes_technical_triad(candidate),
+            "technology": _passes_technical_triad(candidate) or passes_forward_gate,
             "operational_dispute": _passes_operational_dispute_gate(candidate),
             "operational_policy": _passes_high_value_policy_gate(candidate),
         }
+        if is_forward_family:
+            gates["forward_technology"] = passes_forward_gate
         reasons: dict[str, str] = {}
         if gates["major_accident"]:
             reasons["major_accident"] = "具都市軌道情境、事故/故障訊號及嚴重度。"
         elif _contains_any_term(text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS):
             reasons["major_accident"] = "有事故訊號但未達重大事故嚴重度或非都市軌道。"
         if gates["technology"]:
-            reasons["technology"] = "具都市軌道對象、機電/設備主題及導入/更新/維修行為。"
+            if passes_forward_gate and not _passes_technical_triad(candidate):
+                reasons["technology"] = "forward technology alternate gate 通過，具都市軌道應用、新方法、驗證及明確效益。"
+            else:
+                reasons["technology"] = "具都市軌道對象、機電/設備主題及導入/更新/維修行為。"
         elif _is_project_only_technical_candidate(candidate):
             reasons["technology"] = "專案或商務動作明顯，但缺乏實質技術架構、方法、效益或驗證內容。"
         elif _technical_system_gate(candidate) or _technical_action_gate(candidate):
@@ -1886,6 +1985,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "alternative_category_flags": alternatives,
             "category_reclassification": category_reclassification,
         }
+        if is_forward_family:
+            result.update(forward_gate_payload)
         analysis_cache["category_gate_payload"] = dict(result)
         return result
 
@@ -2060,7 +2161,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return False
         if _is_low_value_ceremonial_candidate(candidate):
             return False
-        if not _passes_technical_triad(candidate):
+        if not (_passes_technical_triad(candidate) or _passes_forward_technology_gate(candidate)):
             return False
         if _has_low_value_official_notice(candidate):
             return False
@@ -2147,6 +2248,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             flags.append("trusted_title_technical_signal")
         if _passes_technical_triad(candidate):
             flags.append("core_metro_technical_content")
+        if _passes_forward_technology_gate(candidate):
+            flags.append("forward_technology_gate")
         if _is_project_only_technical_candidate(candidate):
             flags.append("project_only_without_technical_detail")
         if _passes_major_accident_gate(candidate):
@@ -2387,7 +2490,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             )
         final_selection_score = quality_score + innovation_payload["innovation_bonus"]
         temp_candidate = dict(candidate, python_score=quality_score, primary_category=primary_category)
-        return {
+        score_payload = {
             "python_score": quality_score,
             "quality_score": quality_score,
             "final_selection_score": final_selection_score,
@@ -2409,6 +2512,19 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "accident_severity_score": 80 if _passes_major_accident_gate(candidate) else (35 if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS) else 0),
             **innovation_payload,
         }
+        if candidate.get("search_family") == "forward_technology":
+            score_payload.update(
+                {
+                    key: gate_info[key]
+                    for key in (
+                        "passes_forward_technology_gate",
+                        "forward_gate_signals",
+                        "forward_gate_failure_reasons",
+                    )
+                    if key in gate_info
+                }
+            )
+        return score_payload
 
 
     def _candidate_score_fingerprint(candidate: dict) -> tuple:
@@ -2507,6 +2623,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "innovation_bonus",
             "quality_score",
             "final_selection_score",
+            "passes_forward_technology_gate",
+            "forward_gate_signals",
+            "forward_gate_failure_reasons",
         ):
             if key in candidate:
                 card[key] = candidate[key]
@@ -3027,7 +3146,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return True
         if candidate.get("source_tier") == "D_proxy_low_value":
             return True
-        if classification == "技術新知" and not _passes_technical_triad(dict(candidate, classification="技術新知")):
+        if classification == "技術新知" and not (
+            _passes_technical_triad(dict(candidate, classification="技術新知"))
+            or _passes_forward_technology_gate(dict(candidate, classification="技術新知"))
+        ):
             return True
         if classification == "重大事故" and not _passes_major_accident_gate(dict(candidate, classification="重大事故")):
             return True
@@ -3176,7 +3298,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         classification = _selection_classification(candidate)
         if classification == "excluded":
             return True
-        if classification == "技術新知" and not _passes_technical_triad(dict(candidate, classification="技術新知")):
+        if classification == "技術新知" and not (
+            _passes_technical_triad(dict(candidate, classification="技術新知"))
+            or _passes_forward_technology_gate(dict(candidate, classification="技術新知"))
+        ):
             return True
         if classification == "重大事故" and not _passes_major_accident_gate(dict(candidate, classification="重大事故")):
             return True
@@ -3567,6 +3692,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_is_project_only_technical_candidate": _is_project_only_technical_candidate,
         "_compute_passes_technical_triad": _compute_passes_technical_triad,
         "_passes_technical_triad": _passes_technical_triad,
+        "_compute_forward_technology_gate": _compute_forward_technology_gate,
+        "_passes_forward_technology_gate": _passes_forward_technology_gate,
         "_candidate_event_fragments": _candidate_event_fragments,
         "_fragment_has_urban_rail_context": _fragment_has_urban_rail_context,
         "_is_single_person_rail_incident": _is_single_person_rail_incident,

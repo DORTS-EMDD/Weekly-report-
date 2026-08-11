@@ -68,6 +68,9 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
             "innovation_bonus",
             "quality_score",
             "final_selection_score",
+            "passes_forward_technology_gate",
+            "forward_gate_signals",
+            "forward_gate_failure_reasons",
         ):
             if key in item:
                 row[key] = item[key]
