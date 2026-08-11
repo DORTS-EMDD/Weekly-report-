@@ -1,0 +1,42 @@
+name: 每月國際捷運前瞻技術雷達
+
+on:
+  schedule:
+    - cron: '17 1 1 * *'
+  workflow_dispatch:
+
+concurrency:
+  group: forward-radar-monthly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  generate-forward-radar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 📥 取得程式碼
+        uses: actions/checkout@v4
+
+      - name: 🐍 設定 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 安裝套件
+        run: pip install -r requirements.txt
+
+      - name: 📡 產生每月前瞻技術雷達
+        run: python -u forward_radar_main.py --lookback-days 30 --output-dir output
+
+      - name: 💾 上傳前瞻技術雷達 Artifact（保留 90 天）
+        uses: actions/upload-artifact@v4
+        with:
+          name: forward-technology-radar-${{ github.run_id }}
+          path: |
+            output/forward_radar_*.md
+            output/forward_radar_*.json
+          retention-days: 90
