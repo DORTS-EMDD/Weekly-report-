@@ -885,6 +885,15 @@ def _dedupe_route_line_tokens(candidate: dict) -> set[str]:
     return tokens
 
 
+def _dedupe_numbered_line_tokens(candidate: dict) -> set[str]:
+    text = " ".join(str(candidate.get(key, "") or "") for key in ("title", "url", "source_href"))
+    text = urllib.parse.unquote(text).casefold().replace("_", "-")
+    return {
+        re.sub(r"\s+", "-", match).strip("-")
+        for match in re.findall(r"\bline\s*[-#]?\s*\d{1,6}\b", text)
+    }
+
+
 def _dedupe_titles_conflict_on_entities(candidate: dict, existing: dict) -> bool:
     left_region = candidate.get("region", "")
     right_region = existing.get("region", "")
@@ -893,6 +902,10 @@ def _dedupe_titles_conflict_on_entities(candidate: dict, existing: dict) -> bool
     left_lines = _dedupe_route_line_tokens(candidate)
     right_lines = _dedupe_route_line_tokens(existing)
     if left_lines and right_lines and left_lines.isdisjoint(right_lines):
+        return True
+    left_numbered_lines = _dedupe_numbered_line_tokens(candidate)
+    right_numbered_lines = _dedupe_numbered_line_tokens(existing)
+    if left_numbered_lines and right_numbered_lines and left_numbered_lines.isdisjoint(right_numbered_lines):
         return True
     left_tokens = _dedupe_entity_tokens(candidate)
     right_tokens = _dedupe_entity_tokens(existing)
@@ -916,8 +929,113 @@ def _is_similar_title_duplicate(candidate: dict, existing: dict, threshold: floa
     return not _dedupe_titles_conflict_on_entities(candidate, existing)
 
 
+_SAME_EVENT_ENTITY_STOPWORDS = {
+    "after",
+    "announced",
+    "appointed",
+    "city",
+    "collision",
+    "company",
+    "contract",
+    "design",
+    "driver",
+    "fire",
+    "for",
+    "hurt",
+    "injured",
+    "line",
+    "metro",
+    "new",
+    "passengers",
+    "selected",
+    "several",
+    "station",
+    "study",
+    "support",
+    "tram",
+    "upgrade",
+    "wins",
+}
+
+_SAME_EVENT_TOPIC_TERMS = {
+    "collision": ("collision", "accident", "unfall", "crash", "derailment"),
+    "fire": ("fire", "brand", "feuer"),
+    "upgrade": ("upgrade", "modernisation", "modernization", "renewal", "更新"),
+    "study": ("study", "feasibility", "research", "studie"),
+    "contract": ("contract", "procurement", "tender", "selected", "appointed"),
+    "deployment": ("deploy", "deployment", "install", "installation", "einführung"),
+    "testing": ("test", "trial", "pilot", "validation", "versuch"),
+}
+
+
+def _same_event_text(candidate: dict) -> str:
+    return urllib.parse.unquote(
+        " ".join(str(candidate.get(key, "") or "") for key in ("title", "snippet"))
+    ).casefold()
+
+
+def _same_event_route_tokens(candidate: dict) -> set[str]:
+    text = _same_event_text(candidate).replace("_", "-")
+    tokens: set[str] = set()
+    for pattern in (
+        r"\b[a-z][a-z0-9-]{2,}\s+line\b",
+        r"\bline\s*[-#]?\s*[a-z0-9]{1,6}\b",
+    ):
+        for match in re.findall(pattern, text, flags=re.IGNORECASE):
+            token = re.sub(r"\s+", "-", match).strip("-")
+            if token not in {"metro-line", "red-line", "blue-line", "green-line"}:
+                tokens.add(token)
+    return tokens
+
+
+def _same_event_named_entities(candidate: dict) -> set[str]:
+    raw_text = " ".join(str(candidate.get(key, "") or "") for key in ("title", "snippet"))
+    entities: set[str] = set()
+    for match in re.findall(r"\b[A-Z][A-Za-zÀ-ÖØ-öø-ÿ]{2,}\b", raw_text):
+        token = match.casefold()
+        if token not in _SAME_EVENT_ENTITY_STOPWORDS and not token.isdigit():
+            entities.add(token)
+    return entities
+
+
+def _same_event_topic_term_present(text: str, term: str) -> bool:
+    if any(ord(character) > 127 for character in term) or len(term) >= 5:
+        return term in text
+    pattern = rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])"
+    return re.search(pattern, text) is not None
+
+
+def _same_event_topics(candidate: dict) -> set[str]:
+    text = _same_event_text(candidate)
+    return {
+        topic
+        for topic, terms in _SAME_EVENT_TOPIC_TERMS.items()
+        if any(_same_event_topic_term_present(text, term) for term in terms)
+    }
+
+
+def _is_same_event_duplicate(candidate: dict, existing: dict, max_days: int = 3) -> bool:
+    left_date = _candidate_date_obj(candidate.get("date", ""))
+    right_date = _candidate_date_obj(existing.get("date", ""))
+    if not left_date or not right_date or abs((left_date - right_date).days) > max_days:
+        return False
+    left_region = candidate.get("region", "")
+    right_region = existing.get("region", "")
+    if left_region and right_region and left_region != right_region:
+        return False
+    left_routes = _same_event_route_tokens(candidate)
+    right_routes = _same_event_route_tokens(existing)
+    if left_routes and right_routes and left_routes.isdisjoint(right_routes):
+        return False
+    if not _same_event_named_entities(candidate) & _same_event_named_entities(existing):
+        return False
+    if not _same_event_topics(candidate) & _same_event_topics(existing):
+        return False
+    return True
+
+
 def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[dict], dict[str, int]]:
-    stats = {"URL 重複": 0, "標題正規化重複": 0, "標題相似重複": 0}
+    stats = {"URL 重複": 0, "標題正規化重複": 0, "標題相似重複": 0, "同事件重複": 0}
     seen_urls: set[str] = set()
     seen_title_keys: set[str] = set()
     title_entries: list[dict] = []
@@ -945,6 +1063,9 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
             continue
         if title_key and any(_is_similar_title_duplicate(candidate, existing, similarity_threshold) for existing in title_entries):
             stats["標題相似重複"] += 1
+            continue
+        if any(_is_same_event_duplicate(candidate, existing) for existing in deduped):
+            stats["同事件重複"] += 1
             continue
         if url_key:
             seen_urls.add(url_key)
