@@ -30,6 +30,7 @@ from config import (
     STANDARDS_WATCHLIST,
 )
 from search_queries import (
+    FORWARD_TECHNOLOGY_QUERY_SPECS,
     QUERY_FAMILY_BY_TYPE_INDEX,
     REGION_QUERY_LANGUAGES,
     SEARCH_LANGUAGE_MARKERS,
@@ -136,7 +137,10 @@ def _query_with_period(query: str, *, context: DdgsSearchContext) -> str:
 
 
 def _active_query_specs(family: str) -> list[dict]:
-    return [spec for spec in SEARCH_QUERY_SPECS if spec.get("family") == family]
+    specs = [spec for spec in SEARCH_QUERY_SPECS if spec.get("family") == family]
+    if family == "forward_technology":
+        specs.extend(FORWARD_TECHNOLOGY_QUERY_SPECS)
+    return specs
 
 
 def _selected_query_families(*, context: DdgsSearchContext) -> list[str]:
@@ -198,7 +202,11 @@ def _standard_search_queries():
             yield f'"{standard}" revision amendment published draft metro rail standard'
 
 
-def build_search_queries(*, context: DdgsSearchContext) -> tuple[list[str], set[int]]:
+def build_search_queries(
+    *,
+    context: DdgsSearchContext,
+    include_forward_technology: bool = False,
+) -> tuple[list[str], set[int]]:
     context.query_metadata.clear()
     queries: list[str] = []
     news_indices: set[int] = set()
@@ -236,6 +244,8 @@ def build_search_queries(*, context: DdgsSearchContext) -> tuple[list[str], set[
     selected_families = _selected_query_families(context=context)
     include_official = "official_investigation" in selected_families
     content_families = [family for family in selected_families if family != "official_investigation"]
+    if include_forward_technology:
+        content_families.insert(0, "forward_technology")
 
     if context.is_global_scope:
         for family in content_families:

@@ -70,6 +70,17 @@ SEARCH_QUERY_SPECS = [
     {"family": "official_investigation", "lang": "en", "query": "urban rail metro tram derailment collision fire official investigation safety board", "use_news": False},
 ]
 
+FORWARD_TECHNOLOGY_QUERY_SPECS = [
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail light rail tram novel material prototype tested reduce vehicle weight energy consumption"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail track rail new coating pilot trial reduce friction wear extend service life"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail novel sensor method field test track inspection reduce inspection time"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail new method predictive maintenance pilot improve reliability reduce maintenance"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail traction power innovative approach demonstration reduce energy consumption improve efficiency"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail new fire resistant insulation material prototype tested improve safety reduce noise emissions"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail newly developed manufacturing process prototype tested extend component service life reduce maintenance"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail emerging technology first application deployed improve reliability efficiency field test"},
+]
+
 REGION_QUERY_LANGUAGES = {
     "日本": "ja", "韓國": "ko", "香港": "zh", "法國": "fr", "德國": "de",
     "西班牙": "es", "義大利": "it", "葡萄牙": "pt", "俄羅斯": "ru",
