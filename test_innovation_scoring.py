@@ -20,7 +20,7 @@ def _selector_api():
     )
 
 
-def _score(api: dict, candidate_id: int, title: str, snippet: str) -> dict:
+def _score(api: dict, candidate_id: int, title: str, snippet: str, *, family: str = "") -> dict:
     candidate = {
         "id": candidate_id,
         "candidate_id": candidate_id,
@@ -36,6 +36,8 @@ def _score(api: dict, candidate_id: int, title: str, snippet: str) -> dict:
         "source_tier": "B_professional",
         "source_quality": "A",
     }
+    if family:
+        candidate["search_family"] = family
     candidate.update(api["evaluate_category_gates"](candidate))
     return api["annotate_candidate_for_scheme_d"](candidate)
 
@@ -135,6 +137,77 @@ class InnovationScoringTests(unittest.TestCase):
         self.assertLess(positions[candidates[1]["title"]], positions[candidates[0]["title"]])
         self.assertLess(positions[candidates[2]["title"]], positions[candidates[0]["title"]])
         self.assertGreater(positions[candidates[3]["title"]], positions[candidates[0]["title"]])
+
+    def test_unknown_forward_technology_uses_evidence_based_innovation_score(self):
+        api = _selector_api()
+        cases = (
+            (
+                "Metro pilots newly developed lightweight material",
+                "A metro operator pilots a newly developed lightweight material on rail vehicles, reducing vehicle weight by 12% and traction energy consumption by 8%.",
+            ),
+            (
+                "Metro field-tests new low-friction coating",
+                "A subway operator field-tests a new low-friction coating on rail components, reducing wear by 30%.",
+            ),
+            (
+                "Metro validates new sensing method",
+                "An urban metro validates a new sensing method for tunnel equipment, reducing manual inspection time by 40%.",
+            ),
+        )
+
+        for index, (title, snippet) in enumerate(cases, 1):
+            candidate = _score(api, index, title, snippet, family="forward_technology")
+            self.assertTrue(candidate["passes_forward_technology_gate"], msg=title)
+            self.assertGreaterEqual(candidate["innovation_score"], 15, msg=title)
+            self.assertEqual(candidate["innovation_level"], "A", msg=title)
+            self.assertTrue(candidate["novelty_evidence"], msg=title)
+            self.assertTrue(candidate["validation_evidence"], msg=title)
+            self.assertTrue(candidate["benefit_evidence"], msg=title)
+            self.assertTrue(candidate["quantified_benefit"], msg=title)
+            self.assertGreater(candidate["forward_evidence_bonus"], 0, msg=title)
+
+    def test_forward_family_alone_does_not_create_innovation_score(self):
+        api = _selector_api()
+        cases = (
+            ("Metro introduces AI system", "The metro introduces an AI system."),
+            ("Innovative green smart metro project announced", "An operator announced an innovative green smart metro technology."),
+        )
+
+        for index, (title, snippet) in enumerate(cases, 20):
+            candidate = _score(api, index, title, snippet, family="forward_technology")
+            self.assertEqual(candidate["innovation_score"], 0, msg=title)
+            self.assertEqual(candidate["forward_evidence_bonus"], 0, msg=title)
+
+    def test_quantified_benefit_requires_associated_benefit_language(self):
+        api = _selector_api()
+        self.assertTrue(
+            api["_has_quantified_benefit_evidence"](
+                "The pilot reduces traction energy consumption by 15%.",
+                ["reduces traction energy consumption"],
+            )
+        )
+        self.assertFalse(
+            api["_has_quantified_benefit_evidence"](
+                "The pilot reduces traction energy consumption. It covers 20 trains, 5 stations and a 2026 delivery.",
+                ["reduces traction energy consumption"],
+            )
+        )
+
+    def test_forward_evidence_keeps_valuable_candidates_ahead_of_generic_items(self):
+        api = _selector_api()
+        candidates = [
+            _score(api, 30, "A generic AI project", "The metro introduces an AI system.", family="forward_technology"),
+            _score(api, 31, "B new lightweight material", "A metro operator pilots a newly developed lightweight material on rail vehicles, reducing vehicle weight by 12%.", family="forward_technology"),
+            _score(api, 32, "C new low-friction coating", "A subway operator field-tests a new low-friction coating on rail components, reducing wear by 30%.", family="forward_technology"),
+            _score(api, 33, "D new sensing method", "An urban metro validates a new sensing method for tunnel equipment, reducing manual inspection time by 40%.", family="forward_technology"),
+            _score(api, 34, "E moving block capacity", "A metro deploys moving-block operation, increasing line capacity by 20%.", family="forward_technology"),
+            _score(api, 35, "F marketing announcement", "An innovative green smart metro technology was announced.", family="forward_technology"),
+        ]
+        ordered = sorted(candidates, key=api["_python_selection_sort_key"])
+        positions = {item["title"][0]: index for index, item in enumerate(ordered)}
+        for valuable in "BCDE":
+            for generic in "AF":
+                self.assertLess(positions[valuable], positions[generic])
 
 
 if __name__ == "__main__":

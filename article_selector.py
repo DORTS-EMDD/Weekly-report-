@@ -403,6 +403,29 @@ INNOVATION_QUANTIFIED_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 
+INNOVATION_FORWARD_NOVELTY_TERMS = [
+    "novel", "first application", "first use", "emerging technology",
+    "new material", "new coating", "new low-friction coating", "new low friction coating",
+    "new sensing method", "new manufacturing method",
+]
+
+INNOVATION_FORWARD_VALIDATION_TERMS = [
+    "pilots", "validates", "field-test", "field-tests", "operational test",
+    "prototype tested", "in-service trial", "demonstration project", "installed",
+]
+
+INNOVATION_FORWARD_BENEFIT_TERMS = [
+    "reduce energy use", "reducing energy use", "reduce vehicle weight", "reducing vehicle weight",
+    "reduce mass", "reducing mass", "reduce friction", "reducing friction", "reduce wear",
+    "reducing wear", "reduce vibration", "reducing vibration", "extending service life",
+    "improving reliability", "improving efficiency", "improving safety", "increasing capacity",
+]
+
+INNOVATION_QUANTIFIED_BENEFIT_PATTERN = re.compile(
+    r"(?:\d+(?:\.\d+)?\s*(?:%|percent(?:age)?(?:\s+points?)?)|\bby\s+\d+(?:\.\d+)?\s*(?:%|percent(?:age)?(?:\s+points?)?)?)",
+    flags=re.IGNORECASE,
+)
+
 FORWARD_GATE_APPLICATION_OBJECT_TERMS = [
     "rolling stock", "rail vehicle", "rail vehicles", "bogie", "wheel", "rail component",
     "rail components", "track", "tunnel", "station", "platform", "traction power",
@@ -2293,42 +2316,90 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return [term for term in terms if _contains_any_term(text, [term])]
 
 
+    def _has_quantified_benefit_evidence(text: str, benefit_terms: list[str]) -> bool:
+        normalized_text = (text or "").casefold()
+        for term in benefit_terms:
+            normalized_term = term.casefold()
+            for match in re.finditer(re.escape(normalized_term), normalized_text):
+                window_start = max(0, match.start() - 80)
+                window_end = min(len(normalized_text), match.end() + 80)
+                if INNOVATION_QUANTIFIED_BENEFIT_PATTERN.search(normalized_text[window_start:window_end]):
+                    return True
+        return False
+
+
     def _compute_innovation_score(candidate: dict) -> dict:
         gate_info = evaluate_category_gates(candidate)
+        is_forward_candidate = candidate.get("search_family") == "forward_technology"
+        passes_forward_gate = bool(
+            is_forward_candidate and _passes_forward_technology_gate(candidate)
+        )
         is_technical_candidate = (
             gate_info.get("primary_category") == "技術新知"
-            and _passes_technical_triad(candidate)
+            and (_passes_technical_triad(candidate) or passes_forward_gate)
         )
         if not is_technical_candidate:
-            return {
+            payload = {
                 "innovation_score": 0,
                 "innovation_signals": [],
                 "innovation_level": "C",
                 "innovation_bonus": 0,
             }
+            if is_forward_candidate:
+                payload.update({
+                    "novelty_evidence": False,
+                    "validation_evidence": False,
+                    "benefit_evidence": False,
+                    "quantified_benefit": False,
+                    "forward_evidence_bonus": 0,
+                })
+            return payload
 
         text = _candidate_selection_text(candidate)
-        novelty_hits = _matched_innovation_terms(text, INNOVATION_NOVELTY_TERMS)
-        application_hits = _matched_innovation_terms(text, INNOVATION_APPLICATION_TERMS)
-        effect_hits = _matched_innovation_terms(text, INNOVATION_EFFECT_TERMS)
+        novelty_terms = INNOVATION_NOVELTY_TERMS + (
+            INNOVATION_FORWARD_NOVELTY_TERMS if is_forward_candidate else []
+        )
+        application_terms = INNOVATION_APPLICATION_TERMS + (
+            INNOVATION_FORWARD_VALIDATION_TERMS if is_forward_candidate else []
+        )
+        effect_terms = INNOVATION_EFFECT_TERMS + (
+            INNOVATION_FORWARD_BENEFIT_TERMS if is_forward_candidate else []
+        )
+        novelty_hits = _matched_innovation_terms(text, novelty_terms)
+        application_hits = _matched_innovation_terms(text, application_terms)
+        effect_hits = _matched_innovation_terms(text, effect_terms)
         special_hits = _matched_innovation_terms(text, INNOVATION_SPECIAL_TECH_TERMS)
         architecture_hits = _matched_innovation_terms(text, INNOVATION_ARCHITECTURE_TERMS)
         non_generic_special_hits = [hit for hit in special_hits if hit.casefold() != "ai"]
-        has_quantified_effect = bool(
-            effect_hits and INNOVATION_QUANTIFIED_PATTERN.search(text)
+        forward_gate_signals = gate_info.get("forward_gate_signals", {}) if is_forward_candidate else {}
+        novelty_evidence = bool(novelty_hits) or bool(forward_gate_signals.get("novelty"))
+        validation_evidence = bool(application_hits) or bool(forward_gate_signals.get("validation"))
+        benefit_evidence = bool(effect_hits) or bool(forward_gate_signals.get("benefit"))
+        has_quantified_benefit = bool(
+            benefit_evidence and _has_quantified_benefit_evidence(text, effect_hits)
         )
+        has_quantified_effect = has_quantified_benefit
 
         score = 0
         signals: list[str] = []
         if novelty_hits:
             score += 5
             signals.append(f"novelty:{','.join(novelty_hits)}")
+        elif is_forward_candidate and novelty_evidence:
+            score += 5
+            signals.append("novelty_evidence")
         if application_hits:
             score += 4
             signals.append(f"application:{','.join(application_hits)}")
+        elif is_forward_candidate and validation_evidence:
+            score += 4
+            signals.append("validation_evidence")
         if effect_hits:
             score += 8
             signals.append(f"effect:{','.join(effect_hits)}")
+        elif is_forward_candidate and benefit_evidence:
+            score += 8
+            signals.append("benefit_evidence")
         if has_quantified_effect:
             score += 5
             signals.append("quantified_effect")
@@ -2342,14 +2413,31 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             score += 4
             signals.append(f"architecture:{','.join(architecture_hits)}")
 
+        forward_evidence_bonus = 0
+        if is_forward_candidate and passes_forward_gate and all(
+            (novelty_evidence, validation_evidence, benefit_evidence)
+        ):
+            forward_evidence_bonus = 4
+            score += forward_evidence_bonus
+            signals.append("forward_evidence_bonus")
+
         score = min(30, score)
         innovation_level = "A" if score >= 15 else "B"
-        return {
+        payload = {
             "innovation_score": score,
             "innovation_signals": signals,
             "innovation_level": innovation_level,
             "innovation_bonus": min(12, int(round(score * 0.4))),
         }
+        if is_forward_candidate:
+            payload.update({
+                "novelty_evidence": novelty_evidence,
+                "validation_evidence": validation_evidence,
+                "benefit_evidence": benefit_evidence,
+                "quantified_benefit": has_quantified_benefit,
+                "forward_evidence_bonus": forward_evidence_bonus,
+            })
+        return payload
 
 
     def score_news_candidate(candidate: dict) -> dict:
@@ -2621,6 +2709,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "innovation_signals",
             "innovation_level",
             "innovation_bonus",
+            "novelty_evidence",
+            "validation_evidence",
+            "benefit_evidence",
+            "quantified_benefit",
+            "forward_evidence_bonus",
             "quality_score",
             "final_selection_score",
             "passes_forward_technology_gate",
@@ -3734,6 +3827,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "infer_preliminary_type": infer_preliminary_type,
         "build_candidate_flags": build_candidate_flags,
         "_compute_innovation_score": _compute_innovation_score,
+        "_has_quantified_benefit_evidence": _has_quantified_benefit_evidence,
         "score_news_candidate": score_news_candidate,
         "_candidate_score_fingerprint": _candidate_score_fingerprint,
         "annotate_candidate_for_scheme_d": annotate_candidate_for_scheme_d,
