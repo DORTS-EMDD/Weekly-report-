@@ -33,7 +33,7 @@ class DemoCacheAndReportPathTests(unittest.TestCase):
             "sanitize_report_text": lambda text: text,
             "enforce_research_section": lambda text, candidates: text,
             "normalize_final_report_md": lambda text: text,
-            "apply_final_report_footer": lambda text, candidates: text,
+            "apply_final_report_footer": lambda text, candidates, **kwargs: text,
         }
         with mock.patch.object(app, "REPORTS_DIR", report_dir):
             with mock.patch.multiple(app, **{

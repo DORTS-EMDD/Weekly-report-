@@ -303,6 +303,7 @@ st.session_state["_app_source_hash"] = current_app_hash
 
 # ── 日期與常數 ──────────────────────────────────────────────
 today = datetime.date.today()
+DEMO_REPORT_DATE = datetime.date(2026, 7, 7)
 APP_DIR = Path(__file__).resolve().parent
 REPORTS_DIR = APP_DIR / "reports"
 
@@ -1549,13 +1550,18 @@ def final_report_statistics_line(report_md: str, journal_candidates: list[dict] 
     )
 
 
-def apply_final_report_footer(report_md: str, journal_candidates: list[dict] | None = None) -> str:
+def apply_final_report_footer(
+    report_md: str,
+    journal_candidates: list[dict] | None = None,
+    *,
+    report_date: datetime.date | None = None,
+) -> str:
     return service_apply_final_report_footer(
         report_md,
         journal_candidates,
         selected_types=selected_types,
         include_research_supplement=include_research_supplement,
-        today=today,
+        today=report_date or today,
     )
 
 
@@ -2023,7 +2029,7 @@ def load_demo_report_cache() -> tuple[str, bytes | None, dict]:
     report_text = remove_internal_candidate_markers(sanitize_report_text(report_text))
     report_text = enforce_research_section(report_text, [])
     report_text = normalize_final_report_md(report_text)
-    report_text = apply_final_report_footer(report_text, [])
+    report_text = apply_final_report_footer(report_text, [], report_date=DEMO_REPORT_DATE)
 
     try:
         demo_pdf_exists = demo_pdf_path.exists()

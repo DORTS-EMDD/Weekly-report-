@@ -16,7 +16,7 @@ import streamlit_app as app
 
 # 舊 Golden 無對應歷史 fixture；新基準來自 tracked demo_debug.json 與目前正式後處理流程。
 EXPECTED_DEMO_REPORT_SHA256 = (
-    "3379819ce523eb8248a4fd5c52a9b5f24a7e9818aa88d19efc5f33df65c98e8d"
+    "662744d89a2192435db6e8ad938d6488429e4cf2beba09332feb97bf79e33832"
 )
 EXPECTED_DEMO_PDF_SHA256 = (
     "cc8cbda3e961656c5b2bed177f19a24d26cb397866df715c4e7dccfd7e83dd66"
@@ -49,6 +49,7 @@ class DemoModeRegressionTests(unittest.TestCase):
         self.assertTrue(report_md.strip())
         self.assertTrue(report_md.lstrip().startswith("# "))
         self.assertIn("📊 本期統計", report_md)
+        self.assertIn("⏰ 報告產出時間：2026年07月07日 週二", report_md)
         self.assertNotIn("candidate_id", report_md)
         self.assertNotIn("[[candidate", report_md)
 
