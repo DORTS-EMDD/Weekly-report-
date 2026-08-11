@@ -192,6 +192,7 @@ from pdf_exporter import (
 from email_service import send_streamlit_email
 from config import *
 import article_selector as selector_service
+import report_workflow_service as workflow_service
 from article_selector import build_selector_api, REPORT_SELECTION_DEBUG_DEFAULT
 from article_processor import (
     _parse_pub_date, _is_recent, _source_tuple, _host_matches, _domain_from_url,
@@ -476,6 +477,25 @@ report_title = run_settings.report_title
 is_global_scope = run_settings.is_global_scope
 active_regions = run_settings.active_regions
 report_scope_label = run_settings.report_scope_label
+
+
+def _workflow_config() -> workflow_service.WorkflowConfig:
+    return workflow_service.WorkflowConfig(
+        today=today,
+        lookback_days=lookback_int,
+        selected_types=list(selected_types),
+        active_regions=list(active_regions),
+        is_global_scope=is_global_scope,
+        standards_enabled=standards_enabled,
+        include_research_supplement=include_research_supplement,
+        fast_mode_enabled=fast_mode_enabled,
+        date_range=date_range,
+        report_title=report_title,
+        report_scope_label=report_scope_label,
+        report_period_label=report_period_label,
+        research_supplement_period_label=research_supplement_period_label,
+        research_supplement_start_date=research_supplement_start_date,
+    )
 
 
 def _formal_report_topic_labels(report_types: list[str]) -> list[str]:
@@ -921,6 +941,17 @@ def build_pipeline_debug_stats(
     }
 
 
+def _workflow_dependencies(*, prefetch_enabled: bool) -> workflow_service.WorkflowDependencies:
+    return workflow_service.WorkflowDependencies(
+        ddgs_client_factory=DDGS,
+        feedparser_module=feedparser,
+        http_session_factory=create_requests_session,
+        prefetch_enabled=prefetch_enabled,
+        debug_stats_builder=build_pipeline_debug_stats if prefetch_enabled else None,
+        query_metadata=dict(globals().get("LAST_DDGS_QUERY_METADATA", {}) or {}),
+    )
+
+
 _selector_api = build_selector_api(
     selected_types=selected_types, active_regions=active_regions,
     lookback_days=lookback_days, lookback_int=lookback_int,
@@ -1073,7 +1104,11 @@ _service_select_candidates_by_python = _selector_api["select_candidates_by_pytho
 
 def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
     global LAST_PYTHON_SELECTION_DEBUG
-    selected = _service_select_candidates_by_python(model_candidates)
+    runtime = workflow_service.make_runtime(
+        _workflow_config(),
+        _workflow_dependencies(prefetch_enabled=False),
+    )
+    selected = runtime.select_candidates(model_candidates)
     LAST_PYTHON_SELECTION_DEBUG = selector_service.LAST_PYTHON_SELECTION_DEBUG
     return selected
 
@@ -1083,117 +1118,12 @@ def _profile_timing_add(timings: dict | None, key: str, elapsed: float) -> None:
         timings[key] = float(timings.get(key, 0.0) or 0.0) + max(0.0, elapsed)
 
 
-def _profile_call(timings: dict, key: str, function, *args):
-    started = time.perf_counter()
-    try:
-        return function(*args)
-    finally:
-        _profile_timing_add(timings, key, time.perf_counter() - started)
-
-
-def _prepare_candidate_objects(parsed_candidates: list[dict], parsing_seconds: float = 0.0) -> dict:
-    pool_started = time.perf_counter()
-    candidate_pool_timings = {
-        "unit": "seconds",
-        "parsing": parsing_seconds,
-        "region_detection": 0.0,
-        "text_normalization": 0.0,
-        "page_type": 0.0,
-        "category_gates": 0.0,
-        "scoring": 0.0,
-        "event_fingerprint": 0.0,
-        "dedupe": 0.0,
-        "preliminary_filter": 0.0,
-        "prefetch": 0.0,
-        "total": 0.0,
-        "candidate_count": len(parsed_candidates or []),
-    }
-    raw_candidates: list[dict] = []
-    hard_excluded_candidates: list[dict] = []
-    hard_exclusion_stats: dict[str, int] = {}
-    for candidate in parsed_candidates or []:
-        _profile_call(candidate_pool_timings, "region_detection", _canonical_candidate_region, candidate)
-        _profile_call(candidate_pool_timings, "text_normalization", _candidate_selection_text, candidate)
-        page_type, page_type_reason = _profile_call(candidate_pool_timings, "page_type", _candidate_page_type, candidate)
-        candidate["page_type"] = page_type
-        candidate["page_type_reason"] = page_type_reason
-        candidate.update(_profile_call(candidate_pool_timings, "category_gates", evaluate_category_gates, candidate))
-        hard_reason = _profile_call(candidate_pool_timings, "preliminary_filter", hard_low_value_candidate_reason, candidate)
-        if hard_reason:
-            hard_excluded_candidates.append(annotate_candidate_for_scheme_d(candidate, hard_reason, candidate_pool_timings))
-            hard_exclusion_stats[hard_reason] = hard_exclusion_stats.get(hard_reason, 0) + 1
-        else:
-            raw_candidates.append(annotate_candidate_for_scheme_d(candidate, profile_timings=candidate_pool_timings))
-
-    deduped_candidates, dedupe_stats = _profile_call(candidate_pool_timings, "dedupe", dedupe_candidates, raw_candidates)
-    prefetch_started = time.perf_counter()
-    prefetch_stats = prefetch_candidates_before_filter(deduped_candidates)
-    _profile_timing_add(candidate_pool_timings, "prefetch", time.perf_counter() - prefetch_started)
-    filtered_candidates: list[dict] = []
-    excluded_candidates: list[dict] = hard_excluded_candidates.copy()
-    exclusion_stats: dict[str, int] = hard_exclusion_stats.copy()
-
-    for candidate in deduped_candidates:
-        if candidate.get("prefetch_status") == "success":
-            refreshed = annotate_candidate_for_scheme_d(candidate, profile_timings=candidate_pool_timings)
-            candidate.clear()
-            candidate.update(refreshed)
-        keep, reason = _profile_call(candidate_pool_timings, "preliminary_filter", preliminary_filter_candidate, candidate)
-        if keep:
-            candidate["exclude_reason"] = ""
-            candidate["final_exclude_reason"] = ""
-            candidate["selection_stage"] = "candidate_pool"
-            filtered_candidates.append(candidate)
-        else:
-            candidate["exclude_reason"] = reason
-            candidate["final_exclude_reason"] = reason
-            candidate["selection_stage"] = "excluded"
-            excluded_candidates.append(candidate)
-            exclusion_stats[reason] = exclusion_stats.get(reason, 0) + 1
-
-    filtered_candidates = sorted(
-        filtered_candidates,
-        key=lambda item: (
-            -int(item.get("python_score", 0) or 0),
-            _source_tier_rank(item.get("source_tier", "C_media")),
-            _quality_rank(item.get("source_quality", "B")),
-            0 if item.get("source_type") in {"官方 RSS", "Google News 代理"} else 1,
-            -_date_sort_key(item),
-        ),
-    )
-    candidate_limit = min(get_selection_candidate_limit(lookback_int, fast_mode=fast_mode_enabled), MAX_SELECTION_CANDIDATES)
-    model_candidates = [dict(item, id=idx, candidate_id=idx) for idx, item in enumerate(filtered_candidates, 1)]
-    pipeline_debug_stats = build_pipeline_debug_stats(raw_candidates, deduped_candidates, model_candidates, excluded_candidates, prefetch_stats)
-    candidate_pool_timings["total"] = time.perf_counter() - pool_started + parsing_seconds
-    for key, value in list(candidate_pool_timings.items()):
-        if isinstance(value, float):
-            candidate_pool_timings[key] = round(value, 4)
-    pipeline_debug_stats["candidate_pool_timings"] = candidate_pool_timings
-    candidate_cards = [build_candidate_card(candidate) for candidate in model_candidates[:candidate_limit]]
-    return {
-        "raw_candidates": raw_candidates,
-        "deduped_candidates": deduped_candidates,
-        "filtered_candidates": model_candidates,
-        "excluded_candidates": excluded_candidates,
-        "model_candidates": model_candidates,
-        "candidate_cards": candidate_cards,
-        "candidate_card_limit": candidate_limit,
-        "dedupe_stats": dedupe_stats,
-        "prefetch_stats": prefetch_stats,
-        "exclusion_stats": exclusion_stats,
-        "pipeline_debug_stats": pipeline_debug_stats,
-        "candidate_pool_timings": candidate_pool_timings,
-        "raw_count": len(raw_candidates),
-        "deduped_count": len(deduped_candidates),
-        "filtered_count": len(model_candidates),
-    }
-
-
 def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
-    parsing_started = time.perf_counter()
-    parsed_candidates = parse_rss_candidates(raw_rss) + parse_ddg_candidates(raw_ddg)
-    parsing_seconds = time.perf_counter() - parsing_started
-    return _prepare_candidate_objects(parsed_candidates, parsing_seconds)
+    runtime = workflow_service.make_runtime(
+        _workflow_config(),
+        _workflow_dependencies(prefetch_enabled=True),
+    )
+    return runtime.prepare_candidate_pool(raw_rss, raw_ddg)
 
 
 def _report_postprocess_context():
@@ -1508,11 +1438,15 @@ def collect_journal_candidates(status_text=None) -> tuple[list[dict], list[dict]
 
 # V18.2 Prompt-only 測試版：僅調整正式報告撰寫 Prompt，不變更搜尋、選題、評分、去重及輸出流程。
 def build_report_prompt(selected_candidates: list[dict], journal_candidates: list[dict], search_count: int) -> str:
-    return service_build_report_prompt(
+    return workflow_service.build_report_prompt(
         selected_candidates,
         journal_candidates,
         search_count,
-        context=_report_prompt_context(),
+        config=_workflow_config(),
+        runtime=workflow_service.make_runtime(
+            _workflow_config(),
+            _workflow_dependencies(prefetch_enabled=False),
+        ),
     )
 
 _extract_maiagent_text = extract_maiagent_text
@@ -2375,23 +2309,20 @@ if generate_btn:
 
             status_text.text("正在進行報告撰寫")
             pdf_stage_start = time.perf_counter()
-            validated_report = sanitize_report_text(raw_report)
-            validated_report = enforce_research_section(validated_report, journal_candidates)
-            validated_report = ensure_journal_summary_conclusion(validated_report, journal_candidates)
-            validated_report = normalize_final_report_md(validated_report)
-            validated_report = repair_journal_dates_in_report(validated_report, journal_candidates)
-            validated_report = normalize_journal_section_format(validated_report, journal_candidates)
-            validated_report, dropped_selected_candidates = restore_missing_selected_report_items(
-                validated_report, selected_candidates
+            postprocess_runtime = workflow_service.make_runtime(
+                _workflow_config(),
+                _workflow_dependencies(prefetch_enabled=False),
             )
-            reconciliation_diagnostics = dict(LAST_REPORT_ID_VALIDATION)
-            validated_report = repair_report_region_lines(validated_report, selected_candidates)
-            validated_report = repair_generic_report_titles(validated_report, selected_candidates)
-            validated_report = merge_operational_report_sections(validated_report)
-            validated_report = normalize_report_section_numbering(validated_report)
-            validated_report = ensure_supplemental_sources_in_report(validated_report, selected_candidates)
-            validated_report = remove_missing_data_disclaimers(validated_report)
-            validated_report = insert_annual_observation_section(validated_report)
+            postprocess_result = postprocess_runtime.postprocess_report_with_diagnostics(
+                raw_report,
+                selected_candidates,
+                journal_candidates,
+                id_validation_target=LAST_REPORT_ID_VALIDATION,
+            )
+            validated_report = postprocess_result["validated_report"]
+            clean_report = postprocess_result["clean_report"]
+            dropped_selected_candidates = postprocess_result["dropped_candidates"]
+            reconciliation_diagnostics = dict(postprocess_result["id_validation"])
 
             # Internal IDs remain available through reconciliation and count validation.
             report_id_validation_before_clean = validate_report_candidate_ids(
@@ -2403,10 +2334,6 @@ if generate_btn:
                 and validated_report_count == len(selected_candidates)
             )
 
-            # Everything below this boundary is public report content.
-            clean_report = remove_internal_candidate_markers(validated_report)
-            clean_report = normalize_formal_report_title(clean_report)
-            clean_report = apply_final_report_footer(clean_report, journal_candidates)
             long_term_coverage = build_final_report_coverage_warning(clean_report, lookback_int, today)
             pdf_bytes = try_markdown_to_pdf_bytes(clean_report)
             dropped_selected_ids = [int(item.get("id", 0) or 0) for item in dropped_selected_candidates]

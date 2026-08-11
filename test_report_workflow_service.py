@@ -1,0 +1,223 @@
+import datetime
+import importlib
+import unittest
+from copy import deepcopy
+from unittest import mock
+
+import report_workflow_service as workflow_service
+import streamlit_app as app
+
+
+def _fixture_config(today: datetime.date | None = None) -> workflow_service.WorkflowConfig:
+    today = today or datetime.date(2026, 8, 11)
+    return workflow_service.WorkflowConfig(
+        today=today,
+        lookback_days=7,
+        selected_types=["技術新知", "重大事故", "營運政策", "營運爭議"],
+        active_regions=["美國"],
+        is_global_scope=True,
+        standards_enabled=False,
+        include_research_supplement=False,
+        fast_mode_enabled=False,
+        date_range="2026年08月05日 至 2026年08月11日",
+        report_title="fixture",
+        report_scope_label="全球",
+        report_period_label="週報",
+    )
+
+
+def _rss_fixture(today: datetime.date) -> str:
+    rows = [
+        (
+            "Company wins CBTC contract for Metro Line X",
+            "The company won the CBTC contract for Metro Line X.",
+        ),
+        (
+            "Metro orders 20 new trains",
+            "The metro ordered 20 new trains.",
+        ),
+        (
+            "Feasibility study awarded for new depot",
+            "A feasibility study was awarded for a new depot.",
+        ),
+        (
+            "Construction begins on metro signalling upgrade",
+            "Construction begins on a metro signalling upgrade.",
+        ),
+        (
+            "Metro deploys CBTC with moving-block operation, increasing capacity by 20%",
+            "The metro rail system deployed moving-block CBTC and increased capacity by 20%.",
+        ),
+        (
+            "New metro trains use SiC traction inverters reducing traction energy consumption",
+            "The metro rail trains use silicon carbide traction inverters to reduce traction energy consumption.",
+        ),
+        (
+            "Pilot uses onboard sensors for continuous track condition monitoring",
+            "A metro rail pilot uses onboard sensors for continuous track condition monitoring.",
+        ),
+    ]
+    lines = ["【RSS來源：Railway-News】"]
+    for index, (title, snippet) in enumerate(rows, 1):
+        lines.extend([
+            f"日期：{(today - datetime.timedelta(days=1)).isoformat()}",
+            f"標題：{title}",
+            f"摘要：{snippet}",
+            f"連結：https://railway-news.com/fixture-{index}",
+            "",
+        ])
+    return "\n".join(lines)
+
+
+def _candidate(candidate_id: int, category: str = "技術新知") -> dict:
+    url = f"https://example.com/fixture/{candidate_id}"
+    candidate = {
+        "id": candidate_id,
+        "candidate_id": candidate_id,
+        "title": "Metro deploys CBTC moving-block control",
+        "snippet": "The metro rail system deployed moving-block CBTC after testing.",
+        "date": app.today.isoformat(),
+        "classification": category,
+        "preliminary_type": category,
+        "region": "美國",
+        "query_region": "美國",
+        "source": "Fixture Source",
+        "source_display": "Fixture Source",
+        "source_domain": "example.com",
+        "source_href": url,
+        "url": url,
+        "source_tier": "B_professional",
+        "source_quality": "A",
+    }
+    candidate.update(app.evaluate_category_gates(candidate))
+    return candidate
+
+
+class ReportWorkflowServiceTests(unittest.TestCase):
+    def test_automation_project_only_gate_and_technical_retention(self):
+        config = _fixture_config()
+        runtime = workflow_service.make_runtime(
+            config,
+            workflow_service.WorkflowDependencies(prefetch_enabled=False),
+        )
+        pool = runtime.prepare_candidate_pool(_rss_fixture(config.today), "")
+        model_titles = {item["title"] for item in pool["model_candidates"]}
+        excluded_by_title = {
+            item["title"]: item for item in pool["excluded_candidates"]
+        }
+        project_only_titles = {
+            "Company wins CBTC contract for Metro Line X",
+            "Metro orders 20 new trains",
+            "Feasibility study awarded for new depot",
+            "Construction begins on metro signalling upgrade",
+        }
+        technical_titles = {
+            "Metro deploys CBTC with moving-block operation, increasing capacity by 20%",
+            "New metro trains use SiC traction inverters reducing traction energy consumption",
+            "Pilot uses onboard sensors for continuous track condition monitoring",
+        }
+        self.assertTrue(project_only_titles.isdisjoint(model_titles))
+        self.assertTrue(technical_titles.issubset(model_titles))
+        for title in project_only_titles:
+            self.assertFalse(excluded_by_title[title]["category_gates"]["technology"])
+
+    def test_streamlit_and_automation_candidate_pool_match_offline(self):
+        raw_rss = _rss_fixture(app.today)
+        config = app._workflow_config()
+        shared_pool = workflow_service.make_runtime(
+            config,
+            workflow_service.WorkflowDependencies(prefetch_enabled=False),
+        ).prepare_candidate_pool(raw_rss, "")
+        original_dependencies = app._workflow_dependencies
+        try:
+            app._workflow_dependencies = lambda **_kwargs: workflow_service.WorkflowDependencies(
+                prefetch_enabled=False,
+            )
+            streamlit_pool = app.prepare_candidate_pool(raw_rss, "")
+        finally:
+            app._workflow_dependencies = original_dependencies
+
+        def summarize(pool):
+            return [
+                (
+                    item["title"],
+                    item.get("category_gates", {}).get("technology", False),
+                    item.get("exclude_reason", ""),
+                )
+                for item in pool["model_candidates"] + pool["excluded_candidates"]
+            ]
+
+        self.assertEqual(summarize(streamlit_pool), summarize(shared_pool))
+
+    def test_streamlit_and_automation_selection_match(self):
+        original_types = app.selected_types
+        try:
+            app.selected_types = ["技術新知", "重大事故", "營運政策", "營運爭議"]
+            candidates = [_candidate(1), _candidate(2, "營運政策")]
+            config = app._workflow_config()
+            expected = workflow_service.select_candidates_by_python(
+                deepcopy(candidates),
+                config=config,
+            )
+            actual = app.select_candidates_by_python(deepcopy(candidates))
+        finally:
+            app.selected_types = original_types
+        self.assertEqual(
+            [item.get("id") for item in actual],
+            [item.get("id") for item in expected],
+        )
+
+    def test_streamlit_and_automation_postprocess_match(self):
+        original_validation = dict(app.LAST_REPORT_ID_VALIDATION)
+        candidate = _candidate(1)
+        raw_report = "\n".join([
+            "<!-- candidate_id: 1 -->",
+            "🔹 [技術新知] 都市軌道 CBTC 移動閉塞控制部署",
+            "• 發布/事件日期：2026-08-10",
+            "• 國家/地區：美國",
+            "• 相關機電系統：CBTC",
+            "• 事件摘要：",
+            "都市軌道系統導入移動閉塞控制並完成測試。",
+            "• 臺北捷運局啟示：可供系統整合研析參考。",
+            "• 資料來源：Fixture Source",
+        ])
+        try:
+            config = app._workflow_config()
+            shared = workflow_service.make_runtime(
+                config,
+                workflow_service.WorkflowDependencies(prefetch_enabled=False),
+            ).postprocess_report(raw_report, [candidate])[0]
+            streamlit = app.sanitize_report_text(raw_report)
+            streamlit = app.enforce_research_section(streamlit, [])
+            streamlit = app.ensure_journal_summary_conclusion(streamlit, [])
+            streamlit = app.normalize_final_report_md(streamlit)
+            streamlit = app.repair_journal_dates_in_report(streamlit, [])
+            streamlit = app.normalize_journal_section_format(streamlit, [])
+            streamlit, _ = app.restore_missing_selected_report_items(streamlit, [candidate])
+            streamlit = app.repair_report_region_lines(streamlit, [candidate])
+            streamlit = app.repair_generic_report_titles(streamlit, [candidate])
+            streamlit = app.merge_operational_report_sections(streamlit)
+            streamlit = app.normalize_report_section_numbering(streamlit)
+            streamlit = app.ensure_supplemental_sources_in_report(streamlit, [candidate])
+            streamlit = app.remove_missing_data_disclaimers(streamlit)
+            streamlit = app.insert_annual_observation_section(streamlit)
+            streamlit = app.remove_internal_candidate_markers(streamlit)
+            streamlit = app.normalize_formal_report_title(streamlit)
+            streamlit = app.apply_final_report_footer(streamlit, [])
+        finally:
+            app.LAST_REPORT_ID_VALIDATION.clear()
+            app.LAST_REPORT_ID_VALIDATION.update(original_validation)
+        self.assertEqual(streamlit, shared)
+
+    def test_main_import_is_safe_and_does_not_run_workflow(self):
+        with mock.patch("report_workflow_service.run_report_workflow") as run_workflow:
+            import main
+
+            importlib.reload(main)
+        run_workflow.assert_not_called()
+        self.assertFalse(hasattr(main, "RSS_SOURCES"))
+        self.assertFalse(hasattr(main, "DDGS"))
+
+
+if __name__ == "__main__":
+    unittest.main()
