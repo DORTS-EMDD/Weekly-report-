@@ -24,12 +24,14 @@ from config import (
     DDGS_QUERY_CHAR_LIMIT,
     DDGS_REGIONAL_QUERY_LIMIT,
     DDGS_RESULTS_PER_QUERY,
+    DEFAULT_NEWS_SCOPE,
     LOW_VALUE_EXCLUDED_HOSTS,
     PORTAL_SOCIAL_LOW_VALUE_DOMAINS,
     REGION_SEARCH_TERMS,
     STANDARDS_WATCHLIST,
 )
 from search_queries import (
+    DOMESTIC_METRO_QUERY_SPECS,
     FORWARD_TECHNOLOGY_QUERY_SPECS,
     QUERY_FAMILY_BY_TYPE_INDEX,
     REGION_QUERY_LANGUAGES,
@@ -58,6 +60,7 @@ class DdgsSearchContext:
     perf_counter: Callable[[], float] = time.perf_counter
     sleep: Callable[[float], None] = time.sleep
     random_uniform: Callable[[float, float], float] = random.uniform
+    news_scope: str = DEFAULT_NEWS_SCOPE
 
 
 DDGS_ERROR_STATUSES = {"http_403", "rate_limited_429", "timeout", "other_exception"}
@@ -138,6 +141,8 @@ def _query_with_period(query: str, *, context: DdgsSearchContext) -> str:
 
 def _active_query_specs(family: str) -> list[dict]:
     specs = [spec for spec in SEARCH_QUERY_SPECS if spec.get("family") == family]
+    if family == "domestic_metro":
+        specs.extend(DOMESTIC_METRO_QUERY_SPECS)
     if family == "forward_technology":
         specs.extend(FORWARD_TECHNOLOGY_QUERY_SPECS)
     return specs
@@ -220,6 +225,7 @@ def build_search_queries(
         lang: str = "en",
         use_news: bool = True,
         query_region: str = "global",
+        domestic_topic: str = "",
     ) -> bool:
         if len(queries) >= query_limit:
             return False
@@ -237,6 +243,8 @@ def build_search_queries(
             "requested_max_results": DDGS_RESULTS_PER_QUERY,
             "planned_index": len(queries),
         }
+        if domestic_topic:
+            context.query_metadata[final_query]["domestic_topic"] = domestic_topic
         if use_news:
             news_indices.add(len(queries))
         return True
@@ -247,7 +255,20 @@ def build_search_queries(
     if include_forward_technology:
         content_families.insert(0, "forward_technology")
 
-    if context.is_global_scope:
+    if context.news_scope in {"domestic", "both"}:
+        selected_type_set = set(context.selected_types)
+        for spec in DOMESTIC_METRO_QUERY_SPECS:
+            if selected_type_set.intersection(spec.get("types", ())):
+                _add(
+                    spec.get("query", ""),
+                    family="domestic_metro",
+                    lang=spec.get("lang", "zh"),
+                    use_news=bool(spec.get("use_news", True)),
+                    query_region="domestic",
+                    domestic_topic=spec.get("domestic_topic", ""),
+                )
+
+    if context.news_scope != "domestic" and context.is_global_scope:
         for family in content_families:
             for spec in _active_query_specs(family):
                 _add(
@@ -256,7 +277,7 @@ def build_search_queries(
                     lang=spec.get("lang", "en"),
                     use_news=bool(spec.get("use_news", True)),
                 )
-    elif content_families and context.active_regions:
+    elif context.news_scope != "domestic" and content_families and context.active_regions:
         regions = list(dict.fromkeys(context.active_regions))
         official_reserve = 1 if include_official else 0
         country_budget = max(0, query_limit - official_reserve)
@@ -284,7 +305,7 @@ def build_search_queries(
                     query_region=region,
                 )
 
-    if include_official:
+    if context.news_scope != "domestic" and include_official:
         official_spec = next(iter(_active_query_specs("official_investigation")), None)
         if official_spec:
             _add(
@@ -295,7 +316,7 @@ def build_search_queries(
                 query_region="global",
             )
 
-    if len(ADVANCED_TYPES) > 4 and ADVANCED_TYPES[4] in context.selected_types:
+    if context.news_scope != "domestic" and len(ADVANCED_TYPES) > 4 and ADVANCED_TYPES[4] in context.selected_types:
         for query in _standard_search_queries():
             if not _add(query, family="standards_update", lang="en", use_news=True):
                 break
@@ -400,7 +421,13 @@ def _ddgs_exception_status(exc: Exception) -> str:
     return "other_exception"
 
 
-def _basic_search_url_exclusion_reason(title: str, href: str, candidate_text: str) -> str:
+def _basic_search_url_exclusion_reason(
+    title: str,
+    href: str,
+    candidate_text: str,
+    *,
+    news_scope: str = DEFAULT_NEWS_SCOPE,
+) -> str:
     if not title:
         return "empty_title"
     if not href:
@@ -417,7 +444,7 @@ def _basic_search_url_exclusion_reason(title: str, href: str, candidate_text: st
         for domain in LOW_VALUE_EXCLUDED_HOSTS | PORTAL_SOCIAL_LOW_VALUE_DOMAINS
     ):
         return "blocked_or_low_value_domain"
-    if _is_domestic_taiwan_host(host) or _contains_taiwan_reference(candidate_text):
+    if news_scope == "international" and (_is_domestic_taiwan_host(host) or _contains_taiwan_reference(candidate_text)):
         return "taiwan_news"
     return ""
 
@@ -516,7 +543,12 @@ def _run_single_query(
                         f"{title} {body}",
                     )
                     candidate_text = f"{title} {body} {href} {item_date}"
-                    reason = _basic_search_url_exclusion_reason(title, href, candidate_text)
+                    reason = _basic_search_url_exclusion_reason(
+                        title,
+                        href,
+                        candidate_text,
+                        news_scope=context.news_scope,
+                    )
                     if reason:
                         status_row["excluded_counts_by_reason"][reason] = status_row["excluded_counts_by_reason"].get(reason, 0) + 1
                         continue

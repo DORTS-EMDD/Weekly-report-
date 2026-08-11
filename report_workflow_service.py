@@ -31,6 +31,7 @@ from article_selector import build_selector_api
 from config import (
     ADVANCED_TYPES,
     CANDIDATE_SNIPPET_CHARS,
+    DEFAULT_NEWS_SCOPE,
     EMPTY_TEXT_BY_TYPE,
     MAX_SELECTION_CANDIDATES,
     REPORT_SNIPPET_CHARS,
@@ -113,6 +114,7 @@ class WorkflowConfig:
     report_title: str
     report_scope_label: str
     report_period_label: str
+    news_scope: str = DEFAULT_NEWS_SCOPE
     research_supplement_period_label: str = "近 90 天"
     research_supplement_start_date: datetime.date | None = None
 
@@ -173,6 +175,7 @@ class WorkflowRuntime:
             fast_mode_enabled=config.fast_mode_enabled,
             is_global_scope=config.is_global_scope,
             today=config.today,
+            news_scope=config.news_scope,
             _search_family_from_query=self._search_family_from_query,
             _search_language_from_query=self._search_language_from_query,
             create_requests_session=dependencies.http_session_factory,
@@ -235,7 +238,11 @@ class WorkflowRuntime:
             http_session_factory=self.dependencies.http_session_factory,
             fetch_feed_callback=fetch_feed,
             fallback_url_builder=lambda source_url: self._fallback_google_news_url(source_url),
-            url_safety_check=_is_valid_news_url,
+            url_safety_check=lambda url, source_href="": _is_valid_news_url(
+                url,
+                source_href=source_href,
+                news_scope=self.config.news_scope,
+            ),
             known_bad_source_checker=selector["_is_known_bad_official_rss"] if "_is_known_bad_official_rss" in selector else self._known_bad_source,
             parse_pub_date=_parse_pub_date,
             is_recent=_is_recent,
@@ -251,6 +258,7 @@ class WorkflowRuntime:
             dedupe_url=_dedupe_url,
             domain_from_url=_domain_from_url,
             status_callback=self.dependencies.status_callback,
+            news_scope=self.config.news_scope,
         )
 
     def _fallback_google_news_url(self, source_url: str) -> str | None:
@@ -335,6 +343,7 @@ class WorkflowRuntime:
             lookback_int=self.config.lookback_int,
             is_global_scope=self.config.is_global_scope,
             today=self.config.today,
+            news_scope=self.config.news_scope,
             ddgs_client_factory=self.dependencies.ddgs_client_factory,
             query_metadata=self.query_metadata,
             progress_callback=self.dependencies.progress_callback,
@@ -698,6 +707,7 @@ def build_automation_run_config(
     lookback_days: int,
     selected_types: list[str],
     active_regions: list[str],
+    news_scope: str = DEFAULT_NEWS_SCOPE,
 ) -> tuple[WorkflowConfig, dict]:
     scope_mode = "指定先進國家/地區"
     settings = build_run_settings(
@@ -731,6 +741,7 @@ def build_automation_run_config(
         report_title=settings.report_title,
         report_scope_label=settings.report_scope_label,
         report_period_label=settings.report_period_label,
+        news_scope=news_scope,
     )
     run_config = build_current_run_config(
         RunConfigContext(

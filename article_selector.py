@@ -15,6 +15,7 @@ from article_processor import (
     _canonical_candidate_region,
     _contains_any_term,
     _contains_taiwan_reference,
+    _domestic_metro_candidate_info,
     _date_from_url_path,
     _date_sort_key,
     _dedupe_route_line_tokens,
@@ -336,7 +337,7 @@ CORE_METRO_TECHNICAL_TERMS = [
     "儲能", "能源管理", "通訊系統", "無線通訊", "資料傳輸", "月臺門", "月台門",
     "自動收費", "票務系統", "票閘", "車站機電", "空調", "通風", "消防",
     "環境控制", "電扶梯", "電梯", "無障礙機電", "狀態監測", "故障診斷",
-    "預測性維護", "影像辨識", "系統整合", "系統保證", "安全驗證", "介面管理",
+    "預測性維護", "故障預測", "設備故障預測", "智慧維修", "自動巡檢", "影像辨識", "系統整合", "系統保證", "安全驗證", "介面管理",
     "資安", "工控資安", "系統測試", "技術驗證", "投入營運",
 ]
 
@@ -617,6 +618,7 @@ STRICT_HIGH_VALUE_POLICY_TEXT_TERMS = [
     "replacement bus service", "alternative transport", "major engineering works",
     "票務制度", "支付政策", "班距", "營運時間", "容量", "試營運", "系統轉換",
     "全線封閉", "多站封閉", "無障礙改善計畫", "預算核准", "治理決策",
+    "營運制度", "制度調整", "重大營運調整",
 ]
 
 MAJOR_ACCIDENT_SEVERITY_TERMS = [
@@ -892,6 +894,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
     _search_language_from_query = dependencies["_search_language_from_query"]
     create_requests_session = dependencies["create_requests_session"]
     _profile_timing_add = dependencies["_profile_timing_add"]
+    news_scope = dependencies.get("news_scope", DEFAULT_NEWS_SCOPE)
+    if news_scope not in NEWS_SCOPE_OPTIONS:
+        news_scope = DEFAULT_NEWS_SCOPE
 
     def _has_high_value_operational_detail(text: str) -> bool:
         return (
@@ -1307,7 +1312,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if not url:
             return _reject("沒有 URL")
 
-        is_valid, reason = _is_valid_news_url(url, source_href=source_href)
+        is_valid, reason = _is_valid_news_url(
+            url,
+            source_href=source_href,
+            news_scope=news_scope,
+        )
         if not is_valid:
             return _reject(reason)
 
@@ -1335,8 +1344,33 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if page_type != "news_article":
             return _reject(page_type_reason)
 
-        if _contains_taiwan_reference(text):
+        has_taiwan_reference = _contains_taiwan_reference(text)
+        domestic_info = (
+            _domestic_metro_candidate_info(text, source)
+            if news_scope != "international" or has_taiwan_reference
+            else {
+                "domestic_candidate": False,
+                "domestic_system": "",
+                "domestic_filter_reason": "",
+            }
+        )
+        if news_scope != "international" or has_taiwan_reference:
+            candidate.update(domestic_info)
+            candidate["news_scope"] = news_scope
+        if news_scope == "international" and has_taiwan_reference:
             return _reject("國內新聞排除")
+        if news_scope in {"domestic", "both"}:
+            if news_scope == "domestic" or has_taiwan_reference:
+                if not domestic_info.get("domestic_candidate"):
+                    return _reject(f"國內範圍排除：{domestic_info.get('domestic_filter_reason', '非指定國內捷運')}")
+                if _contains_any_term(text, DOMESTIC_SCOPE_EXCLUDED_TERMS) and not _contains_any_term(
+                    text,
+                    SUBSTANTIVE_TECHNICAL_DETAIL_TERMS
+                    + ACCIDENT_SIGNAL_TERMS
+                    + HIGH_VALUE_POLICY_TERMS
+                    + DISPUTE_SIGNAL_TERMS,
+                ):
+                    return _reject("國內規劃、可行性或純土建內容")
 
         if _is_airport_people_mover_only_text(text, source):
             return _reject("機場/航空 people mover 排除")
@@ -1385,7 +1419,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 return _reject("規範更新條件不足")
             return _keep()
 
-        if not is_global_scope:
+        if news_scope == "domestic":
+            pass
+        elif news_scope == "both" and domestic_info.get("domestic_candidate"):
+            pass
+        elif not is_global_scope:
             if candidate_region not in active_regions:
                 if candidate_region in {"國際", "國際研究", "未判定"} and _is_allowed_international_candidate(candidate, text, looks_like_standard):
                     candidate["region"] = "國際"
@@ -3886,6 +3924,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_is_standard_update_query": _is_standard_update_query,
         "_is_standard_update_candidate": _is_standard_update_candidate,
         "_is_allowed_international_candidate": _is_allowed_international_candidate,
+        "_domestic_metro_candidate_info": _domestic_metro_candidate_info,
         "_is_urban_rail_candidate": _is_urban_rail_candidate,
         "_is_tech_news_only_mode": _is_tech_news_only_mode,
         "_is_technical_news_candidate": _is_technical_news_candidate,

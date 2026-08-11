@@ -35,6 +35,7 @@ class RssFeedContext:
     now_provider: Callable[[], datetime.datetime] = (
         lambda: datetime.datetime.now(datetime.timezone.utc)
     )
+    news_scope: str = "international"
 
 
 def _fallback_google_news_url(
@@ -85,7 +86,7 @@ def _items_from_parsed_feed(
 
         candidate_text = f"{title} {desc} {link} {source_href} {pub_str}"
 
-        if context.contains_taiwan_reference(candidate_text):
+        if context.news_scope == "international" and context.contains_taiwan_reference(candidate_text):
             blocked_count += 1
             continue
 

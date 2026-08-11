@@ -7,6 +7,8 @@ RUNTIME_ENV_NAMES = (
     "MAIAGENT_MAX_DDG_CHARS", "DDGS_MAX_WORKERS", "DDGS_MAX_QUERIES", "ENABLE_DDGS",
 )
 REPORT_TYPES = ("技術新知", "重大事故", "營運政策", "營運爭議", "規範更新")
+NEWS_SCOPE_OPTIONS = ("international", "domestic", "both")
+DEFAULT_NEWS_SCOPE = "international"
 
 # Streamlit V19.4 non-sensitive configuration (moved verbatim).
 ADVANCED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議", "規範更新"]
@@ -132,6 +134,11 @@ REGION_SEARCH_TERMS = {
 }
 
 EVENT_REGION_PRIORITY_HINTS: list[tuple[str, list[str]]] = [
+    ("臺北", ["臺北捷運", "台北捷運", "taipei metro", "taipei mrt", "trtc", "北捷", "臺北市政府捷運工程局", "台北市政府捷運工程局"]),
+    ("新北", ["新北捷運", "new taipei metro", "新北輕軌", "new taipei light rail"]),
+    ("桃園", ["桃園捷運", "桃園機場捷運", "taoyuan metro", "taoyuan mrt", "taoyuan airport mrt", "桃捷"]),
+    ("臺中", ["臺中捷運", "台中捷運", "taichung metro", "taichung mrt", "中捷"]),
+    ("高雄", ["高雄捷運", "kaohsiung metro", "kaohsiung mrt", "krtc", "高捷"]),
     ("瑞士", ["basel", "basel tram", "bvb", "zürich", "zurich", "lausanne", "瑞士", "巴塞爾", "蘇黎世", "洛桑"]),
     ("美國", ["austin transit partnership", "austin light rail", "houston", "metrorail", "houston metrorail", "metro rail houston", "wmata", "washington metro", "mta", "nyct", "new york subway", "休士頓", "休斯頓"]),
     ("加拿大", ["vancouver", "translink vancouver", "vancouver translink", "broadway subway", "toronto", "toronto subway", "finch west", "finch west lrt", "metrolinx", "ttc", "skytrain", "溫哥華", "多倫多"]),
@@ -202,6 +209,33 @@ DOMESTIC_EXCLUDED_TERMS = [
     "基隆", "Keelung", "新竹", "Hsinchu", "苗栗", "Miaoli",
     "宜蘭", "Yilan", "花蓮", "Hualien", "台東", "臺東", "Taitung",
     "屏東", "Pingtung",
+]
+
+DOMESTIC_METRO_SYSTEM_TERMS = {
+    "臺北": ["臺北捷運", "台北捷運", "taipei metro", "taipei mrt", "trtc", "北捷", "臺北市政府捷運工程局", "台北市政府捷運工程局"],
+    "新北": ["新北捷運", "new taipei metro", "新北輕軌", "new taipei light rail"],
+    "桃園": ["桃園捷運", "桃園機場捷運", "taoyuan metro", "taoyuan mrt", "taoyuan airport mrt", "桃捷"],
+    "臺中": ["臺中捷運", "台中捷運", "taichung metro", "taichung mrt", "中捷"],
+    "高雄": ["高雄捷運", "kaohsiung metro", "kaohsiung mrt", "krtc", "高捷"],
+    "臺灣": ["台灣捷運", "臺灣捷運", "taiwan metro", "taiwan mrt", "臺灣都市軌道", "台灣都市軌道"],
+}
+
+DOMESTIC_METRO_CONTEXT_TERMS = [
+    "捷運", "metro", "mrt", "light rail", "輕軌", "urban rail", "transit",
+    "line", "station", "train", "fare", "system", "service", "operation",
+    "列車", "車站", "票價", "營運", "服務", "系統", "設備", "維修", "號誌",
+]
+
+DOMESTIC_NON_METRO_TERMS = [
+    "台鐵", "臺鐵", "taiwan railway", "taiwan railways", "tra", "台灣高鐵", "臺灣高鐵",
+    "台灣高鐵", "taiwan high speed rail", "thsr", "高鐵", "公車", "巴士", "bus", "客運",
+    "航空", "aviation", "高速公路", "highway", "道路", "road", "一般鐵路", "regional rail",
+]
+
+DOMESTIC_SCOPE_EXCLUDED_TERMS = [
+    "新線規劃", "新路線規劃", "路網規劃", "可行性研究", "feasibility study", "feasibility",
+    "土建標", "土木工程", "純土建", "civil works", "civil engineering", "construction progress",
+    "工程進度", "工程里程碑",
 ]
 
 TRANSIT_NEWS_TERMS = (
@@ -315,7 +349,7 @@ TECH_NEWS_REQUIRED_TERMS = [
     "自動駕駛", "無人駕駛", "單人駕駛", "號誌", "信號", "月臺門", "月台門",
     "車輛", "列車", "供電", "牽引", "變電站", "通訊", "資安", "即時監控",
     "維修", "機廠", "測試", "試運轉", "系統整合", "列控", "資料治理",
-    "AI 影像分析", "影像分析", "測試驗證",
+    "AI 影像分析", "影像分析", "測試驗證", "故障預測", "設備故障預測", "智慧維修", "自動巡檢",
 ]
 
 TITLE_TECHNICAL_ACTION_TERMS = [

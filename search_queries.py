@@ -70,6 +70,44 @@ SEARCH_QUERY_SPECS = [
     {"family": "official_investigation", "lang": "en", "query": "urban rail metro tram derailment collision fire official investigation safety board", "use_news": False},
 ]
 
+DOMESTIC_METRO_QUERY_SPECS = [
+    {
+        "family": "domestic_metro",
+        "domestic_topic": "technology",
+        "types": ("技術新知",),
+        "lang": "zh",
+        "query": "臺灣 臺北捷運 新北捷運 號誌 CBTC 通訊 AFC 月臺門 車輛 供電",
+    },
+    {
+        "family": "domestic_metro",
+        "domestic_topic": "technology",
+        "types": ("技術新知",),
+        "lang": "zh",
+        "query": "臺灣 桃園捷運 臺中捷運 高雄捷運 維修 狀態監測 故障預測 AI 數位孿生 節能",
+    },
+    {
+        "family": "domestic_metro",
+        "domestic_topic": "major_accident",
+        "types": ("重大事故",),
+        "lang": "zh",
+        "query": "臺灣 捷運 臺北 新北 桃園 臺中 高雄 碰撞 撞車 出軌 脫軌 火災 疏散 重傷 死亡 安全調查",
+    },
+    {
+        "family": "domestic_metro",
+        "domestic_topic": "policy",
+        "types": ("營運政策",),
+        "lang": "zh",
+        "query": "臺灣 捷運 臺北 新北 桃園 臺中 高雄 票價 票務制度 服務制度 營運制度 班距 營運時間 重大營運調整",
+    },
+    {
+        "family": "domestic_metro",
+        "domestic_topic": "dispute",
+        "types": ("營運爭議",),
+        "lang": "zh",
+        "query": "臺灣 捷運 臺北 新北 桃園 臺中 高雄 勞資爭議 合約爭議 服務中斷 仲裁 成本超支 停駛",
+    },
+]
+
 FORWARD_TECHNOLOGY_QUERY_SPECS = [
     {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail light rail tram novel material prototype tested reduce vehicle weight energy consumption"},
     {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail track rail new coating pilot trial reduce friction wear extend service life"},

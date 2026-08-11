@@ -105,7 +105,12 @@ def _is_allowed_host(host: str) -> bool:
     return any(_host_matches(host, domain) for domain in ALLOWED_NEWS_DOMAINS)
 
 
-def _is_valid_news_url(url: str, source_href: str = "") -> tuple[bool, str]:
+def _is_valid_news_url(
+    url: str,
+    source_href: str = "",
+    *,
+    news_scope: str = DEFAULT_NEWS_SCOPE,
+) -> tuple[bool, str]:
     if not url or not url.strip():
         return False, "空網址"
     url = url.strip()
@@ -137,7 +142,7 @@ def _is_valid_news_url(url: str, source_href: str = "") -> tuple[bool, str]:
         return False, "低價值來源或子網域"
     if _is_blocked_host(host):
         return False, "被安全規則排除"
-    if _is_domestic_taiwan_host(host):
+    if _is_domestic_taiwan_host(host) and news_scope == "international":
         return False, "範圍排除"
     if not _is_allowed_host(host):
         return False, "不在來源白名單"
@@ -147,6 +152,50 @@ def _is_valid_news_url(url: str, source_href: str = "") -> tuple[bool, str]:
 def _contains_taiwan_reference(text: str) -> bool:
     text_lower = (text or "").casefold()
     return any(term.casefold() in text_lower for term in DOMESTIC_EXCLUDED_TERMS)
+
+
+def _domestic_metro_candidate_info(text: str, source: str = "") -> dict[str, object]:
+    candidate_text = f"{source} {text}".strip()
+    if not _contains_taiwan_reference(candidate_text):
+        return {
+            "domestic_candidate": False,
+            "domestic_system": "",
+            "domestic_filter_reason": "非臺灣內容",
+        }
+    matched_systems = [
+        system
+        for system, terms in DOMESTIC_METRO_SYSTEM_TERMS.items()
+        if _contains_any_term(candidate_text, terms)
+        and _contains_any_term(candidate_text, DOMESTIC_METRO_CONTEXT_TERMS)
+    ]
+    if not matched_systems:
+        if _contains_any_term(candidate_text, DOMESTIC_NON_METRO_TERMS):
+            reason = "臺鐵、高鐵、一般鐵路、公車、航空或道路內容"
+        else:
+            reason = "非指定臺灣捷運／都市軌道系統"
+        return {
+            "domestic_candidate": False,
+            "domestic_system": "",
+            "domestic_filter_reason": reason,
+        }
+    airport_only_terms = [
+        "airport people mover", "terminal people mover", "機場旅客捷運", "航廈旅客捷運",
+    ]
+    operational_terms = [
+        "train", "rolling stock", "signalling", "signaling", "power supply", "maintenance",
+        "monitoring", "system", "列車", "車輛", "號誌", "供電", "維修", "監測", "系統", "營運",
+    ]
+    if _contains_any_term(candidate_text, airport_only_terms) and not _contains_any_term(candidate_text, operational_terms):
+        return {
+            "domestic_candidate": False,
+            "domestic_system": matched_systems[0],
+            "domestic_filter_reason": "純 airport people mover／航空旅遊內容",
+        }
+    return {
+        "domestic_candidate": True,
+        "domestic_system": matched_systems[0],
+        "domestic_filter_reason": "",
+    }
 
 
 def _contains_any_term(text: str, terms: list[str]) -> bool:
@@ -284,7 +333,7 @@ def _region_guess_from_candidate(candidate: dict) -> str:
     if path_guess != "未判定":
         return path_guess
     query_region = str(candidate.get("query_region", "") or "").strip()
-    if query_region and query_region not in {"global", "unplanned", "未判定", "國際", "國際研究"}:
+    if query_region and query_region not in {"global", "unplanned", "domestic", "未判定", "國際", "國際研究"}:
         return query_region
     query_guess = guess_region_from_text(candidate.get("query", ""))
     return query_guess if query_guess != "未判定" else "未判定"
@@ -322,7 +371,7 @@ def _region_resolution(candidate: dict) -> tuple[str, str, str]:
     if path_guess != "未判定":
         return path_guess, "source_url_path", path_text
     query_region = str(candidate.get("query_region", "") or "").strip()
-    if query_region and query_region not in {"global", "unplanned", "未判定", "國際", "國際研究"}:
+    if query_region and query_region not in {"global", "unplanned", "domestic", "未判定", "國際", "國際研究"}:
         return query_region, "query_region_fallback", query_region
     query_guess = guess_region_from_text(candidate.get("query", ""))
     if query_guess != "未判定":
@@ -608,6 +657,12 @@ def guess_region_from_text(text: str) -> str:
         "韓國": ["korea", "seoul", "韓國", "韩国", "서울"],
         "新加坡": ["singapore", "lta", "smrt", "新加坡"],
         "香港": ["hong kong", "mtr.com.hk", "香港", "港鐵", "港铁"],
+        "臺北": ["taipei metro", "taipei mrt", "trtc", "臺北捷運", "台北捷運", "北捷"],
+        "新北": ["new taipei metro", "new taipei light rail", "新北捷運", "新北輕軌"],
+        "桃園": ["taoyuan metro", "taoyuan mrt", "taoyuan airport mrt", "桃園捷運", "桃園機場捷運", "桃捷"],
+        "臺中": ["taichung metro", "taichung mrt", "臺中捷運", "台中捷運", "中捷"],
+        "高雄": ["kaohsiung metro", "kaohsiung mrt", "krtc", "高雄捷運", "高捷"],
+        "臺灣": ["taiwan metro", "taiwan mrt", "台灣捷運", "臺灣捷運", "臺灣都市軌道", "台灣都市軌道"],
         "澳洲": ["australia", "sydney", "melbourne", "brisbane", "澳洲"],
         "英國": ["united kingdom", "uk", "london", "tfl", "underground", "英國", "英国", "倫敦"],
         "法國": ["france", "paris", "ratp", "法國", "法国", "巴黎"],
