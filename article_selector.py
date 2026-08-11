@@ -464,6 +464,33 @@ FORWARD_GATE_BENEFIT_TERMS = [
     "improving fire resistance", "improve thermal performance", "improving thermal performance",
 ]
 
+FORWARD_WATCHLIST_OPERATION_TERMS = [
+    "deploy", "deployed", "deploys", "implemented", "installed", "testing", "tested",
+    "trial", "trials", "pilot", "pilots", "operational use", "in operation",
+    "during operations", "in-service", "in service", "monitor", "monitoring",
+    "detect", "detection",
+]
+
+FORWARD_WATCHLIST_APPLICATION_OBJECT_TERMS = FORWARD_GATE_APPLICATION_OBJECT_TERMS + [
+    "equipment", "equipment condition", "equipment faults", "critical infrastructure",
+    "control system", "signalling equipment", "signaling equipment",
+]
+
+FORWARD_WATCHLIST_METHOD_TERMS = [
+    "monitor", "monitoring", "detect", "detection", "fault detection",
+    "condition monitoring", "predictive maintenance", "inspection", "sensing",
+    "sensor", "diagnostic", "identify equipment conditions", "track circuit",
+    "bearing", "wheel", "wire", "equipment faults", "material", "coating", "lightweight",
+    "low-friction", "low friction", "wear", "friction", "service life", "traction",
+    "energy consumption", "fire-resistant", "fire resistant", "insulation",
+]
+
+FORWARD_WATCHLIST_NON_OPERATIONAL_TERMS = [
+    "plans to", "plan to", "intends to", "intended to", "propose", "proposes",
+    "proposed", "proposal", "feasibility", "feasibility study", "research concept",
+    "concept study", "concept design",
+]
+
 LOW_IMPACT_ACCIDENT_TERMS = [
     "animal on tracks", "dog on tracks", "cat on tracks", "bird on tracks",
     "passenger dispute", "minor altercation", "trespasser", "small animal",
@@ -1553,6 +1580,89 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
 
 
+    def _compute_forward_technology_watchlist(candidate: dict) -> dict:
+        text = _candidate_selection_text(candidate)
+        date_value = _candidate_date_obj(candidate.get("date", ""))
+        date_valid = bool(
+            date_value
+            and date_value >= today - datetime.timedelta(days=max(1, int(lookback_int)))
+            and date_value <= today + datetime.timedelta(days=1)
+        )
+        page_type = candidate.get("page_type") or _compute_candidate_page_type(candidate)[0]
+        signals = {
+            "urban_rail": _candidate_urban_rail_gate(candidate),
+            "application_object": _contains_any_term(text, FORWARD_WATCHLIST_APPLICATION_OBJECT_TERMS),
+            "operational_evidence": _contains_any_term(text, FORWARD_WATCHLIST_OPERATION_TERMS),
+            "technical_method": _contains_any_term(text, FORWARD_WATCHLIST_METHOD_TERMS),
+            "project_only_clear": not (
+                _is_project_only_technical_candidate(candidate)
+                or _contains_any_term(text, FORWARD_WATCHLIST_NON_OPERATIONAL_TERMS)
+            ),
+            "base_quality": bool(
+                date_valid
+                and _has_source_reference(candidate)
+                and candidate.get("source_tier") != "D_proxy_low_value"
+                and candidate.get("source_quality") in {"A", "B", "C"}
+                and page_type == "news_article"
+                and not _information_quality_issue(candidate)
+                and not hard_low_value_candidate_reason(candidate)
+            ),
+        }
+        failures = []
+        if candidate.get("search_family") != "forward_technology":
+            failures.append("search_family 不是 forward_technology")
+        for key, reason in (
+            ("urban_rail", "缺少強都市軌道關聯"),
+            ("application_object", "缺少明確捷運設備或系統應用對象"),
+            ("operational_evidence", "缺少實際部署、測試、監測或故障偵測證據"),
+            ("technical_method", "缺少實質技術方法或功能描述"),
+            ("project_only_clear", "命中 project-only 或非實際運作描述"),
+            ("base_quality", "日期、來源或內容品質不足"),
+        ):
+            if not signals[key]:
+                failures.append(reason)
+        return {
+            "radar_watchlist_pass": candidate.get("search_family") == "forward_technology" and not failures,
+            "radar_watchlist_signals": signals,
+            "radar_watchlist_failure_reasons": failures,
+        }
+
+
+    def _forward_technology_watchlist_payload(candidate: dict) -> dict:
+        cache = _candidate_analysis_cache(candidate)
+        cached = cache.get("forward_technology_watchlist_payload")
+        if isinstance(cached, dict):
+            return dict(cached)
+        payload = _compute_forward_technology_watchlist(candidate)
+        cache["forward_technology_watchlist_payload"] = dict(payload)
+        return payload
+
+
+    def _passes_forward_technology_watchlist(candidate: dict) -> bool:
+        return bool(_forward_technology_watchlist_payload(candidate).get("radar_watchlist_pass"))
+
+
+    def _compute_forward_candidate_status(candidate: dict) -> dict:
+        if candidate.get("search_family") != "forward_technology":
+            return {}
+        watchlist_payload = _forward_technology_watchlist_payload(candidate)
+        strict_pass = _passes_forward_technology_gate(candidate)
+        watchlist_pass = bool(watchlist_payload.get("radar_watchlist_pass"))
+        status = "report_eligible" if strict_pass else "radar_watchlist" if watchlist_pass else "rejected"
+        return {
+            "forward_status": status,
+            **watchlist_payload,
+        }
+
+
+    def _is_forward_radar_only_candidate(candidate: dict) -> bool:
+        return (
+            candidate.get("search_family") == "forward_technology"
+            and not _passes_forward_technology_gate(candidate)
+            and _passes_forward_technology_watchlist(candidate)
+        )
+
+
     def _candidate_urban_rail_gate(candidate: dict) -> bool:
         return _cached_candidate_bool(
             candidate,
@@ -2010,6 +2120,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         }
         if is_forward_family:
             result.update(forward_gate_payload)
+            result.update(_compute_forward_candidate_status(candidate))
         analysis_cache["category_gate_payload"] = dict(result)
         return result
 
@@ -2174,6 +2285,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def _is_technical_news_selection_candidate(candidate: dict) -> bool:
         if candidate.get("classification") != "技術新知":
+            return False
+        if _is_forward_radar_only_candidate(candidate):
             return False
         text = _candidate_selection_text(candidate)
         if _is_financial_market_candidate(candidate):
@@ -2608,6 +2721,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                         "passes_forward_technology_gate",
                         "forward_gate_signals",
                         "forward_gate_failure_reasons",
+                        "forward_status",
+                        "radar_watchlist_pass",
+                        "radar_watchlist_signals",
+                        "radar_watchlist_failure_reasons",
                     )
                     if key in gate_info
                 }
@@ -2719,6 +2836,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "passes_forward_technology_gate",
             "forward_gate_signals",
             "forward_gate_failure_reasons",
+            "forward_status",
+            "radar_watchlist_pass",
+            "radar_watchlist_signals",
+            "radar_watchlist_failure_reasons",
         ):
             if key in candidate:
                 card[key] = candidate[key]
@@ -3235,6 +3356,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         classification = _selection_classification(candidate)
         if classification == "excluded":
             return True
+        if _is_forward_radar_only_candidate(candidate):
+            return True
         if _is_financial_market_candidate(candidate):
             return True
         if candidate.get("source_tier") == "D_proxy_low_value":
@@ -3390,6 +3513,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return True
         classification = _selection_classification(candidate)
         if classification == "excluded":
+            return True
+        if _is_forward_radar_only_candidate(candidate):
             return True
         if classification == "技術新知" and not (
             _passes_technical_triad(dict(candidate, classification="技術新知"))
@@ -3787,6 +3912,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_passes_technical_triad": _passes_technical_triad,
         "_compute_forward_technology_gate": _compute_forward_technology_gate,
         "_passes_forward_technology_gate": _passes_forward_technology_gate,
+        "_compute_forward_technology_watchlist": _compute_forward_technology_watchlist,
+        "_passes_forward_technology_watchlist": _passes_forward_technology_watchlist,
+        "_compute_forward_candidate_status": _compute_forward_candidate_status,
+        "_is_forward_radar_only_candidate": _is_forward_radar_only_candidate,
         "_candidate_event_fragments": _candidate_event_fragments,
         "_fragment_has_urban_rail_context": _fragment_has_urban_rail_context,
         "_is_single_person_rail_incident": _is_single_person_rail_incident,

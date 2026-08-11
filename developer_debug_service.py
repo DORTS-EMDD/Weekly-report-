@@ -76,6 +76,10 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
             "passes_forward_technology_gate",
             "forward_gate_signals",
             "forward_gate_failure_reasons",
+            "forward_status",
+            "radar_watchlist_pass",
+            "radar_watchlist_signals",
+            "radar_watchlist_failure_reasons",
         ):
             if key in item:
                 row[key] = item[key]
