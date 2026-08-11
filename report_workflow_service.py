@@ -419,6 +419,7 @@ class WorkflowRuntime:
 
         filtered_candidates.sort(
             key=lambda item: (
+                -int(item.get("final_selection_score", item.get("python_score", 0)) or 0),
                 -int(item.get("python_score", 0) or 0),
                 _source_tier_rank(item.get("source_tier", "C_media")),
                 _quality_rank(item.get("source_quality", "B")),

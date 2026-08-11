@@ -351,6 +351,58 @@ TECHNICAL_IMPLEMENTATION_TERMS = [
     "新設備", "安裝", "整合", "投入營運", "正式營運",
 ]
 
+INNOVATION_NOVELTY_TERMS = [
+    "first-of-its-kind", "first of its kind", "first-ever", "first ever",
+    "first deployment", "newly developed", "new approach", "new method",
+    "prototype", "pilot", "demonstration", "research deployment",
+    "首次", "首創", "新開發", "新方法", "新架構", "原型", "試點", "示範",
+]
+
+INNOVATION_APPLICATION_TERMS = [
+    "pilot", "trial", "tested", "test", "field test", "operational test",
+    "demonstrated", "validated", "deployed", "deploys", "implemented",
+    "implements", "commissioned", "introduced", "導入", "部署", "實施",
+    "測試", "驗證", "示範", "試驗", "啟用", "投入營運",
+]
+
+INNOVATION_EFFECT_TERMS = [
+    "reduce energy consumption", "reducing energy consumption", "energy saving",
+    "reduce traction energy consumption", "reducing traction energy consumption",
+    "reduce weight", "reducing weight", "reduce maintenance", "reducing maintenance",
+    "reduce inspection time", "reducing inspection time", "reduce manual inspection time",
+    "reducing manual inspection time", "increase line capacity", "increasing line capacity",
+    "reduce failure",
+    "reducing failure", "reduce noise", "reducing noise", "reduce emissions",
+    "reducing emissions", "extend service life", "improve reliability",
+    "improve efficiency", "increase capacity", "increasing capacity", "improve safety",
+    "降低能耗", "節省能源", "減少維修", "降低檢查時間", "降低故障",
+    "降低噪音", "減少排放", "延長使用壽命", "改善可靠度", "提高效率",
+    "提升容量", "增加容量", "改善安全",
+]
+
+INNOVATION_SPECIAL_TECH_TERMS = [
+    "sic traction inverter", "silicon carbide", "predictive maintenance",
+    "condition monitoring", "digital twin", "onboard monitoring",
+    "onboard sensor", "onboard sensors", "sensor-based inspection",
+    "automated inspection", "regenerative energy", "regenerative braking",
+    "advanced control architecture", "machine learning", "ai",
+    "牽引變流器", "碳化矽", "預測性維護", "狀態監測", "數位孿生",
+    "車載監測", "車載感測器", "感測器檢查", "自動化檢查", "再生能源",
+    "再生煞車", "先進控制架構", "機器學習",
+]
+
+INNOVATION_ARCHITECTURE_TERMS = [
+    "system architecture", "technical architecture", "moving-block", "moving block",
+    "new approach", "new method", "control architecture", "interface integration",
+    "system integration", "互動架構", "技術架構", "移動閉塞", "新方法", "控制架構",
+    "介面整合", "系統整合",
+]
+
+INNOVATION_QUANTIFIED_PATTERN = re.compile(
+    r"(?<![a-z0-9])\d+(?:\.\d+)?\s*%|(?<![a-z0-9])\d+(?:\.\d+)?\s*(?:percent|percentage)",
+    flags=re.IGNORECASE,
+)
+
 LOW_IMPACT_ACCIDENT_TERMS = [
     "animal on tracks", "dog on tracks", "cat on tracks", "bird on tracks",
     "passenger dispute", "minor altercation", "trespasser", "small animal",
@@ -2134,6 +2186,69 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return flags
 
 
+    def _matched_innovation_terms(text: str, terms: list[str]) -> list[str]:
+        return [term for term in terms if _contains_any_term(text, [term])]
+
+
+    def _compute_innovation_score(candidate: dict) -> dict:
+        gate_info = evaluate_category_gates(candidate)
+        is_technical_candidate = (
+            gate_info.get("primary_category") == "技術新知"
+            and _passes_technical_triad(candidate)
+        )
+        if not is_technical_candidate:
+            return {
+                "innovation_score": 0,
+                "innovation_signals": [],
+                "innovation_level": "C",
+                "innovation_bonus": 0,
+            }
+
+        text = _candidate_selection_text(candidate)
+        novelty_hits = _matched_innovation_terms(text, INNOVATION_NOVELTY_TERMS)
+        application_hits = _matched_innovation_terms(text, INNOVATION_APPLICATION_TERMS)
+        effect_hits = _matched_innovation_terms(text, INNOVATION_EFFECT_TERMS)
+        special_hits = _matched_innovation_terms(text, INNOVATION_SPECIAL_TECH_TERMS)
+        architecture_hits = _matched_innovation_terms(text, INNOVATION_ARCHITECTURE_TERMS)
+        non_generic_special_hits = [hit for hit in special_hits if hit.casefold() != "ai"]
+        has_quantified_effect = bool(
+            effect_hits and INNOVATION_QUANTIFIED_PATTERN.search(text)
+        )
+
+        score = 0
+        signals: list[str] = []
+        if novelty_hits:
+            score += 5
+            signals.append(f"novelty:{','.join(novelty_hits)}")
+        if application_hits:
+            score += 4
+            signals.append(f"application:{','.join(application_hits)}")
+        if effect_hits:
+            score += 8
+            signals.append(f"effect:{','.join(effect_hits)}")
+        if has_quantified_effect:
+            score += 5
+            signals.append("quantified_effect")
+        if non_generic_special_hits or (
+            "ai" in {hit.casefold() for hit in special_hits}
+            and (novelty_hits or application_hits or effect_hits)
+        ):
+            score += 6
+            signals.append(f"special_technology:{','.join(special_hits)}")
+        if architecture_hits:
+            score += 4
+            signals.append(f"architecture:{','.join(architecture_hits)}")
+
+        score = min(30, score)
+        innovation_level = "A" if score >= 15 else "B"
+        return {
+            "innovation_score": score,
+            "innovation_signals": signals,
+            "innovation_level": innovation_level,
+            "innovation_bonus": min(12, int(round(score * 0.4))),
+        }
+
+
     def score_news_candidate(candidate: dict) -> dict:
         text = _candidate_selection_text(candidate)
         gate_info = evaluate_category_gates(candidate)
@@ -2263,9 +2378,19 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             score = min(score, 35)
             reasons.append("未通過類別 gate，分數上限 35")
         preliminary_type = "規範更新" if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True) else primary_category
-        temp_candidate = dict(candidate, python_score=max(0, min(100, score)), primary_category=primary_category)
+        quality_score = max(0, min(100, score))
+        innovation_payload = _compute_innovation_score(candidate)
+        if innovation_payload["innovation_score"]:
+            reasons.append(
+                f"技術創新 +{innovation_payload['innovation_score']}"
+                f"（{';'.join(innovation_payload['innovation_signals'])}）"
+            )
+        final_selection_score = quality_score + innovation_payload["innovation_bonus"]
+        temp_candidate = dict(candidate, python_score=quality_score, primary_category=primary_category)
         return {
-            "python_score": max(0, min(100, score)),
+            "python_score": quality_score,
+            "quality_score": quality_score,
+            "final_selection_score": final_selection_score,
             "score_reason": "；".join(reasons),
             "candidate_flags": flags,
             "preliminary_type": preliminary_type,
@@ -2282,6 +2407,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "urban_rail_gate": _candidate_urban_rail_gate(candidate),
             "technical_triplet_status": "pass" if _passes_technical_triad(candidate) else "fail",
             "accident_severity_score": 80 if _passes_major_accident_gate(candidate) else (35 if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS) else 0),
+            **innovation_payload,
         }
 
 
@@ -2332,7 +2458,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def build_candidate_card(candidate: dict) -> dict:
         source_url = _effective_source_url(candidate)
-        return {
+        card = {
             "id": candidate.get("id", ""),
             "candidate_id": candidate.get("candidate_id", candidate.get("id", "")),
             "date": candidate.get("date", ""),
@@ -2374,6 +2500,17 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "selection_stage": candidate.get("selection_stage", ""),
             "final_exclude_reason": candidate.get("final_exclude_reason", ""),
         }
+        for key in (
+            "innovation_score",
+            "innovation_signals",
+            "innovation_level",
+            "innovation_bonus",
+            "quality_score",
+            "final_selection_score",
+        ):
+            if key in candidate:
+                card[key] = candidate[key]
+        return card
 
 
     def _is_low_value_policy_candidate(candidate: dict) -> bool:
@@ -2767,6 +2904,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def _python_selection_sort_key(candidate: dict) -> tuple:
         return (
+            -int(candidate.get("final_selection_score", candidate.get("python_score", 0)) or 0),
             -int(candidate.get("python_score", 0) or 0),
             _source_tier_rank(candidate.get("source_tier", "C_media")),
             -_date_sort_key(candidate),
@@ -3468,6 +3606,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "get_selection_output_range": get_selection_output_range,
         "infer_preliminary_type": infer_preliminary_type,
         "build_candidate_flags": build_candidate_flags,
+        "_compute_innovation_score": _compute_innovation_score,
         "score_news_candidate": score_news_candidate,
         "_candidate_score_fingerprint": _candidate_score_fingerprint,
         "annotate_candidate_for_scheme_d": annotate_candidate_for_scheme_d,

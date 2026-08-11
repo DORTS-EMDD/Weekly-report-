@@ -19,7 +19,7 @@ class DeveloperDebugContext:
 def _debug_candidate_rows(items: list[dict]) -> list[dict]:
     rows = []
     for item in items or []:
-        rows.append({
+        row = {
             "id": item.get("id", ""),
             "candidate_id": item.get("candidate_id", item.get("id", "")),
             "date": item.get("date", ""),
@@ -60,7 +60,18 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
             "url": item.get("url", ""),
             "classification": item.get("classification", ""),
             "reason": item.get("selected_reason", ""),
-        })
+        }
+        for key in (
+            "innovation_score",
+            "innovation_signals",
+            "innovation_level",
+            "innovation_bonus",
+            "quality_score",
+            "final_selection_score",
+        ):
+            if key in item:
+                row[key] = item[key]
+        rows.append(row)
     return rows
 
 
