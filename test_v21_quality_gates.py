@@ -100,6 +100,31 @@ class V21QualityGateTests(unittest.TestCase):
         self.assertEqual(gates["primary_category"], "營運政策")
         self.assertEqual(gates["category_reclassification"]["new_category"], "營運政策")
 
+    def test_project_only_technical_candidates_are_excluded(self):
+        fixtures = [
+            ("Company wins CBTC contract for Metro Line X", "The company won the CBTC contract for Metro Line X."),
+            ("Metro orders 20 new trains", "The metro ordered 20 new trains."),
+            ("Feasibility study awarded for new depot", "A feasibility study was awarded for a new depot."),
+            ("Construction begins on metro signalling upgrade", "Construction begins on a metro signalling upgrade."),
+        ]
+        for index, (title, snippet) in enumerate(fixtures, 1):
+            candidate = _candidate(index, title, snippet)
+            gates = app.evaluate_category_gates(candidate)
+            self.assertFalse(gates["category_gates"]["technology"], title)
+            self.assertNotEqual(gates["primary_category"], "技術新知")
+
+    def test_project_candidates_with_technical_detail_are_retained(self):
+        fixtures = [
+            ("Metro deploys CBTC with moving-block operation, increasing capacity by 20%", "The metro rail system deployed moving-block CBTC and increased capacity by 20%."),
+            ("New metro trains use SiC traction inverters reducing traction energy consumption", "The metro rail trains use silicon carbide traction inverters to reduce traction energy consumption."),
+            ("Pilot uses onboard sensors for continuous track condition monitoring", "A metro rail pilot uses onboard sensors for continuous track condition monitoring."),
+        ]
+        for index, (title, snippet) in enumerate(fixtures, 1):
+            candidate = _candidate(index, title, snippet)
+            gates = app.evaluate_category_gates(candidate)
+            self.assertTrue(gates["category_gates"]["technology"], title)
+            self.assertEqual(gates["primary_category"], "技術新知")
+
     def test_multi_candidate_model_block_is_preserved_and_sources_are_merged(self):
         candidates = [
             _candidate(2, "Bakerloo Line depot feasibility study", "研究摘要", url_host="railway-news.com"),

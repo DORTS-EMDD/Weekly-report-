@@ -148,6 +148,37 @@ PROCUREMENT_LIST_NOTICE_TERMS = [
     "contract documents holders list", "bid number", "open date", "標案文件持有人",
 ]
 
+PROJECT_ONLY_ACTION_TERMS = [
+    "contract", "contract awarded", "awarded contract", "wins contract", "won contract",
+    "selected contractor", "contractor selected", "procurement", "procure", "purchase order",
+    "order placed", "orders", "ordered", "delivery", "delivered", "train delivery",
+    "construction begins", "construction started", "construction start", "groundbreaking",
+    "feasibility study", "feasibility", "project approved", "project approval",
+    "project milestone", "construction progress", "tender", "bid awarded", "contract signed",
+    "project launch", "開工", "動工", "可行性研究", "工程進度", "工程里程碑", "專案核准",
+    "得標", "採購", "訂購", "交車", "交付", "投標", "招標",
+]
+
+SUBSTANTIVE_TECHNICAL_DETAIL_TERMS = [
+    "system architecture", "technical architecture", "moving-block", "moving block",
+    "fixed-block", "fixed block", "goa", "driverless", "unattended train operation",
+    "automatic train operation", "virtual coupling", "train separation", "headway",
+    "capacity increase", "increasing capacity", "interface", "interoperability",
+    "system integration", "integrated with", "fail-safe", "redundancy", "control logic",
+    "technical method", "technical specification", "technical parameter", "performance test",
+    "acceptance test", "validation", "validated", "verification", "demonstration",
+    "demonstrated", "pilot uses", "onboard sensor", "onboard sensors", "condition monitoring",
+    "predictive maintenance", "fault detection", "continuous monitoring", "non-destructive",
+    "silicon carbide", "sic traction inverter", "traction inverter", "regenerative braking",
+    "energy consumption", "energy efficiency", "energy saving", "reducing energy",
+    "lightweight", "composite", "battery", "fire-resistant", "fire resistant",
+    "low-friction", "low friction", "wear reduction", "noise reduction", "vibration reduction",
+    "service life", "life-cycle", "lifecycle", "thermal", "heat recovery", "carbon reduction",
+    "碳纖維", "複合材料", "低摩擦", "阻燃", "耐火", "節能", "能耗", "牽引變流器",
+    "感測器", "感測", "狀態監測", "預測性維護", "故障偵測", "技術架構", "介面整合",
+    "技術參數", "性能改善", "效能提升", "驗證", "示範", "試驗內容",
+]
+
 SUBSTANTIVE_POLICY_DETAIL_TERMS = [
     "headway", "capacity", "crowd control", "station control",
     "passenger flow control", "afc", "ticketing", "fare gate",
@@ -1399,6 +1430,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return True
         if _contains_any_term(text, TECHNICAL_IMPLEMENTATION_TERMS + TITLE_TECHNICAL_ACTION_TERMS):
             return True
+        if _technical_system_gate(candidate) and _contains_any_term(text, SUBSTANTIVE_TECHNICAL_DETAIL_TERMS):
+            return True
         return _trusted_source_title_technical_signal(candidate) or _contains_any_term(
             title,
             TECHNICAL_IMPLEMENTATION_TERMS + TITLE_TECHNICAL_ACTION_TERMS,
@@ -1409,6 +1442,19 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return _cached_candidate_bool(candidate, "technical_action_gate", _compute_technical_action_gate)
 
 
+    def _is_project_only_technical_candidate(candidate: dict) -> bool:
+        text = _candidate_selection_text(candidate)
+        if not _contains_any_term(text, PROJECT_ONLY_ACTION_TERMS):
+            return False
+        if _contains_any_term(text, SUBSTANTIVE_TECHNICAL_DETAIL_TERMS):
+            return False
+        return not bool(re.search(
+            r"\b\d+(?:\.\d+)?\s*(?:%|kw|kwh|mw|mwh|km/h|mm|db|tons?|tonnes?)\b",
+            text,
+            flags=re.IGNORECASE,
+        ))
+
+
     def _compute_passes_technical_triad(candidate: dict) -> bool:
         text = _candidate_selection_text(candidate)
         if _is_financial_market_candidate(candidate):
@@ -1416,6 +1462,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if _is_security_or_crime_candidate(candidate):
             return False
         if _is_airport_people_mover_only_text(text, candidate.get("source", "")):
+            return False
+        if _is_project_only_technical_candidate(candidate):
             return False
         if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS) and not _contains_any_term(
             text,
@@ -1719,6 +1767,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             reasons["major_accident"] = "有事故訊號但未達重大事故嚴重度或非都市軌道。"
         if gates["technology"]:
             reasons["technology"] = "具都市軌道對象、機電/設備主題及導入/更新/維修行為。"
+        elif _is_project_only_technical_candidate(candidate):
+            reasons["technology"] = "專案或商務動作明顯，但缺乏實質技術架構、方法、效益或驗證內容。"
         elif _technical_system_gate(candidate) or _technical_action_gate(candidate):
             reasons["technology"] = "技術三聯條件不完整。"
         if gates["operational_dispute"]:
@@ -2045,6 +2095,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             flags.append("trusted_title_technical_signal")
         if _passes_technical_triad(candidate):
             flags.append("core_metro_technical_content")
+        if _is_project_only_technical_candidate(candidate):
+            flags.append("project_only_without_technical_detail")
         if _passes_major_accident_gate(candidate):
             flags.append("incident_or_safety_signal")
         if _passes_high_value_policy_gate(candidate):
@@ -3374,6 +3426,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_technical_system_gate": _technical_system_gate,
         "_compute_technical_action_gate": _compute_technical_action_gate,
         "_technical_action_gate": _technical_action_gate,
+        "_is_project_only_technical_candidate": _is_project_only_technical_candidate,
         "_compute_passes_technical_triad": _compute_passes_technical_triad,
         "_passes_technical_triad": _passes_technical_triad,
         "_candidate_event_fragments": _candidate_event_fragments,
