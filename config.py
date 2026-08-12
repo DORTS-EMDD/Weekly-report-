@@ -13,6 +13,17 @@ DEFAULT_NEWS_SCOPE = "international"
 # Streamlit V19.4 non-sensitive configuration (moved verbatim).
 ADVANCED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議", "規範更新"]
 
+ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY = "electromechanical_procurement"
+ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL = "機電標案"
+ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP = 3
+
+# 「機電標案」先接入搜尋、分類與 selection backend；正式報告章節仍沿用
+# ADVANCED_TYPES，避免在 P4-B 提前改動 MaiAgent／報告後處理。
+BACKEND_CATEGORY_TYPES = [
+    *ADVANCED_TYPES,
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+]
+
 DEFAULT_SELECTED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議"]
 
 SECTION_NUMBER_BY_TYPE = {
