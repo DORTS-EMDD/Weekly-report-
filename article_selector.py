@@ -160,6 +160,102 @@ PROJECT_ONLY_ACTION_TERMS = [
     "得標", "採購", "訂購", "交車", "交付", "投標", "招標",
 ]
 
+ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS: dict[str, list[str]] = {
+    "signalling": [
+        "signalling", "signaling", "signal system", "cbtc", "train control",
+        "ats", "atp", "ato", "號誌", "信號系統", "行車控制", "列車控制", "列控",
+    ],
+    "traction_power": [
+        "traction power", "traction power supply", "power supply", "substation",
+        "scada", "electrical system", "供電", "牽引供電", "變電站", "電力系統",
+    ],
+    "telecommunications": [
+        "telecommunications", "telecommunication system", "communication system",
+        "communications system", "telecom", "radio system", "fibre communication",
+        "fiber communication", "通訊", "通訊系統", "無線電系統", "光纖通訊",
+    ],
+    "afc": [
+        "afc", "automatic fare collection", "fare collection system", "ticketing system",
+        "自動收費", "自動收費系統", "票務系統",
+    ],
+    "platform_screen_doors": [
+        "platform screen door", "platform screen doors", "platform door", "platform doors",
+        "psd", "月臺門", "月台門",
+    ],
+    "rolling_stock": [
+        "rolling stock", "trainset", "trainsets", "metro train", "metro trains",
+        "light rail vehicle", "light rail vehicles", "lrv", "train", "trains",
+        "車輛", "軌道車輛", "電聯車", "列車",
+    ],
+    "depot_electromechanical": [
+        "depot electromechanical system", "depot electromechanical systems",
+        "depot e&m", "depot mep", "機廠機電", "機廠機電系統",
+    ],
+    "station_electromechanical": [
+        "station e&m", "station e & m", "station mep", "mep systems",
+        "mechanical and electrical systems", "electromechanical systems",
+        "車站機電", "機電系統", "機電設備",
+    ],
+    "vertical_transport": [
+        "escalator", "escalators", "elevator", "elevators", "lift", "lifts",
+        "電扶梯", "手扶梯", "電梯",
+    ],
+    "ventilation_hvac": [
+        "ventilation", "hvac", "air conditioning", "smoke control",
+        "通風", "空調", "環控系統", "環境控制系統",
+    ],
+}
+
+ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS: dict[str, list[str]] = {
+    "tender": [
+        "invitation to tender", "calls for tender", "tender", "bid invitation", "招標", "投標",
+    ],
+    "contract_award": [
+        "contract award", "contract awarded", "awarded contract", "awards contract",
+        "awarded", "appoints", "appointed", "selected supplier", "supplier selected",
+        "wins contract", "won contract", "決標", "得標", "授予合約", "發包",
+    ],
+    "procurement": [
+        "procurement", "procure", "procures", "purchase order", "framework contract",
+        "contract signing", "signed contract", "採購", "簽約", "系統標", "標案",
+    ],
+    "order": [
+        "places order", "placed order", "orders", "ordered", "order for", "訂購", "下訂",
+    ],
+}
+
+ELECTROMECHANICAL_PROCUREMENT_CIVIL_TERMS = [
+    "tunnel", "tunnelling", "tunneling", "civil works", "civil engineering",
+    "viaduct", "bridge", "station structure", "structural works", "excavation",
+    "foundation", "piling", "track civil works", "architectural works",
+    "property development", "土建", "隧道", "高架橋", "橋梁", "站體結構",
+    "基礎", "開挖", "潛盾", "土木", "建築裝修", "聯合開發",
+]
+
+ELECTROMECHANICAL_PROCUREMENT_PLANNING_TERMS = [
+    "feasibility study", "preliminary study", "route planning", "master planning",
+    "concept design", "general engineering consultancy", "general engineering consultant",
+    "可行性研究", "路網規劃", "路線規劃", "綜合規劃", "概念設計", "一般顧問案",
+]
+
+ELECTROMECHANICAL_PROCUREMENT_DETAILED_DESIGN_TERMS = [
+    "detailed design", "detail design", "system integration contract",
+    "systems integration contract", "design and build", "細部設計", "詳細設計",
+    "系統整合契約", "系統整合合約",
+]
+
+ELECTROMECHANICAL_PROCUREMENT_SEPARATE_PACKAGE_TERMS = [
+    "electromechanical package", "electromechanical systems package", "systems package",
+    "separate systems contract", "separate system contract", "e&m package", "mep package",
+    "機電系統標", "機電標", "獨立機電標", "獨立系統標", "系統標案", "系統標",
+]
+
+ELECTROMECHANICAL_PROCUREMENT_STATION_CONTEXT_TERMS = [
+    "metro station", "subway station", "urban rail station", "light rail station",
+    "station equipment", "station system", "station systems", "platform", "depot",
+    "捷運車站", "地鐵車站", "輕軌車站", "車站設備", "車站系統", "月臺", "月台", "機廠",
+]
+
 SUBSTANTIVE_TECHNICAL_DETAIL_TERMS = [
     "system architecture", "technical architecture", "moving-block", "moving block",
     "fixed-block", "fixed block", "goa", "driverless", "unattended train operation",
@@ -529,6 +625,8 @@ REPORT_SELECTION_DEBUG_DEFAULT = {
     "operational_coverage_added": False,
     "operational_coverage_category": "",
     "operational_coverage_replaced_id": "",
+    "electromechanical_procurement_selection_cap": ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP,
+    "electromechanical_procurement_selected_count": 0,
 }
 
 URBAN_RAIL_MODE_TERMS.extend(["metros"])
@@ -578,6 +676,7 @@ CORE_METRO_TECHNICAL_TERMS.extend([
     "life-cycle management services", "maintenance services", "track renewal",
     "lubricator replacement", "track lubrication", "operations and maintenance centre",
     "operations and maintenance center", "omc", "wheel lathe", "axle counter", "axle counters",
+    "traction inverter", "traction inverters",
 ])
 
 TECHNICAL_IMPLEMENTATION_TERMS.extend([
@@ -1462,12 +1561,19 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if score >= 55:
             reasons.append(f"python_score={score}")
         family = candidate.get("search_family", "")
-        if family in {"technology", "major_accident", "policy", "dispute", "official_investigation"}:
+        if family in {
+            "technology", "major_accident", "policy", "dispute", "official_investigation",
+            ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+        }:
             reasons.append(f"search_family={family}")
         flags = candidate.get("candidate_flags", []) or []
         useful_flags = [
             flag for flag in flags
-            if flag in {"technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "trusted_title_technical_signal", "operational_dispute_gate"}
+            if flag in {
+                "technical_or_system_detail", "incident_or_safety_signal", "high_value_policy",
+                "trusted_title_technical_signal", "operational_dispute_gate",
+                "electromechanical_procurement_gate",
+            }
         ]
         if useful_flags:
             reasons.append("flags=" + ",".join(useful_flags[:3]))
@@ -1484,7 +1590,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 continue
             score = int(candidate.get("python_score", 0) or 0)
             tier_bonus = 20 if candidate.get("source_tier") == "A_official" else 12 if candidate.get("source_tier") == "B_professional" else 0
-            family_bonus = 10 if candidate.get("search_family") in {"major_accident", "official_investigation", "technology"} else 0
+            family_bonus = 10 if candidate.get("search_family") in {
+                "major_accident", "official_investigation", "technology",
+                ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+            } else 0
             rows.append({
                 "title": candidate.get("title", ""),
                 "source": candidate.get("source_display") or candidate.get("source", ""),
@@ -1551,6 +1660,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate.get("source_tier", ""),
             candidate.get("source_quality", ""),
             candidate.get("region", ""),
+            candidate.get("page_type", ""),
+            candidate.get("news_scope", ""),
             candidate.get("classification", ""),
             candidate.get("search_family", ""),
         )
@@ -1787,6 +1898,173 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def _passes_technical_triad(candidate: dict) -> bool:
         return _cached_candidate_bool(candidate, "passes_technical_triad", _compute_passes_technical_triad)
+
+
+    def _electromechanical_procurement_matches(
+        text: str,
+        groups: dict[str, list[str]],
+    ) -> list[str]:
+        return [
+            group
+            for group, terms in groups.items()
+            if _contains_any_term(text, terms)
+        ]
+
+
+    def _compute_electromechanical_procurement_gate(candidate: dict) -> dict:
+        analysis_cache = _candidate_analysis_cache(candidate)
+        cached = analysis_cache.get("electromechanical_procurement_gate_payload")
+        if isinstance(cached, dict):
+            return dict(cached)
+
+        title_snippet = f"{candidate.get('title', '')} {candidate.get('snippet', '')}".strip()
+        scope_text = f"{title_snippet} {candidate.get('source', '')}".strip()
+        systems = _electromechanical_procurement_matches(
+            title_snippet,
+            ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS,
+        )
+        station_context = _contains_any_term(
+            title_snippet,
+            ELECTROMECHANICAL_PROCUREMENT_STATION_CONTEXT_TERMS
+            + ELECTROMECHANICAL_PROCUREMENT_SEPARATE_PACKAGE_TERMS
+            + ["metro system", "subway system", "urban rail system", "捷運系統", "地鐵系統"],
+        )
+        if not station_context:
+            systems = [
+                system for system in systems
+                if system not in {"vertical_transport", "ventilation_hvac"}
+            ]
+        actions = _electromechanical_procurement_matches(
+            title_snippet,
+            ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS,
+        )
+        if (
+            re.search(r"\bawards?\b.{0,100}\bcontract\b", title_snippet, flags=re.IGNORECASE)
+            or re.search(r"\bcontract\b.{0,100}\bawarded\b", title_snippet, flags=re.IGNORECASE)
+            or re.search(r"\bselects?\b.{0,80}\bsupplier\b", title_snippet, flags=re.IGNORECASE)
+        ) and "contract_award" not in actions:
+            actions.append("contract_award")
+
+        topic_text = _strip_source_name_noise(title_snippet)
+        has_metro_system_context = bool(
+            systems
+            and _contains_any_term(topic_text, ["metro"])
+            and not _contains_any_term(topic_text, CIVIC_METRO_NAME_ONLY_TERMS)
+            and not _contains_any_term(topic_text, NON_URBAN_HARD_EXCLUDE_TERMS)
+        )
+        urban_rail = (
+            _is_urban_rail_candidate(title_snippet, candidate.get("source", ""))
+            or has_metro_system_context
+        )
+
+        scope = candidate.get("news_scope") or news_scope
+        domestic_info: dict[str, object] = {}
+        has_taiwan_reference = _contains_taiwan_reference(scope_text)
+        scope_valid = True
+        scope_failure = ""
+        if scope == "international" and has_taiwan_reference:
+            scope_valid = False
+            scope_failure = "international_scope_excludes_domestic"
+        elif scope == "domestic" or (scope == "both" and has_taiwan_reference):
+            domestic_info = _domestic_metro_candidate_info(title_snippet, candidate.get("source", ""))
+            if not domestic_info.get("domestic_candidate"):
+                scope_valid = False
+                scope_failure = (
+                    "domestic_scope_excluded:"
+                    f"{domestic_info.get('domestic_filter_reason', '非指定臺灣都市軌道')}"
+                )
+            else:
+                urban_rail = True
+
+        civil_hits = [
+            term for term in ELECTROMECHANICAL_PROCUREMENT_CIVIL_TERMS
+            if _contains_any_term(title_snippet, [term])
+        ]
+        planning_hits = [
+            term for term in ELECTROMECHANICAL_PROCUREMENT_PLANNING_TERMS
+            if _contains_any_term(title_snippet, [term])
+        ]
+        separate_package = _contains_any_term(
+            title_snippet,
+            ELECTROMECHANICAL_PROCUREMENT_SEPARATE_PACKAGE_TERMS,
+        )
+        detailed_design = _contains_any_term(
+            title_snippet,
+            ELECTROMECHANICAL_PROCUREMENT_DETAILED_DESIGN_TERMS,
+        )
+
+        date_valid = bool(_candidate_date_obj(candidate.get("date", "")))
+        source_reference_valid = _has_source_reference(candidate)
+        source_tier = candidate.get("source_tier", "")
+        source_quality = candidate.get("source_quality", "")
+        source_quality_valid = bool(
+            source_tier in {"A_official", "B_professional", "C_media"}
+            or source_quality in {"A", "B", "C"}
+        ) and source_tier != "D_proxy_low_value"
+        page_type = candidate.get("page_type", "")
+        page_type_valid = page_type in {"", "news_article"}
+
+        failures: list[str] = []
+        if not urban_rail:
+            failures.append("urban_rail_missing")
+        if not scope_valid:
+            failures.append(scope_failure)
+        if not systems:
+            failures.append("electromechanical_system_missing")
+        if not actions:
+            failures.append("procurement_action_missing")
+        if civil_hits and not separate_package:
+            failures.append("civil_only" if not systems else "civil_scope_not_separable")
+        if planning_hits and not (detailed_design and systems and actions):
+            failures.append("planning_or_consultancy_only")
+        if not date_valid:
+            failures.append("date_invalid_or_missing")
+        if not source_reference_valid:
+            failures.append("source_reference_missing")
+        if not source_quality_valid:
+            failures.append("source_quality_insufficient")
+        if not page_type_valid:
+            failures.append("page_type_not_news_article")
+
+        signals: list[str] = []
+        if urban_rail:
+            signals.append("urban_rail")
+        signals.extend(systems)
+        signals.extend(actions)
+        if date_valid:
+            signals.append("date_valid")
+        if source_reference_valid:
+            signals.append("source_reference")
+        if source_quality_valid:
+            signals.append("source_quality")
+        if page_type_valid:
+            signals.append("news_page")
+        if scope_valid:
+            signals.append("scope_valid")
+        if separate_package:
+            signals.append("separate_electromechanical_package")
+        if detailed_design:
+            signals.append("detailed_design_or_system_integration")
+
+        payload = {
+            "procurement_gate_pass": not failures,
+            "procurement_signals": list(dict.fromkeys(signals)),
+            "procurement_failure_reasons": list(dict.fromkeys(failures)),
+            "procurement_systems": systems,
+            "procurement_actions": actions,
+            "procurement_civil_signals": civil_hits,
+            "procurement_planning_signals": planning_hits,
+            "procurement_scope": scope,
+            "procurement_domestic_system": domestic_info.get("domestic_system", ""),
+        }
+        analysis_cache["electromechanical_procurement_gate_payload"] = dict(payload)
+        return payload
+
+
+    def _passes_electromechanical_procurement_gate(candidate: dict) -> bool:
+        return bool(
+            _compute_electromechanical_procurement_gate(candidate).get("procurement_gate_pass")
+        )
 
 
     def _candidate_event_fragments(candidate: dict) -> list[str]:
@@ -2071,11 +2349,19 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             else {}
         )
         passes_forward_gate = bool(forward_gate_payload.get("passes_forward_technology_gate"))
+        procurement_gate_payload = _compute_electromechanical_procurement_gate(candidate)
+        procurement_category_selected = (
+            ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in selected_types
+        )
         gates = {
             "major_accident": _passes_major_accident_gate(candidate),
             "technology": _passes_technical_triad(candidate) or passes_forward_gate,
             "operational_dispute": _passes_operational_dispute_gate(candidate),
             "operational_policy": _passes_high_value_policy_gate(candidate),
+            ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY: bool(
+                procurement_category_selected
+                and procurement_gate_payload.get("procurement_gate_pass")
+            ),
         }
         if is_forward_family:
             gates["forward_technology"] = passes_forward_gate
@@ -2104,6 +2390,21 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             reasons["operational_policy"] = "具系統、路線、容量或制度層級營運影響。"
         elif _contains_any_term(text, HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS):
             reasons["operational_policy"] = "政策訊號不足或被低價值公告排除。"
+        if gates[ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY]:
+            reasons[ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY] = (
+                "具都市軌道、明確機電系統、採購／契約行為及有效來源日期。"
+            )
+        elif procurement_gate_payload.get("procurement_gate_pass"):
+            reasons[ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY] = (
+                "符合機電標案 gate，但本次未勾選機電標案類別。"
+            )
+        elif (
+            procurement_gate_payload.get("procurement_systems")
+            or procurement_gate_payload.get("procurement_actions")
+        ):
+            reasons[ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY] = ";".join(
+                procurement_gate_payload.get("procurement_failure_reasons", [])
+            )
 
         primary_category = "excluded"
         for key, label in (
@@ -2111,6 +2412,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             ("operational_dispute", "營運爭議"),
             ("operational_policy", "營運政策"),
             ("technology", "技術新知"),
+            (
+                ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+                ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+            ),
         ):
             if gates.get(key):
                 primary_category = label
@@ -2121,11 +2426,18 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 ("operational_dispute", "營運爭議"),
                 ("operational_policy", "營運政策"),
                 ("technology", "技術新知"),
+                (
+                    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+                    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+                ),
             )
             if gates.get(key) and label != primary_category
         ]
         if primary_category == "excluded":
-            reasons.setdefault("no_category_gate", "未通過重大事故、技術新知、營運爭議或營運政策 gate。")
+            reasons.setdefault(
+                "no_category_gate",
+                "未通過重大事故、技術新知、營運爭議、營運政策或機電標案 gate。",
+            )
         original_category = (
             candidate.get("classification")
             or candidate.get("primary_category")
@@ -2133,7 +2445,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             or ""
         )
         category_reclassification = None
-        if original_category in ADVANCED_TYPES and original_category != primary_category:
+        if original_category in BACKEND_CATEGORY_TYPES and original_category != primary_category:
             supporting_terms = [
                 reason for key, reason in reasons.items()
                 if key in gates and reason
@@ -2155,6 +2467,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "primary_category": primary_category,
             "alternative_category_flags": alternatives,
             "category_reclassification": category_reclassification,
+            **procurement_gate_payload,
         }
         if is_forward_family:
             result.update(forward_gate_payload)
@@ -2215,7 +2528,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def _has_good_report_signal(candidate: dict) -> bool:
         flags = set(candidate.get("candidate_flags", []) or [])
-        if flags.intersection({"technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "trusted_title_technical_signal"}):
+        if flags.intersection({
+            "technical_or_system_detail", "incident_or_safety_signal", "high_value_policy",
+            "trusted_title_technical_signal", "electromechanical_procurement_gate",
+        }):
             return True
         text = _candidate_selection_text(candidate)
         return (
@@ -2224,6 +2540,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             or _passes_major_accident_gate(candidate)
             or _passes_high_value_policy_gate(candidate)
             or _passes_operational_dispute_gate(candidate)
+            or _passes_electromechanical_procurement_gate(candidate)
         )
 
 
@@ -2434,6 +2751,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             flags.append("operational_dispute_gate")
         if _passes_operational_dispute_secondary_gate(candidate):
             flags.append("operational_dispute_secondary_gate")
+        if _passes_electromechanical_procurement_gate(candidate):
+            flags.append("electromechanical_procurement_gate")
         if _is_low_value_ceremonial_candidate(candidate):
             flags.append("low_value_ceremonial")
         if _contains_any_term(text, LOW_VALUE_POLICY_TERMS) or information_issue in {"日常服務推播", "低價值路線公告"}:
@@ -2662,6 +2981,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if _passes_operational_dispute_gate(candidate):
             score += 8
             reasons.append("營運爭議衝突與影響門檻 +8")
+        if _passes_electromechanical_procurement_gate(candidate):
+            score += 8
+            reasons.append("都市軌道機電標案門檻 +8")
         if _contains_any_term(text, LOW_VALUE_POLICY_TERMS):
             score -= 12
             reasons.append("低價值服務提醒 -12")
@@ -2705,7 +3027,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             reasons.append("摘要資訊不足 -18")
 
         flags = build_candidate_flags(candidate)
-        good_flags = {"technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "trusted_title_technical_signal", "operational_dispute_gate"}
+        good_flags = {
+            "technical_or_system_detail", "incident_or_safety_signal", "high_value_policy",
+            "trusted_title_technical_signal", "operational_dispute_gate",
+            "electromechanical_procurement_gate",
+        }
         has_good_flag = bool(set(flags).intersection(good_flags))
         if not has_good_flag:
             score_cap = 55 if "short_snippet" in flags else 65
@@ -2749,6 +3075,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "urban_rail_gate": _candidate_urban_rail_gate(candidate),
             "technical_triplet_status": "pass" if _passes_technical_triad(candidate) else "fail",
             "accident_severity_score": 80 if _passes_major_accident_gate(candidate) else (35 if _contains_any_term(text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS) else 0),
+            "procurement_gate_pass": gate_info.get("procurement_gate_pass", False),
+            "procurement_signals": gate_info.get("procurement_signals", []),
+            "procurement_failure_reasons": gate_info.get("procurement_failure_reasons", []),
+            "procurement_systems": gate_info.get("procurement_systems", []),
+            "procurement_actions": gate_info.get("procurement_actions", []),
             **innovation_payload,
         }
         if candidate.get("search_family") == "forward_technology":
@@ -2878,6 +3209,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "radar_watchlist_pass",
             "radar_watchlist_signals",
             "radar_watchlist_failure_reasons",
+            "procurement_gate_pass",
+            "procurement_signals",
+            "procurement_failure_reasons",
+            "procurement_systems",
+            "procurement_actions",
         ):
             if key in candidate:
                 card[key] = candidate[key]
@@ -2936,13 +3272,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if candidate.get("classification") == "excluded" or candidate.get("primary_category") == "excluded":
             return "excluded"
         primary_category = candidate.get("primary_category")
-        if primary_category in ADVANCED_TYPES:
+        if primary_category in BACKEND_CATEGORY_TYPES:
             return primary_category
         inferred_type = infer_preliminary_type(candidate)
-        if inferred_type in ADVANCED_TYPES:
+        if inferred_type in BACKEND_CATEGORY_TYPES:
             return inferred_type
         preliminary_type = candidate.get("preliminary_type")
-        if preliminary_type in ADVANCED_TYPES:
+        if preliminary_type in BACKEND_CATEGORY_TYPES:
             return preliminary_type
         return "excluded"
 
@@ -2954,7 +3290,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def _selection_good_flag_count(candidate: dict) -> int:
         flags = set(candidate.get("candidate_flags", []) or [])
-        return sum(1 for flag in ("technical_or_system_detail", "incident_or_safety_signal", "high_value_policy", "core_metro_technical_content", "operational_dispute_gate") if flag in flags)
+        return sum(1 for flag in (
+            "technical_or_system_detail", "incident_or_safety_signal", "high_value_policy",
+            "core_metro_technical_content", "operational_dispute_gate",
+            "electromechanical_procurement_gate",
+        ) if flag in flags)
 
 
     def _selection_bad_flag_count(candidate: dict) -> int:
@@ -3411,6 +3751,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return True
         if classification == "營運爭議" and not _passes_operational_dispute_gate(dict(candidate, classification="營運爭議")):
             return True
+        if (
+            classification == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
+            and not _passes_electromechanical_procurement_gate(
+                dict(candidate, classification=ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL)
+            )
+        ):
+            return True
         if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
             return True
         if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS) and classification == "技術新知":
@@ -3657,6 +4004,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
                 return True, "規範更新條件完整"
             return False, "規範更新條件不足"
+        if classification == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL:
+            if _passes_electromechanical_procurement_gate(candidate):
+                return True, "都市軌道、機電系統與採購行為三聯條件完整"
+            return False, "機電標案 gate 不完整"
         return False, "未符合候補條件"
 
 
@@ -3826,6 +4177,14 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate = dict(raw_candidate)
             classification = _selection_classification(candidate)
             candidate["classification"] = classification
+            if (
+                classification == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
+                and sum(
+                    item.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
+                    for item in selected
+                ) >= ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP
+            ):
+                continue
             allowed, reason = _is_borderline_report_candidate(candidate)
             if not allowed:
                 continue
@@ -3848,6 +4207,14 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate = _take_next_python_candidate(borderline_pool, selected)
             if not candidate:
                 break
+            if (
+                candidate.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
+                and sum(
+                    item.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
+                    for item in selected
+                ) >= ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP
+            ):
+                continue
             selected.append(candidate)
             candidate["selection_stage"] = "B_backfilled_selected"
             selected_ids.add(int(candidate.get("id", 0) or 0))
@@ -3895,6 +4262,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
         for category in grouped:
             grouped[category] = sorted(grouped[category], key=_python_selection_sort_key)
+        grouped[ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL] = grouped.get(
+            ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+            [],
+        )[:ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP]
 
         selected = _select_from_grouped_pools(grouped, max_items)
         selected = _ensure_operational_topic_coverage(
@@ -3907,6 +4278,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         selected = _backfill_borderline_candidates(selected, model_candidates or [], min_items, max_items, LAST_PYTHON_SELECTION_DEBUG)
         LAST_PYTHON_SELECTION_DEBUG["final_selected_count"] = len(selected)
         LAST_PYTHON_SELECTION_DEBUG["incident_selected_count"] = sum(1 for item in selected if item.get("classification") == "重大事故")
+        LAST_PYTHON_SELECTION_DEBUG["electromechanical_procurement_selected_count"] = sum(
+            1
+            for item in selected
+            if item.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
+        )
         LAST_PYTHON_SELECTION_DEBUG["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("borderline_added_count", 0)
         return rebalance_selected_candidates(selected)
 
@@ -3949,6 +4325,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_is_project_only_technical_candidate": _is_project_only_technical_candidate,
         "_compute_passes_technical_triad": _compute_passes_technical_triad,
         "_passes_technical_triad": _passes_technical_triad,
+        "_compute_electromechanical_procurement_gate": _compute_electromechanical_procurement_gate,
+        "_passes_electromechanical_procurement_gate": _passes_electromechanical_procurement_gate,
         "_compute_forward_technology_gate": _compute_forward_technology_gate,
         "_passes_forward_technology_gate": _passes_forward_technology_gate,
         "_compute_forward_technology_watchlist": _compute_forward_technology_watchlist,

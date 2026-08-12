@@ -25,13 +25,17 @@ from config import (
     DDGS_REGIONAL_QUERY_LIMIT,
     DDGS_RESULTS_PER_QUERY,
     DEFAULT_NEWS_SCOPE,
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
     LOW_VALUE_EXCLUDED_HOSTS,
     PORTAL_SOCIAL_LOW_VALUE_DOMAINS,
     REGION_SEARCH_TERMS,
     STANDARDS_WATCHLIST,
 )
 from search_queries import (
+    DOMESTIC_ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS,
     DOMESTIC_METRO_QUERY_SPECS,
+    ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS,
     FORWARD_TECHNOLOGY_QUERY_SPECS,
     QUERY_FAMILY_BY_TYPE_INDEX,
     REGION_QUERY_LANGUAGES,
@@ -97,6 +101,26 @@ def _search_family_from_query(
     if metadata.get("family"):
         return metadata["family"]
     q = (query or "").casefold()
+    has_procurement_action = any(term in q for term in (
+        "contract", "tender", "procurement", "purchase order", "supplier selected",
+        "招標", "發包", "決標", "得標", "採購", "系統標",
+    ))
+    has_electromechanical_system = any(term in q for term in (
+        "signalling", "signaling", "cbtc", "train control", "traction power",
+        "substation", "telecommunications", "afc", "platform screen door",
+        "rolling stock", "station mep", "electromechanical system", "號誌",
+        "供電", "通訊", "自動收費", "月臺門", "月台門", "車輛", "機電",
+    ))
+    has_procurement_dispute = any(term in q for term in (
+        "procurement dispute", "contract dispute", "tender dispute",
+        "採購爭議", "合約爭議", "招標爭議",
+    ))
+    if (
+        has_procurement_action
+        and has_electromechanical_system
+        and not has_procurement_dispute
+    ):
+        return ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY
     if any(term in q for term in ("deragliamento", "descarrilamento", "colisao", "colisão", "collisione", "incendio", "incêndio", "расследование", "сход с рельсов", "столкновение")):
         return "major_accident"
     if any(term in q for term in ("sciopero", "greve", "забастовка", "procurement dispute", "contract dispute", "cost overrun", "arbitration")):
@@ -141,6 +165,8 @@ def _query_with_period(query: str, *, context: DdgsSearchContext) -> str:
 
 def _active_query_specs(family: str) -> list[dict]:
     specs = [spec for spec in SEARCH_QUERY_SPECS if spec.get("family") == family]
+    if family == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY:
+        specs.extend(ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS)
     if family == "domestic_metro":
         specs.extend(DOMESTIC_METRO_QUERY_SPECS)
     if family == "forward_technology":
@@ -155,6 +181,8 @@ def _selected_query_families(*, context: DdgsSearchContext) -> list[str]:
             families.append(family)
     if "major_accident" in families:
         families.append("official_investigation")
+    if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in context.selected_types:
+        families.append(ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY)
     return families
 
 
@@ -262,6 +290,16 @@ def build_search_queries(
                 _add(
                     spec.get("query", ""),
                     family="domestic_metro",
+                    lang=spec.get("lang", "zh"),
+                    use_news=bool(spec.get("use_news", True)),
+                    query_region="domestic",
+                    domestic_topic=spec.get("domestic_topic", ""),
+                )
+        for spec in DOMESTIC_ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS:
+            if selected_type_set.intersection(spec.get("types", ())):
+                _add(
+                    spec.get("query", ""),
+                    family=ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
                     lang=spec.get("lang", "zh"),
                     use_news=bool(spec.get("use_news", True)),
                     query_region="domestic",

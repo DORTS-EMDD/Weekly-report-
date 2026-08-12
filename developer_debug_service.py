@@ -80,6 +80,15 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
             "radar_watchlist_pass",
             "radar_watchlist_signals",
             "radar_watchlist_failure_reasons",
+            "procurement_gate_pass",
+            "procurement_signals",
+            "procurement_failure_reasons",
+            "procurement_systems",
+            "procurement_actions",
+            "procurement_scope",
+            "procurement_domestic_system",
+            "procurement_civil_signals",
+            "procurement_planning_signals",
         ):
             if key in item:
                 row[key] = item[key]

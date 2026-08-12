@@ -108,6 +108,51 @@ DOMESTIC_METRO_QUERY_SPECS = [
     },
 ]
 
+ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS = [
+    {
+        "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+        "lang": "en",
+        "query": "urban rail metro signalling CBTC train control contract tender award",
+    },
+    {
+        "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+        "lang": "en",
+        "query": "metro traction power substation electrical system contract procurement",
+    },
+    {
+        "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+        "lang": "en",
+        "query": "metro telecommunications AFC platform screen doors contract tender",
+    },
+    {
+        "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+        "lang": "en",
+        "query": "metro rolling stock trains contract order procurement",
+    },
+    {
+        "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+        "lang": "en",
+        "query": "metro station MEP electromechanical systems contract tender",
+    },
+]
+
+DOMESTIC_ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS = [
+    {
+        "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+        "domestic_topic": "electromechanical_procurement",
+        "types": (ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,),
+        "lang": "zh",
+        "query": "臺灣 捷運 臺北 新北 桃園 臺中 高雄 號誌 供電 通訊 AFC 機電 招標 決標 發包 採購",
+    },
+    {
+        "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+        "domestic_topic": "electromechanical_procurement",
+        "types": (ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,),
+        "lang": "zh",
+        "query": "臺灣 捷運 臺北 新北 桃園 臺中 高雄 電聯車 車輛 月臺門 車站機電 系統標 決標 採購",
+    },
+]
+
 FORWARD_TECHNOLOGY_QUERY_SPECS = [
     {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail light rail tram novel material prototype tested reduce vehicle weight energy consumption"},
     {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail track rail new coating pilot trial reduce friction wear extend service life"},
