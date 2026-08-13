@@ -27,6 +27,7 @@ from config import (
     DEFAULT_NEWS_SCOPE,
     ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
     ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+    SERVICE_OPENING_CATEGORY_KEY,
     LOW_VALUE_EXCLUDED_HOSTS,
     PORTAL_SOCIAL_LOW_VALUE_DOMAINS,
     REGION_SEARCH_TERMS,
@@ -35,12 +36,14 @@ from config import (
 from search_queries import (
     DOMESTIC_ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS,
     DOMESTIC_METRO_QUERY_SPECS,
+    DOMESTIC_SERVICE_OPENING_QUERY_SPECS,
     ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS,
     FORWARD_TECHNOLOGY_QUERY_SPECS,
     QUERY_FAMILY_BY_TYPE_INDEX,
     REGION_QUERY_LANGUAGES,
     SEARCH_LANGUAGE_MARKERS,
     SEARCH_QUERY_SPECS,
+    SERVICE_OPENING_QUERY_SPECS,
 )
 from search_service import (
     compact_query as service_compact_query,
@@ -125,6 +128,11 @@ def _search_family_from_query(
         return "major_accident"
     if any(term in q for term in ("sciopero", "greve", "забастовка", "procurement dispute", "contract dispute", "cost overrun", "arbitration")):
         return "dispute"
+    if any(term in q for term in (
+        "opens to passengers", "revenue service", "passenger service", "commercial operations",
+        "正式通車", "正式啟用", "開始載客",
+    )):
+        return SERVICE_OPENING_CATEGORY_KEY
     if any(term in q for term in ("apertura linea", "abertura linha", "fare reform", "operating hours", "capacity increase", "service change")):
         return "policy"
     if any(standard.casefold() in q for standards in STANDARDS_WATCHLIST.values() for standard in standards):
@@ -169,6 +177,8 @@ def _active_query_specs(family: str) -> list[dict]:
         specs.extend(ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS)
     if family == "domestic_metro":
         specs.extend(DOMESTIC_METRO_QUERY_SPECS)
+    if family == SERVICE_OPENING_CATEGORY_KEY:
+        specs.extend(SERVICE_OPENING_QUERY_SPECS)
     if family == "forward_technology":
         specs.extend(FORWARD_TECHNOLOGY_QUERY_SPECS)
     return specs
@@ -295,6 +305,17 @@ def build_search_queries(
                     query_region="domestic",
                     domestic_topic=spec.get("domestic_topic", ""),
                 )
+        if "營運政策" in selected_type_set or "營運爭議" in selected_type_set:
+            for spec in DOMESTIC_SERVICE_OPENING_QUERY_SPECS:
+                if selected_type_set.intersection(spec.get("types", ())):
+                    _add(
+                        spec.get("query", ""),
+                        family=SERVICE_OPENING_CATEGORY_KEY,
+                        lang=spec.get("lang", "zh"),
+                        use_news=bool(spec.get("use_news", True)),
+                        query_region="domestic",
+                        domestic_topic=spec.get("domestic_topic", ""),
+                    )
         for spec in DOMESTIC_ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS:
             if selected_type_set.intersection(spec.get("types", ())):
                 _add(
@@ -307,6 +328,14 @@ def build_search_queries(
                 )
 
     if context.news_scope != "domestic" and context.is_global_scope:
+        if "營運政策" in context.selected_types or "營運爭議" in context.selected_types:
+            for spec in SERVICE_OPENING_QUERY_SPECS:
+                _add(
+                    spec.get("query", ""),
+                    family=SERVICE_OPENING_CATEGORY_KEY,
+                    lang=spec.get("lang", "en"),
+                    use_news=bool(spec.get("use_news", True)),
+                )
         for family in content_families:
             for spec in _active_query_specs(family):
                 _add(
@@ -316,6 +345,14 @@ def build_search_queries(
                     use_news=bool(spec.get("use_news", True)),
                 )
     elif context.news_scope != "domestic" and content_families and context.active_regions:
+        if "營運政策" in context.selected_types or "營運爭議" in context.selected_types:
+            for spec in SERVICE_OPENING_QUERY_SPECS:
+                _add(
+                    spec.get("query", ""),
+                    family=SERVICE_OPENING_CATEGORY_KEY,
+                    lang=spec.get("lang", "en"),
+                    use_news=bool(spec.get("use_news", True)),
+                )
         regions = list(dict.fromkeys(context.active_regions))
         official_reserve = 1 if include_official else 0
         country_budget = max(0, query_limit - official_reserve)

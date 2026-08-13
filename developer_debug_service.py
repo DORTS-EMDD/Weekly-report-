@@ -61,6 +61,8 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
             "classification": item.get("classification", ""),
             "reason": item.get("selected_reason", ""),
         }
+        if "operational_subtype" in item:
+            row["operational_subtype"] = item["operational_subtype"]
         for key in (
             "innovation_score",
             "innovation_signals",
@@ -89,6 +91,10 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
             "procurement_domestic_system",
             "procurement_civil_signals",
             "procurement_planning_signals",
+            "service_opening_gate_pass",
+            "service_opening_signals",
+            "service_opening_failure_reasons",
+            "future_opening_signal",
         ):
             if key in item:
                 row[key] = item[key]

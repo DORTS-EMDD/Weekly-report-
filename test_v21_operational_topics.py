@@ -66,6 +66,14 @@ class V21OperationalTopicTests(unittest.TestCase):
                 "demo_cache_mode",
             },
         )
+        checkbox_labels = {
+            call["args"][0]
+            for call in recorder.calls
+            if call["name"] == "checkbox"
+            and call["receiver"].startswith("expander")
+        }
+        self.assertIn("營運動態", checkbox_labels)
+        self.assertNotIn("營運議題", checkbox_labels)
         self.assertEqual(result.selected_types, ["營運政策", "營運爭議"])
         self.assertTrue(recorder.session_state["type_營運政策"])
         self.assertTrue(recorder.session_state["type_營運爭議"])

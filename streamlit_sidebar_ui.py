@@ -12,6 +12,7 @@ VISIBLE_REPORT_TYPE_GROUPS = (
     ("重大事故", ("重大事故",)),
     ("營運議題", ("營運政策", "營運爭議")),
 )
+VISIBLE_REPORT_TYPE_DISPLAY_LABELS = {"營運議題": "營運動態"}
 
 
 @dataclass(frozen=True)
@@ -169,8 +170,9 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             )
 
             for group_label, report_types in VISIBLE_REPORT_TYPE_GROUPS:
+                display_label = VISIBLE_REPORT_TYPE_DISPLAY_LABELS.get(group_label, group_label)
                 if st.checkbox(
-                    group_label,
+                    display_label,
                     value=group_defaults[group_label],
                     key=f"type_{group_label}",
                 ):

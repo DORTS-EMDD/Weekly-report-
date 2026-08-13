@@ -24,6 +24,7 @@ from config import (
     ADVANCED_LOOKBACK_OPTIONS,
     ADVANCED_TYPES,
     EMPTY_TEXT_BY_TYPE,
+    OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
     SECTION_NUMBER_BY_TYPE,
 )
 from journal_service import _parse_full_research_date
@@ -456,7 +457,7 @@ def normalize_formal_report_title(text: str) -> str:
         "營運政策／營運爭議",
         "營運爭議／營運政策",
     ):
-        normalized = normalized.replace(old, "營運議題")
+        normalized = normalized.replace(old, OPERATIONAL_DYNAMICS_CATEGORY_LABEL)
     return normalized
 
 
@@ -470,12 +471,12 @@ def normalize_report_section_numbering(
     section_numbers = {
         "技術新知": "一",
         "重大事故": "二",
-        "營運議題": "三",
+        OPERATIONAL_DYNAMICS_CATEGORY_LABEL: "三",
         "規範更新": "四",
         "國際學術期刊": "五" if standards_enabled or "規範更新" in selected_types else "四",
     }
     for label, number in section_numbers.items():
-        aliases = "(?:國際學術期刊|技術研究補充)" if label == "國際學術期刊" else re.escape(label)
+        aliases = "(?:營運議題|營運動態)" if label == OPERATIONAL_DYNAMICS_CATEGORY_LABEL else "(?:國際學術期刊|技術研究補充)" if label == "國際學術期刊" else re.escape(label)
         normalized = re.sub(
             rf"(?m)^\s*#{{0,6}}\s*[一二三四五六七八九十]\s*、\s*{aliases}\s*$",
             f"## {number}、{label}",
@@ -523,7 +524,7 @@ def merge_operational_report_sections(
     if not text:
         return text
     heading_pattern = re.compile(
-        r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:營運政策|營運爭議|營運議題)\s*$"
+        r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:營運政策|營運爭議|營運議題|營運動態)\s*$"
     )
     heading_matches = list(heading_pattern.finditer(text))
     spans: list[tuple[int, int]] = []
@@ -550,8 +551,8 @@ def merge_operational_report_sections(
     if deduped_blocks:
         section_body = "\n\n---\n\n".join(deduped_blocks)
     else:
-        section_body = "本期未發現符合條件之營運議題。"
-    merged_section = f"## 三、營運議題\n\n{section_body}\n\n"
+        section_body = "本期未發現符合條件之營運動態。"
+    merged_section = f"## 三、{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}\n\n{section_body}\n\n"
 
     operations_enabled = bool({"營運政策", "營運爭議"}.intersection(selected_types))
     if spans:
@@ -2110,7 +2111,7 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         else:
             skipped_ids.append(candidate_id)
     sections: list[str] = [f'# {context.report_title}', f'> 資料涵蓋期間：{context.date_range}', f'> 報導範圍：{context.report_scope_label}']
-    category_groups = [('一、技術新知', {'技術新知'}), ('二、重大事故', {'重大事故'}), ('三、營運議題', {'營運政策', '營運爭議'})]
+    category_groups = [('一、技術新知', {'技術新知'}), ('二、重大事故', {'重大事故'}), (f'三、{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}', {'營運政策', '營運爭議'})]
     if context.standards_enabled or '規範更新' in context.selected_types:
         category_groups.append(('四、規範更新', {'規範更新'}))
     for heading, categories in category_groups:
@@ -2131,7 +2132,7 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
             category = next(iter(categories))
             sections.append(EMPTY_TEXT_BY_TYPE.get(category, '本期未發現符合條件資料。'))
         else:
-            sections.append('本期未發現符合條件的營運議題資料。')
+            sections.append(f'本期未發現符合條件的{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}資料。')
     research_section = _extract_research_section_for_reconcile(report_md, context=context) if context.include_research_supplement else ''
     if research_section:
         sections.extend(['', research_section])

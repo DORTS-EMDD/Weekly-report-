@@ -108,6 +108,31 @@ DOMESTIC_METRO_QUERY_SPECS = [
     },
 ]
 
+SERVICE_OPENING_QUERY_SPECS = [
+    {
+        "family": SERVICE_OPENING_CATEGORY_KEY,
+        "types": ("營運政策",),
+        "lang": "en",
+        "query": "metro subway urban rail light rail tram opens to passengers enters revenue service",
+    },
+    {
+        "family": SERVICE_OPENING_CATEGORY_KEY,
+        "types": ("營運政策",),
+        "lang": "en",
+        "query": "metro subway light rail tram extension station begins passenger service commercial operations",
+    },
+]
+
+DOMESTIC_SERVICE_OPENING_QUERY_SPECS = [
+    {
+        "family": SERVICE_OPENING_CATEGORY_KEY,
+        "domestic_topic": "service_opening",
+        "types": ("營運政策",),
+        "lang": "zh",
+        "query": "臺灣 臺北 新北 桃園 臺中 高雄 捷運 輕軌 正式通車 正式啟用 正式營運 開始載客",
+    },
+]
+
 ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS = [
     {
         "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
