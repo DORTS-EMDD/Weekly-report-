@@ -33,8 +33,8 @@ def render_main_dashboard(
         f"""
         <div class="hero-card">
           <div class="hero-eyebrow">臺北市政府捷運工程局｜機電系統設計處</div>
-          <div class="hero-title">國際捷運技術{context.report_period_label} AI 自動產生系統</div>
-          <div class="hero-subtitle">國際技術新知、重大事故、營運動態與規範更新之自動化監測</div>
+          <div class="hero-title">捷運技術{context.report_period_label} AI 自動產生系統</div>
+          <div class="hero-subtitle">技術新知、重大事故、營運動態與機電標案之自動化監測</div>
             <div class="hero-meta">
             <span class="hero-pill">今日日期：{context.today.strftime('%Y/%m/%d')}</span>
             <span class="hero-pill">資料涵蓋：{context.week_start.strftime('%Y/%m/%d')} - {context.today.strftime('%Y/%m/%d')}</span>
@@ -50,7 +50,7 @@ def render_main_dashboard(
         unsafe_allow_html=True,
     )
     generate_clicked = st.button(
-        f"🚀 產生國際捷運 AI {context.report_period_label}",
+        f"🚀 產生捷運 AI {context.report_period_label}",
         type="primary",
         use_container_width=True,
     )
@@ -231,7 +231,7 @@ def render_report_display(context: ReportDisplayContext) -> ReportDisplayResult:
         st.markdown(
             f"""
     <div class="warn-box">
-    📭 尚無報告資料。請點擊上方「產生國際捷運 AI {context.report_period_label}」按鈕產生第一份報告。
+    📭 尚無報告資料。請點擊上方「產生捷運 AI {context.report_period_label}」按鈕產生第一份報告。
     </div>""",
             unsafe_allow_html=True,
         )

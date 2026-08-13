@@ -160,6 +160,7 @@ def build_developer_debug_payload(
             "selected_types": run_config.get("selected_types", []),
             "selected_regions": run_config.get("selected_regions", []),
             "scope_mode": run_config.get("scope_mode"),
+            "news_scope": run_config.get("news_scope"),
             "include_standards": run_config.get("include_standards"),
             "include_research_supplement": run_config.get("include_research_supplement"),
             "research_supplement_period": run_config.get("research_supplement_period", {}),

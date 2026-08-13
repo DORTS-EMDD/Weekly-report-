@@ -270,7 +270,7 @@ def get_secret(key: str, default: str = "") -> str:
 
 # ── 頁面設定 ──────────────────────────────────────────
 st.set_page_config(
-    page_title="國際捷運技術週報 AI 系統",
+    page_title="捷運技術週報 AI 系統",
     page_icon="🚇",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -414,8 +414,8 @@ gmail_pass = get_secret("GMAIL_APP_PASS")
 sidebar_selection = render_sidebar(
     SidebarContext(
         default_recipients=get_secret("DEFAULT_RECIPIENTS", ""),
-        default_selected_types=DEFAULT_SELECTED_TYPES,
-        advanced_types=ADVANCED_TYPES,
+        default_selected_types=STREAMLIT_DEFAULT_SELECTED_TYPES,
+        advanced_types=BACKEND_CATEGORY_TYPES,
         normal_lookback_options=NORMAL_LOOKBACK_OPTIONS,
         advanced_lookback_options=ADVANCED_LOOKBACK_OPTIONS,
         report_period_labels=REPORT_PERIOD_LABELS,
@@ -424,6 +424,7 @@ sidebar_selection = render_sidebar(
         advanced_regions=ADVANCED_REGIONS,
         standards_watchlist=STANDARDS_WATCHLIST,
         get_research_supplement_lookback_days=get_research_supplement_lookback_days,
+        default_news_scope="both",
     )
 )
 recipient_input = sidebar_selection.recipient_input
@@ -431,6 +432,7 @@ lookback_days = sidebar_selection.lookback_days
 selected_types = sidebar_selection.selected_types
 standards_enabled = sidebar_selection.standards_enabled
 standard_count = sidebar_selection.standard_count
+news_scope = sidebar_selection.news_scope
 scope_mode = sidebar_selection.scope_mode
 selected_regions = sidebar_selection.selected_regions
 long_term_mode = sidebar_selection.long_term_mode
@@ -454,6 +456,7 @@ run_settings = build_run_settings(
         report_target_by_days=REPORT_TARGET_BY_DAYS,
         research_supplement_allowed_for_report=research_supplement_allowed_for_report,
         get_research_supplement_lookback_days=get_research_supplement_lookback_days,
+        news_scope=news_scope,
     )
 )
 week_start = run_settings.week_start
@@ -493,6 +496,7 @@ def _workflow_config() -> workflow_service.WorkflowConfig:
         report_title=report_title,
         report_scope_label=report_scope_label,
         report_period_label=report_period_label,
+        news_scope=news_scope,
         research_supplement_period_label=research_supplement_period_label,
         research_supplement_start_date=research_supplement_start_date,
     )
@@ -522,6 +526,7 @@ def _run_config_context() -> RunConfigContext:
         fast_mode_enabled=fast_mode_enabled,
         demo_cache_mode_enabled=demo_cache_mode_enabled,
         current_app_hash=current_app_hash,
+        news_scope=news_scope,
     )
 
 
@@ -601,7 +606,7 @@ generate_btn, send_after_generate, progress_placeholder, status_placeholder = (
             report_period_label=report_period_label,
             today=today,
             week_start=week_start,
-            scope_mode=scope_mode,
+            scope_mode=report_scope_label,
             demo_cache_mode_enabled=demo_cache_mode_enabled,
         ),
     )
@@ -723,6 +728,7 @@ def _ddgs_search_context(
         lookback_int=lookback_int,
         is_global_scope=is_global_scope,
         today=today,
+        news_scope=news_scope,
         ddgs_client_factory=DDGS,
         query_metadata=LAST_DDGS_QUERY_METADATA if query_metadata is None else query_metadata,
         progress_callback=progress_bar.progress if progress_bar else None,
@@ -970,6 +976,7 @@ _selector_api = build_selector_api(
     selected_types=selected_types, active_regions=active_regions,
     lookback_days=lookback_days, lookback_int=lookback_int,
     fast_mode_enabled=fast_mode_enabled, is_global_scope=is_global_scope, today=today,
+    news_scope=news_scope,
     _search_family_from_query=_search_family_from_query,
     _search_language_from_query=_search_language_from_query,
     create_requests_session=create_requests_session,
@@ -1218,7 +1225,7 @@ def _report_prompt_context() -> ReportPromptContext:
         research_supplement_start_date=research_supplement_start_date,
         today=today,
         empty_text_by_type=EMPTY_TEXT_BY_TYPE,
-        advanced_types=ADVANCED_TYPES,
+        advanced_types=REPORT_CATEGORY_TYPES,
         selection_min_items=SELECTION_MIN_ITEMS,
         selection_max_items=SELECTION_MAX_ITEMS,
         candidate_snippet_chars=CANDIDATE_SNIPPET_CHARS,
@@ -1506,11 +1513,16 @@ def apply_final_report_footer(
     journal_candidates: list[dict] | None = None,
     *,
     report_date: datetime.date | None = None,
+    selected_types_override: list[str] | None = None,
 ) -> str:
     return service_apply_final_report_footer(
         report_md,
         journal_candidates,
-        selected_types=selected_types,
+        selected_types=(
+            selected_types_override
+            if selected_types_override is not None
+            else selected_types
+        ),
         include_research_supplement=include_research_supplement,
         today=report_date or today,
     )
@@ -1982,7 +1994,17 @@ def load_demo_report_cache() -> tuple[str, bytes | None, dict]:
     report_text = report_text.replace("營運動態", "營運議題")
     report_text = enforce_research_section(report_text, [])
     report_text = normalize_final_report_md(report_text)
-    report_text = apply_final_report_footer(report_text, [], report_date=DEMO_REPORT_DATE)
+    demo_selected_types = [
+        category
+        for category in selected_types
+        if category != ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
+    ]
+    report_text = apply_final_report_footer(
+        report_text,
+        [],
+        selected_types_override=demo_selected_types,
+        report_date=DEMO_REPORT_DATE,
+    )
 
     try:
         demo_pdf_exists = demo_pdf_path.exists()

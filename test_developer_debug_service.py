@@ -25,18 +25,18 @@ import streamlit_app as app
 
 
 EXPECTED_SCENARIO_SHA256 = {
-    "fast_mode": "4a135dda00df378deac0c4d3125e2d5da7a67aa8b55b098bf88b25d010922899",
-    "full_weekly": "6bc853595c2488f92f13b555213355ec06e8db153e9baf4920860bd702e36ce5",
-    "no_debug_info": "702b6857c5fa382794f8cd397c93aef7fb148583ec1c1e80fb04de2e9180519d",
-    "missing_report_stats": "cfed43d116b226f90ea1b84ebef2d287474ac6decee62bdf3c6ef1790c275531",
-    "current_config_fallback": "6c162dc3e5e6d3477c9c6950fe369b143cfbc77391c53b221b1edee7534af303",
+    "fast_mode": "8812284f7837237fdb83238381f3d5c60dcd6d43b8e6f0dc9e8b6dd6d8837cfa",
+    "full_weekly": "f43f9a531b16c3ce9af02ad0b448feda87930ba814a7ef45201d030bef329e34",
+    "no_debug_info": "01d3b5a81adde2eec7384520a2abd91c7e688a8d19684745a0a6cb94a9736430",
+    "missing_report_stats": "14a34f8da40fb34d7ac574beccbcad2993d3e93a6d228eddb697b4f0deb452ef",
+    "current_config_fallback": "b77f99306d9d544e22a37080369421eb671531c5b0b1853ad16932f782c46448",
     "json_safe_types": "5cf8865f0d742f7a4911fb086b889607650d1e869334fdd7ea7de420b17160f5",
-    "internal_fields": "07a9363e2654f43439d09eece6a17517cc0e1ada7fadb6eb756b5021c5dc2c66",
-    "empty_candidates": "fe885681aa916695add5c442c256ca2e8167df6e37e0ced95eea4a2a0b16c31c",
-    "full_candidates": "0bf0ff708bbf2f79feb4e529b50084584074283a3ac6a0aaea9de37727bf1ab2",
+    "internal_fields": "b4fdab0a7b3e4eb8a3720d0a06214a7d44cbc6e414bfc1119d84440be980b11c",
+    "empty_candidates": "f50cfb0b3e2d985c76afe83bee92a595303bc6842f5f3d87982c924b5baa52c8",
+    "full_candidates": "87f26fdd62b5742c2b53ddea18c9b7225c1930f1e377792edb7d6557504d6c02",
 }
 EXPECTED_AGGREGATE_SHA256 = (
-    "42c606bdc5d2d8757da51a69e7d340e1a450ce6cbc5998ca8730c90030d48c96"
+    "5a04af7e4160579079748d28faff4ce66b5205c2eb6d8ec29d5a6b04e1efb5f8"
 )
 
 

@@ -59,7 +59,7 @@ class V21OperationalTopicTests(unittest.TestCase):
             {
                 "type_技術新知",
                 "type_重大事故",
-                "type_營運議題",
+                "type_營運動態",
                 "type_規範更新",
                 "include_research_supplement",
                 "show_developer_info",
@@ -74,7 +74,10 @@ class V21OperationalTopicTests(unittest.TestCase):
         }
         self.assertIn("營運動態", checkbox_labels)
         self.assertNotIn("營運議題", checkbox_labels)
-        self.assertEqual(result.selected_types, ["營運政策", "營運爭議"])
+        self.assertEqual(
+            result.selected_types,
+            ["營運政策", "營運爭議", "service_opening"],
+        )
         self.assertTrue(recorder.session_state["type_營運政策"])
         self.assertTrue(recorder.session_state["type_營運爭議"])
 

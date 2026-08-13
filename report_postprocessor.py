@@ -24,8 +24,11 @@ from config import (
     ADVANCED_LOOKBACK_OPTIONS,
     ADVANCED_TYPES,
     EMPTY_TEXT_BY_TYPE,
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
     OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
+    REPORT_CATEGORY_TYPES,
     SECTION_NUMBER_BY_TYPE,
+    SERVICE_OPENING_CATEGORY_KEY,
 )
 from journal_service import _parse_full_research_date
 from maiagent_service import (
@@ -313,7 +316,7 @@ def strip_unselected_report_sections(text: str, *, selected_types: list[str]) ->
     if not text or not selected_types:
         return text
     cleaned = text
-    for category in ADVANCED_TYPES:
+    for category in REPORT_CATEGORY_TYPES:
         if category in selected_types:
             continue
         number = SECTION_NUMBER_BY_TYPE.get(category, "")
@@ -336,7 +339,7 @@ def strip_unselected_types_from_title(text: str, *, selected_types: list[str]) -
         if not line.lstrip().startswith("#"):
             continue
         title = line
-        for category in ADVANCED_TYPES:
+        for category in REPORT_CATEGORY_TYPES:
             if category in selected_types:
                 continue
             title = title.replace(f"、{category}", "").replace(f"{category}、", "").replace(category, "")
@@ -399,7 +402,7 @@ def final_report_statistics_line(
     selected_types: list[str],
     include_research_supplement: bool,
 ) -> str:
-    selected_parts = [category for category in ADVANCED_TYPES if category in selected_types]
+    selected_parts = [category for category in REPORT_CATEGORY_TYPES if category in selected_types]
     counts = count_report_items_by_category(report_md)
     formal_total = sum(counts.get(category, 0) for category in selected_parts) if selected_parts else count_report_items(report_md)
     stats_detail = "／".join(f"{category} {counts.get(category, 0)} 則" for category in selected_parts)
@@ -472,8 +475,18 @@ def normalize_report_section_numbering(
         "技術新知": "一",
         "重大事故": "二",
         OPERATIONAL_DYNAMICS_CATEGORY_LABEL: "三",
-        "規範更新": "四",
-        "國際學術期刊": "五" if standards_enabled or "規範更新" in selected_types else "四",
+        ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL: "四",
+        "規範更新": "五" if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in selected_types else "四",
+        "國際學術期刊": (
+            "六"
+            if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in selected_types
+            and (standards_enabled or "規範更新" in selected_types)
+            else "五"
+            if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in selected_types
+            or standards_enabled
+            or "規範更新" in selected_types
+            else "四"
+        ),
     }
     for label, number in section_numbers.items():
         aliases = "(?:營運議題|營運動態)" if label == OPERATIONAL_DYNAMICS_CATEGORY_LABEL else "(?:國際學術期刊|技術研究補充)" if label == "國際學術期刊" else re.escape(label)
@@ -496,7 +509,7 @@ def _operational_block_sort_key(block: str) -> tuple[str, str]:
 
 def _operational_blocks(section_text: str) -> list[str]:
     blocks = re.findall(
-        r"(?ms)^((?:(?:\s*(?:<!--\s*candidate_id\s*:\s*\d+\s*-->|&lt;!--\s*candidate_id\s*:\s*\d+\s*--&gt;)\s*\n)*)\s*🔹\s*\[(?:營運政策|營運爭議)\].*?)"
+        r"(?ms)^((?:(?:\s*(?:<!--\s*candidate_id\s*:\s*\d+\s*-->|&lt;!--\s*candidate_id\s*:\s*\d+\s*--&gt;)\s*\n)*)\s*🔹\s*\[(?:營運政策|營運爭議|營運動態|service_opening)\].*?)"
         r"(?=^\s*🔹\s*\[[^\]]+\]|^\s*#{0,6}\s*[一二三四五六七八九十]\s*、|^\s*📊|^\s*⏰|\Z)",
         section_text or "",
     )
@@ -554,7 +567,9 @@ def merge_operational_report_sections(
         section_body = "本期未發現符合條件之營運動態。"
     merged_section = f"## 三、{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}\n\n{section_body}\n\n"
 
-    operations_enabled = bool({"營運政策", "營運爭議"}.intersection(selected_types))
+    operations_enabled = bool(
+        {"營運政策", "營運爭議", SERVICE_OPENING_CATEGORY_KEY}.intersection(selected_types)
+    )
     if spans:
         pieces: list[str] = []
         cursor = 0
@@ -567,7 +582,7 @@ def merge_operational_report_sections(
         text = "".join(pieces)
     elif operations_enabled:
         insert_match = re.search(
-            r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:規範更新|國際學術期刊|技術研究補充)\s*$|^\s*📊|^\s*⏰",
+            r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:規範更新|機電標案|國際學術期刊|技術研究補充)\s*$|^\s*📊|^\s*⏰",
             text,
         )
         insert_at = insert_match.start() if insert_match else len(text)
@@ -575,10 +590,19 @@ def merge_operational_report_sections(
 
     text = re.sub(
         r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*規範更新\s*$",
-        "## 四、規範更新",
+        f"## {'五' if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in selected_types else '四'}、規範更新",
         text,
     )
-    research_number = "五" if standards_enabled or "規範更新" in selected_types else "四"
+    research_number = (
+        "六"
+        if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in selected_types
+        and (standards_enabled or "規範更新" in selected_types)
+        else "五"
+        if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in selected_types
+        or standards_enabled
+        or "規範更新" in selected_types
+        else "四"
+    )
     text = re.sub(
         r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:國際學術期刊|技術研究補充)\s*$",
         f"## {research_number}、國際學術期刊",
@@ -980,6 +1004,7 @@ def chinese_fallback_title(category: str, title: str) -> str:
         "營運政策": "國際捷運營運政策更新",
         "營運爭議": "國際捷運營運爭議事件",
         "規範更新": "國際捷運規範更新案",
+        ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL: "都市軌道機電標案",
     }.get(category, "國際捷運案例")
 
 
@@ -1186,19 +1211,19 @@ def strip_candidate_id_markers(text: str) -> str:
 
 
 def count_report_items(report_md: str) -> int:
-    bullet_count = len(re.findall(r"(?m)^🔹\s*\[(?:技術新知|重大事故|營運政策|營運爭議|規範更新)\]", report_md or ""))
+    bullet_count = len(re.findall(r"(?m)^🔹\s*\[(?:技術新知|重大事故|營運政策|營運爭議|營運動態|service_opening|規範更新|機電標案)\]", report_md or ""))
     if bullet_count:
         return bullet_count
     count = 0
     for match in re.finditer(r"^###\s+(.+)$", report_md or "", flags=re.MULTILINE):
         heading = match.group(1)
-        if any(category in heading for category in ADVANCED_TYPES):
+        if any(category in heading for category in REPORT_CATEGORY_TYPES):
             count += 1
     return count
 
 
 def count_report_items_by_category(report_md: str) -> dict[str, int]:
-    counts = {category: 0 for category in ADVANCED_TYPES}
+    counts = {category: 0 for category in REPORT_CATEGORY_TYPES}
     for match in re.finditer(r"(?m)^🔹\s*\[([^\]]+)\]", report_md or ""):
         category = match.group(1).strip()
         if category in counts:
@@ -1207,7 +1232,7 @@ def count_report_items_by_category(report_md: str) -> dict[str, int]:
         return counts
     for match in re.finditer(r"^###\s+(.+)$", report_md or "", flags=re.MULTILINE):
         heading = match.group(1)
-        for category in ADVANCED_TYPES:
+        for category in REPORT_CATEGORY_TYPES:
             if category in heading:
                 counts[category] += 1
                 break
@@ -1280,7 +1305,7 @@ def _annual_observation_themes(candidates: list[dict], *, context: ReportPostpro
 
 def _annual_observation_report_blocks(report_md: str, *, context: ReportPostprocessContext) -> list[str]:
     formal_area = re.split('(?m)^\\s*#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:國際學術期刊|技術研究補充)\\s*$', report_md or '', maxsplit=1)[0]
-    return re.findall('(?ms)^\\s*(🔹\\s*\\[(?:技術新知|重大事故|營運政策|營運爭議|規範更新)\\].*?)(?=^\\s*🔹\\s*\\[[^\\]]+\\]|^\\s*#{0,6}\\s*[一二三四五六七八九十]\\s*、|^\\s*📊|^\\s*⏰|\\Z)', formal_area)
+    return re.findall('(?ms)^\\s*(🔹\\s*\\[(?:技術新知|重大事故|營運政策|營運爭議|營運動態|service_opening|規範更新|機電標案)\\].*?)(?=^\\s*🔹\\s*\\[[^\\]]+\\]|^\\s*#{0,6}\\s*[一二三四五六七八九十]\\s*、|^\\s*📊|^\\s*⏰|\\Z)', formal_area)
 
 def _iter_calendar_months(start_date: datetime.date, end_date: datetime.date, *, context: ReportPostprocessContext) -> list[tuple[int, int]]:
     months: list[tuple[int, int]] = []
@@ -1351,7 +1376,7 @@ def build_annual_observation_section(final_report_md: str, *, context: ReportPos
         return ''
     blocks = _annual_observation_report_blocks(final_report_md, context=context)
     counts = count_report_items_by_category(final_report_md)
-    categories = ('技術新知', '重大事故', '營運政策', '營運爭議')
+    categories = ('技術新知', '重大事故', '營運政策', '營運爭議', ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL)
     count_text = '、'.join((f'{category}{counts.get(category, 0)}則' for category in categories))
     sentences = [f'本年度回顧依最終正式報告整理，共收錄{count_text}。']
     if not blocks:
@@ -2111,9 +2136,17 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         else:
             skipped_ids.append(candidate_id)
     sections: list[str] = [f'# {context.report_title}', f'> 資料涵蓋期間：{context.date_range}', f'> 報導範圍：{context.report_scope_label}']
-    category_groups = [('一、技術新知', {'技術新知'}), ('二、重大事故', {'重大事故'}), (f'三、{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}', {'營運政策', '營運爭議'})]
+    category_groups = [
+        ('一、技術新知', {'技術新知'}),
+        ('二、重大事故', {'重大事故'}),
+        (f'三、{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}', {'營運政策', '營運爭議', SERVICE_OPENING_CATEGORY_KEY}),
+        (f'四、{ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL}', {ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL}),
+    ]
     if context.standards_enabled or '規範更新' in context.selected_types:
-        category_groups.append(('四、規範更新', {'規範更新'}))
+        category_groups.append((
+            f"{'五' if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in context.selected_types else '四'}、規範更新",
+            {'規範更新'},
+        ))
     for heading, categories in category_groups:
         if not categories.intersection(context.selected_types):
             continue
@@ -2198,7 +2231,7 @@ def build_final_incident_coverage_debug(selected_candidates: list[dict], maiagen
     return {'python_incident_selected_count': python_count, 'maiagent_incident_report_count': maiagent_count, 'final_incident_report_count': final_count, 'incident_dropped_after_maiagent': dropped_after_maiagent, 'incident_coverage_warning': warning, 'incident_coverage_reason': reason}
 
 def report_has_unselected_types(report_md: str, *, context: ReportPostprocessContext) -> bool:
-    unselected = [category for category in ADVANCED_TYPES if category not in context.selected_types]
+    unselected = [category for category in REPORT_CATEGORY_TYPES if category not in context.selected_types]
     for category in unselected:
         if re.search(f'(?m)^(##|###)\\s+.*{re.escape(category)}', report_md):
             return True
