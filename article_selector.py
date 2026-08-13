@@ -625,6 +625,9 @@ REPORT_SELECTION_DEBUG_DEFAULT = {
     "operational_coverage_added": False,
     "operational_coverage_category": "",
     "operational_coverage_replaced_id": "",
+    "operational_dynamics_selection_cap": OPERATIONAL_DYNAMICS_SELECTION_CAP,
+    "operational_dynamics_selected_count": 0,
+    "service_opening_selected_count": 0,
     "electromechanical_procurement_selection_cap": ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP,
     "electromechanical_procurement_selected_count": 0,
 }
@@ -2335,6 +2338,64 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return _cached_candidate_bool(candidate, "passes_high_value_policy_gate", _compute_passes_high_value_policy_gate)
 
 
+    def _compute_service_opening_gate(candidate: dict) -> dict[str, object]:
+        text = _candidate_selection_text(candidate)
+        actual_signal = _contains_any_term(text, SERVICE_OPENING_ACTUAL_TERMS)
+        future_signal = _contains_any_term(text, SERVICE_OPENING_FUTURE_TERMS)
+        planning_signal = _contains_any_term(text, SERVICE_OPENING_PLANNING_TERMS)
+        testing_signal = _contains_any_term(text, SERVICE_OPENING_TESTING_TERMS)
+        signals: list[str] = []
+        failure_reasons: list[str] = []
+        urban_rail_pass = _candidate_urban_rail_gate(candidate)
+        metadata_pass = _has_valid_operational_metadata(candidate)
+        if urban_rail_pass:
+            signals.append("urban_rail")
+        else:
+            failure_reasons.append("urban_rail_context_missing")
+        if metadata_pass:
+            signals.append("source_and_date")
+        else:
+            failure_reasons.append("source_or_date_missing")
+        if _has_general_rail_exclusion(candidate):
+            failure_reasons.append("non_urban_rail")
+        if future_signal:
+            failure_reasons.append("future_opening")
+        if planning_signal and not actual_signal:
+            failure_reasons.append("planning_or_construction_only")
+        if testing_signal and not actual_signal:
+            failure_reasons.append("testing_only")
+        if _contains_any_term(text, LOW_REPORT_VALUE_TERMS + LOW_QUALITY_CONTENT_TERMS):
+            failure_reasons.append("low_value_content")
+        if actual_signal:
+            signals.extend(["passenger_service_started", "official_opening"])
+        else:
+            failure_reasons.append("passenger_service_not_confirmed")
+        gate_pass = (
+            urban_rail_pass
+            and metadata_pass
+            and actual_signal
+            and not future_signal
+            and not (planning_signal and not actual_signal)
+            and not (testing_signal and not actual_signal)
+            and not _has_general_rail_exclusion(candidate)
+            and not _contains_any_term(text, LOW_REPORT_VALUE_TERMS + LOW_QUALITY_CONTENT_TERMS)
+        )
+        return {
+            "service_opening_gate_pass": gate_pass,
+            "service_opening_signals": signals,
+            "service_opening_failure_reasons": failure_reasons,
+            "future_opening_signal": future_signal,
+        }
+
+
+    def _compute_passes_service_opening_gate(candidate: dict) -> bool:
+        return bool(_compute_service_opening_gate(candidate).get("service_opening_gate_pass"))
+
+
+    def _passes_service_opening_gate(candidate: dict) -> bool:
+        return _cached_candidate_bool(candidate, "passes_service_opening_gate", _compute_passes_service_opening_gate)
+
+
     def evaluate_category_gates(candidate: dict) -> dict:
         analysis_cache = _candidate_analysis_cache(candidate)
         cached = analysis_cache.get("category_gate_payload")
@@ -2350,6 +2411,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
         passes_forward_gate = bool(forward_gate_payload.get("passes_forward_technology_gate"))
         procurement_gate_payload = _compute_electromechanical_procurement_gate(candidate)
+        service_opening_payload = _compute_service_opening_gate(candidate)
         procurement_category_selected = (
             ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in selected_types
         )
@@ -2358,6 +2420,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "technology": _passes_technical_triad(candidate) or passes_forward_gate,
             "operational_dispute": _passes_operational_dispute_gate(candidate),
             "operational_policy": _passes_high_value_policy_gate(candidate),
+            SERVICE_OPENING_CATEGORY_KEY: bool(service_opening_payload.get("service_opening_gate_pass")),
             ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY: bool(
                 procurement_category_selected
                 and procurement_gate_payload.get("procurement_gate_pass")
@@ -2390,6 +2453,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             reasons["operational_policy"] = "具系統、路線、容量或制度層級營運影響。"
         elif _contains_any_term(text, HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS):
             reasons["operational_policy"] = "政策訊號不足或被低價值公告排除。"
+        if gates[SERVICE_OPENING_CATEGORY_KEY]:
+            reasons[SERVICE_OPENING_CATEGORY_KEY] = "已確認都市軌道正式載客或營收服務啟用。"
+        elif service_opening_payload.get("service_opening_failure_reasons"):
+            reasons[SERVICE_OPENING_CATEGORY_KEY] = ";".join(
+                service_opening_payload.get("service_opening_failure_reasons", [])
+            )
         if gates[ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY]:
             reasons[ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY] = (
                 "具都市軌道、明確機電系統、採購／契約行為及有效來源日期。"
@@ -2412,6 +2481,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             ("operational_dispute", "營運爭議"),
             ("operational_policy", "營運政策"),
             ("technology", "技術新知"),
+            (SERVICE_OPENING_CATEGORY_KEY, "營運政策"),
             (
                 ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
                 ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
@@ -2426,6 +2496,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 ("operational_dispute", "營運爭議"),
                 ("operational_policy", "營運政策"),
                 ("technology", "技術新知"),
+                (SERVICE_OPENING_CATEGORY_KEY, "營運政策"),
                 (
                     ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
                     ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
@@ -2435,8 +2506,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         ]
         if primary_category == "excluded":
             reasons.setdefault(
-                "no_category_gate",
-                "未通過重大事故、技術新知、營運爭議、營運政策或機電標案 gate。",
+            "no_category_gate",
+                "未通過重大事故、技術新知、營運爭議、營運動態或機電標案 gate。",
             )
         original_category = (
             candidate.get("classification")
@@ -2465,8 +2536,18 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "category_gate_reasons": reasons,
             "canonical_tags": canonical_tags,
             "primary_category": primary_category,
+            "operational_subtype": (
+                SERVICE_OPENING_CATEGORY_KEY
+                if gates.get(SERVICE_OPENING_CATEGORY_KEY)
+                else "dispute"
+                if gates.get("operational_dispute")
+                else "policy"
+                if gates.get("operational_policy")
+                else ""
+            ),
             "alternative_category_flags": alternatives,
             "category_reclassification": category_reclassification,
+            **service_opening_payload,
             **procurement_gate_payload,
         }
         if is_forward_family:
@@ -2530,7 +2611,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         flags = set(candidate.get("candidate_flags", []) or [])
         if flags.intersection({
             "technical_or_system_detail", "incident_or_safety_signal", "high_value_policy",
-            "trusted_title_technical_signal", "electromechanical_procurement_gate",
+            "trusted_title_technical_signal", "service_opening_gate", "electromechanical_procurement_gate",
         }):
             return True
         text = _candidate_selection_text(candidate)
@@ -2539,6 +2620,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             or _trusted_source_title_technical_signal(candidate)
             or _passes_major_accident_gate(candidate)
             or _passes_high_value_policy_gate(candidate)
+            or _passes_service_opening_gate(candidate)
             or _passes_operational_dispute_gate(candidate)
             or _passes_electromechanical_procurement_gate(candidate)
         )
@@ -2747,6 +2829,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             flags.append("incident_or_safety_signal")
         if _passes_high_value_policy_gate(candidate):
             flags.append("high_value_policy")
+        if _passes_service_opening_gate(candidate):
+            flags.append("service_opening_gate")
         if _passes_operational_dispute_gate(candidate):
             flags.append("operational_dispute_gate")
         if _passes_operational_dispute_secondary_gate(candidate):
@@ -2978,6 +3062,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if _passes_high_value_policy_gate(candidate):
             score += 8
             reasons.append("高價值營運政策門檻 +8")
+        if _passes_service_opening_gate(candidate):
+            score += 8
+            reasons.append("正式通車門檻 +8")
         if _passes_operational_dispute_gate(candidate):
             score += 8
             reasons.append("營運爭議衝突與影響門檻 +8")
@@ -3030,7 +3117,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         good_flags = {
             "technical_or_system_detail", "incident_or_safety_signal", "high_value_policy",
             "trusted_title_technical_signal", "operational_dispute_gate",
-            "electromechanical_procurement_gate",
+            "service_opening_gate", "electromechanical_procurement_gate",
         }
         has_good_flag = bool(set(flags).intersection(good_flags))
         if not has_good_flag:
@@ -3071,6 +3158,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "canonical_tags": gate_info.get("canonical_tags", []),
             "primary_category": primary_category,
             "alternative_category_flags": gate_info.get("alternative_category_flags", []),
+            "operational_subtype": gate_info.get("operational_subtype", ""),
             "candidate_level": _candidate_level(temp_candidate, score),
             "urban_rail_gate": _candidate_urban_rail_gate(candidate),
             "technical_triplet_status": "pass" if _passes_technical_triad(candidate) else "fail",
@@ -3080,6 +3168,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "procurement_failure_reasons": gate_info.get("procurement_failure_reasons", []),
             "procurement_systems": gate_info.get("procurement_systems", []),
             "procurement_actions": gate_info.get("procurement_actions", []),
+            "service_opening_gate_pass": gate_info.get("service_opening_gate_pass", False),
+            "service_opening_signals": gate_info.get("service_opening_signals", []),
+            "service_opening_failure_reasons": gate_info.get("service_opening_failure_reasons", []),
+            "future_opening_signal": gate_info.get("future_opening_signal", False),
             **innovation_payload,
         }
         if candidate.get("search_family") == "forward_technology":
@@ -3214,16 +3306,22 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "procurement_failure_reasons",
             "procurement_systems",
             "procurement_actions",
+            "service_opening_gate_pass",
+            "service_opening_signals",
+            "service_opening_failure_reasons",
+            "future_opening_signal",
         ):
             if key in candidate:
                 card[key] = candidate[key]
+        if "operational_subtype" in candidate:
+            card["operational_subtype"] = candidate["operational_subtype"]
         return card
 
 
     def _is_low_value_policy_candidate(candidate: dict) -> bool:
         text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')}"
         has_low = _contains_any_term(text, LOW_VALUE_POLICY_TERMS)
-        has_high = _passes_high_value_policy_gate(candidate)
+        has_high = _passes_high_value_policy_gate(candidate) or _passes_service_opening_gate(candidate)
         return has_low and not has_high
 
 
@@ -3293,7 +3391,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return sum(1 for flag in (
             "technical_or_system_detail", "incident_or_safety_signal", "high_value_policy",
             "core_metro_technical_content", "operational_dispute_gate",
-            "electromechanical_procurement_gate",
+            "service_opening_gate", "electromechanical_procurement_gate",
         ) if flag in flags)
 
 
@@ -3747,7 +3845,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return True
         if classification == "重大事故" and not _passes_major_accident_gate(dict(candidate, classification="重大事故")):
             return True
-        if classification == "營運政策" and not _passes_high_value_policy_gate(dict(candidate, classification="營運政策")):
+        if classification == "營運政策" and not (
+            _passes_high_value_policy_gate(dict(candidate, classification="營運政策"))
+            or _passes_service_opening_gate(dict(candidate, classification="營運政策"))
+        ):
             return True
         if classification == "營運爭議" and not _passes_operational_dispute_gate(dict(candidate, classification="營運爭議")):
             return True
@@ -3908,7 +4009,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return True
         if classification == "重大事故" and not _passes_major_accident_gate(dict(candidate, classification="重大事故")):
             return True
-        if classification == "營運政策" and not _passes_high_value_policy_gate(dict(candidate, classification="營運政策")):
+        if classification == "營運政策" and not (
+            _passes_high_value_policy_gate(dict(candidate, classification="營運政策"))
+            or _passes_service_opening_gate(dict(candidate, classification="營運政策"))
+        ):
             return True
         if classification == "營運爭議" and not _passes_operational_dispute_gate(dict(candidate, classification="營運爭議")):
             return True
@@ -3993,6 +4097,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 return True, "重大事故嚴重度門檻明確"
             return False, "事故價值不足"
         if classification == "營運政策":
+            if _passes_service_opening_gate(candidate):
+                return True, "具都市軌道正式載客或營收服務啟用證據"
             if _passes_high_value_policy_gate(candidate):
                 return True, "具捷運專屬性與系統/路線層級影響"
             return False, "營運政策價值不足"
@@ -4049,7 +4155,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return None
         if _is_low_value_python_selection_candidate(candidate):
             return None
-        if classification == "營運政策" and not _passes_high_value_policy_gate(candidate):
+        if classification == "營運政策" and not (
+            _passes_high_value_policy_gate(candidate) or _passes_service_opening_gate(candidate)
+        ):
             return None
         if classification == "營運爭議" and not _passes_operational_dispute_gate(candidate):
             return None
@@ -4234,6 +4342,37 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return selected
 
 
+    def _cap_operational_dynamics(selected: list[dict]) -> list[dict]:
+        operational_indexes = [
+            index
+            for index, candidate in enumerate(selected)
+            if candidate.get("classification") in {"營運政策", "營運爭議"}
+        ]
+        if len(operational_indexes) > OPERATIONAL_DYNAMICS_SELECTION_CAP:
+            ranked_indexes = sorted(
+                operational_indexes,
+                key=lambda index: _python_selection_sort_key(selected[index]),
+            )
+            keep_indexes = set(ranked_indexes[:OPERATIONAL_DYNAMICS_SELECTION_CAP])
+            selected = [
+                candidate
+                for index, candidate in enumerate(selected)
+                if index not in operational_indexes or index in keep_indexes
+            ]
+        LAST_PYTHON_SELECTION_DEBUG["operational_dynamics_selected_count"] = sum(
+            1
+            for candidate in selected
+            if candidate.get("classification") in {"營運政策", "營運爭議"}
+        )
+        LAST_PYTHON_SELECTION_DEBUG["service_opening_selected_count"] = sum(
+            1
+            for candidate in selected
+            if candidate.get("operational_subtype") == SERVICE_OPENING_CATEGORY_KEY
+        )
+        LAST_PYTHON_SELECTION_DEBUG["final_selected_count"] = len(selected)
+        return selected
+
+
     def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
         global LAST_PYTHON_SELECTION_DEBUG
         LAST_PYTHON_SELECTION_DEBUG = _selection_debug_reset()
@@ -4284,7 +4423,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             if item.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
         )
         LAST_PYTHON_SELECTION_DEBUG["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("borderline_added_count", 0)
-        return rebalance_selected_candidates(selected)
+        selected = rebalance_selected_candidates(selected)
+        return _cap_operational_dynamics(selected)
 
     return {
         "_has_high_value_operational_detail": _has_high_value_operational_detail,
@@ -4350,7 +4490,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_is_short_term_service_notice": _is_short_term_service_notice,
         "_compute_passes_high_value_policy_gate": _compute_passes_high_value_policy_gate,
         "_passes_high_value_policy_gate": _passes_high_value_policy_gate,
+        "_compute_service_opening_gate": _compute_service_opening_gate,
+        "_compute_passes_service_opening_gate": _compute_passes_service_opening_gate,
+        "_passes_service_opening_gate": _passes_service_opening_gate,
         "evaluate_category_gates": evaluate_category_gates,
+        "_cap_operational_dynamics": _cap_operational_dynamics,
         "_candidate_level": _candidate_level,
         "_is_accident_signal_text": _is_accident_signal_text,
         "_has_strong_technical_detail_text": _has_strong_technical_detail_text,

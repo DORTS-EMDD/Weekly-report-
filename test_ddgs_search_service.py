@@ -31,7 +31,7 @@ FIXED_TODAY = datetime.date(2026, 7, 23)
 EXPECTED_SCENARIO_SHA256 = {
     "plan_global": "78e8cd8df65bdcf5c4f38c4dbfd9ec2359527d64c4ed9cfa4332c8034bffc477",
     "plan_no_selected": "549d7739bddc7e487b502525c794834298a7916dbb1bdff68612b2162cb457fa",
-    "plan_regions": "090d3e372f61c076a28ec2074c0ef9e171618b0c5ade6ae4a8ce0fa06ce55e25",
+    "plan_regions": "ca3db3af7b8e7bf397f762f59d4938f47bb5f4304da8fb6243e7d507ada2bcbe",
     "plan_standards": "5e641af9c1c12dfdba5377e8de1b120fecc5bfabb7243b7ddee63c47a68d33bf",
     "run_403": "77ce75422b2f97f2148b0fd0f97c10cc35ba40a83ee46ecf5071397285fa06b8",
     "run_429": "1ef415824448ae077a34c92052a0c4ad4471780ac30fca868d11d19f60ff2874",
@@ -43,7 +43,7 @@ EXPECTED_SCENARIO_SHA256 = {
     "run_timeout": "d49ab3f0bea53a1c6ec8d500959d32f7a290250e0d58681be416237c23994e58",
     "run_zero": "78561c510c10e1b0ae3cdaf6a2dd1a536e9f222fe773ba4950542cbd5d536ee9",
 }
-EXPECTED_AGGREGATE_SHA256 = "7e186c9b132fff1698d0deb61b5d3e6fc2cd8eb48ab780b262b3e12b7f3af2e3"
+EXPECTED_AGGREGATE_SHA256 = "37f2a06b60d83c3be2d919340267ab587452a1affc16562f1e1a152694cf4f1f"
 
 
 class ProgressRecorder:

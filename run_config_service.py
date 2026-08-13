@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
+from config import OPERATIONAL_DYNAMICS_CATEGORY_LABEL
+
 
 @dataclass(frozen=True)
 class RunSettingsContext:
@@ -55,7 +57,7 @@ def _formal_report_topic_labels(report_types: list[str]) -> list[str]:
     for category in report_types or []:
         if category in {"營運政策", "營運爭議"}:
             if not operations_added:
-                labels.append("營運議題")
+                labels.append(OPERATIONAL_DYNAMICS_CATEGORY_LABEL)
                 operations_added = True
             continue
         if category not in labels:

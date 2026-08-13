@@ -849,7 +849,7 @@ def build_pipeline_debug_stats(
     if not query_count_by_family:
         query_count_by_family = {
             family: sum(1 for status in LAST_DDGS_QUERY_STATUSES if status.get("search_family") == family)
-            for family in ("policy", "dispute")
+            for family in ("policy", "dispute", "service_opening")
         }
     policy_raw_candidates = [
         item for item in raw_candidates or [] if item.get("search_family") == "policy"
@@ -857,11 +857,18 @@ def build_pipeline_debug_stats(
     dispute_raw_candidates = [
         item for item in raw_candidates or [] if item.get("search_family") == "dispute"
     ]
-    gate_failure_reason_stats = {"policy": {}, "dispute": {}}
+    service_opening_raw_candidates = [
+        item for item in raw_candidates or [] if item.get("search_family") == "service_opening"
+    ]
+    gate_failure_reason_stats = {"policy": {}, "dispute": {}, "service_opening": {}}
     for item in filtered_candidates or []:
         gate_payload = item.get("category_gates") or {}
         gate_reasons = item.get("category_gate_reasons") or {}
-        for category, gate_name in (("policy", "operational_policy"), ("dispute", "operational_dispute")):
+        for category, gate_name in (
+            ("policy", "operational_policy"),
+            ("dispute", "operational_dispute"),
+            ("service_opening", "service_opening"),
+        ):
             if gate_payload.get(gate_name):
                 continue
             reason = gate_reasons.get(gate_name) or "未通過該分類 gate"
@@ -928,6 +935,9 @@ def build_pipeline_debug_stats(
         "dispute_raw_candidate_count": len(dispute_raw_candidates),
         "policy_raw_candidates": [build_candidate_card(item) for item in policy_raw_candidates],
         "dispute_raw_candidates": [build_candidate_card(item) for item in dispute_raw_candidates],
+        "service_opening_query_count": int(query_count_by_family.get("service_opening", 0) or 0),
+        "service_opening_raw_candidate_count": len(service_opening_raw_candidates),
+        "service_opening_raw_candidates": [build_candidate_card(item) for item in service_opening_raw_candidates],
         "policy_gate_pass_count": sum(
             1 for item in filtered_candidates or []
             if (item.get("category_gates") or {}).get("operational_policy")
@@ -935,6 +945,10 @@ def build_pipeline_debug_stats(
         "dispute_gate_pass_count": sum(
             1 for item in filtered_candidates or []
             if (item.get("category_gates") or {}).get("operational_dispute")
+        ),
+        "service_opening_gate_pass_count": sum(
+            1 for item in filtered_candidates or []
+            if (item.get("category_gates") or {}).get("service_opening")
         ),
         "gate_failure_reason_stats": gate_failure_reason_stats,
         "operational_topic_selected_count": 0,
@@ -1032,6 +1046,9 @@ _is_policy_dominant = _selector_api.get(
 _is_short_term_service_notice = _selector_api["_is_short_term_service_notice"]
 _compute_passes_high_value_policy_gate = _selector_api["_compute_passes_high_value_policy_gate"]
 _passes_high_value_policy_gate = _selector_api["_passes_high_value_policy_gate"]
+_compute_service_opening_gate = _selector_api["_compute_service_opening_gate"]
+_compute_passes_service_opening_gate = _selector_api["_compute_passes_service_opening_gate"]
+_passes_service_opening_gate = _selector_api["_passes_service_opening_gate"]
 evaluate_category_gates = _selector_api["evaluate_category_gates"]
 _candidate_level = _selector_api["_candidate_level"]
 _is_accident_signal_text = _selector_api["_is_accident_signal_text"]
@@ -1885,8 +1902,9 @@ def _read_demo_debug_payload(path: Path) -> dict:
 
 
 def _builtin_demo_report_text() -> str:
+    demo_report_title = report_title.replace("營運動態", "營運議題")
     sections: list[str] = [
-        f"# {report_title}",
+        f"# {demo_report_title}",
         f"> 資料涵蓋期間：{date_range}",
         f"> 報導範圍：{report_scope_label}",
         "",
@@ -1961,6 +1979,7 @@ def load_demo_report_cache() -> tuple[str, bytes | None, dict]:
             report_text = _builtin_demo_report_text()
 
     report_text = remove_internal_candidate_markers(sanitize_report_text(report_text))
+    report_text = report_text.replace("營運動態", "營運議題")
     report_text = enforce_research_section(report_text, [])
     report_text = normalize_final_report_md(report_text)
     report_text = apply_final_report_footer(report_text, [], report_date=DEMO_REPORT_DATE)
@@ -2077,12 +2096,16 @@ if generate_btn:
                 "ddgs_query_count": 0,
                 "policy_query_count": 0,
                 "dispute_query_count": 0,
+                "service_opening_query_count": 0,
                 "policy_raw_candidate_count": 0,
                 "dispute_raw_candidate_count": 0,
+                "service_opening_raw_candidate_count": 0,
                 "policy_raw_candidates": [],
                 "dispute_raw_candidates": [],
+                "service_opening_raw_candidates": [],
                 "policy_gate_pass_count": 0,
                 "dispute_gate_pass_count": 0,
+                "service_opening_gate_pass_count": 0,
                 "gate_failure_reason_stats": {},
                 "operational_topic_selected_count": 0,
                 "candidate_card_limit": 0,
@@ -2365,6 +2388,12 @@ if generate_btn:
                 if item.get("classification") in {"營運政策", "營運爭議"}
             )
             pipeline_debug_stats["operational_topic_selected_count"] = operational_topic_selected_count
+            pipeline_debug_stats["operational_dynamics_selected_count"] = LAST_PYTHON_SELECTION_DEBUG.get(
+                "operational_dynamics_selected_count", operational_topic_selected_count
+            )
+            pipeline_debug_stats["service_opening_selected_count"] = LAST_PYTHON_SELECTION_DEBUG.get(
+                "service_opening_selected_count", 0
+            )
             pipeline_debug_stats["strict_selected_count"] = LAST_PYTHON_SELECTION_DEBUG.get("strict_selected_count", 0)
             pipeline_debug_stats["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("B_added_count", 0)
             incident_coverage = build_final_incident_coverage_debug(
@@ -2427,14 +2456,22 @@ if generate_btn:
                 **LAST_DDGS_SEARCH_SUMMARY,
                 "policy_query_count": pipeline_debug_stats.get("policy_query_count", 0),
                 "dispute_query_count": pipeline_debug_stats.get("dispute_query_count", 0),
+                "service_opening_query_count": pipeline_debug_stats.get("service_opening_query_count", 0),
                 "policy_raw_candidates": pipeline_debug_stats.get("policy_raw_candidates", []),
                 "dispute_raw_candidates": pipeline_debug_stats.get("dispute_raw_candidates", []),
+                "service_opening_raw_candidates": pipeline_debug_stats.get("service_opening_raw_candidates", []),
                 "policy_raw_candidate_count": pipeline_debug_stats.get("policy_raw_candidate_count", 0),
                 "dispute_raw_candidate_count": pipeline_debug_stats.get("dispute_raw_candidate_count", 0),
+                "service_opening_raw_candidate_count": pipeline_debug_stats.get("service_opening_raw_candidate_count", 0),
                 "policy_gate_pass_count": pipeline_debug_stats.get("policy_gate_pass_count", 0),
                 "dispute_gate_pass_count": pipeline_debug_stats.get("dispute_gate_pass_count", 0),
+                "service_opening_gate_pass_count": pipeline_debug_stats.get("service_opening_gate_pass_count", 0),
                 "gate_failure_reason_stats": pipeline_debug_stats.get("gate_failure_reason_stats", {}),
                 "operational_topic_selected_count": operational_topic_selected_count,
+                "operational_dynamics_selected_count": pipeline_debug_stats.get(
+                    "operational_dynamics_selected_count", operational_topic_selected_count
+                ),
+                "service_opening_selected_count": pipeline_debug_stats.get("service_opening_selected_count", 0),
                 "candidate_card_limit": candidate_pool.get("candidate_card_limit", len(candidate_pool["candidate_cards"])),
                 "candidate_card_count": len(candidate_pool["candidate_cards"]),
                 "elapsed_seconds_total": timings["elapsed_seconds_total"],

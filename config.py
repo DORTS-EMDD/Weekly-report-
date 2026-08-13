@@ -16,6 +16,46 @@ ADVANCED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議"
 ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY = "electromechanical_procurement"
 ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL = "機電標案"
 ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP = 3
+OPERATIONAL_DYNAMICS_CATEGORY_LABEL = "營運動態"
+SERVICE_OPENING_CATEGORY_KEY = "service_opening"
+OPERATIONAL_DYNAMICS_SELECTION_CAP = 5
+
+SERVICE_OPENING_ACTUAL_TERMS = [
+    "opens to passengers", "opened to passengers",
+    "opens for passenger service", "opened for passenger service",
+    "enters revenue service", "entered revenue service",
+    "enters commercial service", "entered commercial service",
+    "begins passenger service", "began passenger service",
+    "starts passenger operations", "started passenger operations",
+    "commercial service begins", "commercial operations begin",
+    "revenue service begins", "revenue operations begin",
+    "inaugurated and opened to passengers",
+    "正式通車", "正式啟用", "正式營運", "正式投入營運", "正式載客",
+    "開始載客", "開始營運", "通車啟用", "投入載客服務",
+]
+
+SERVICE_OPENING_FUTURE_TERMS = [
+    "will open", "set to open", "expected to open", "scheduled to open",
+    "plans to open", "proposed opening", "target opening",
+    "opening planned for", "due to open",
+    "預計通車", "預定通車", "預計啟用", "將通車", "將啟用",
+    "預計營運", "目標通車", "預計於", "預定於",
+]
+
+SERVICE_OPENING_PLANNING_TERMS = [
+    "feasibility study", "route planning", "network planning",
+    "preliminary planning", "approved route", "government approval",
+    "groundbreaking", "construction begins", "construction progress",
+    "civil works", "contract award", "tender", "design stage",
+    "可行性研究", "綜合規劃", "路網規劃", "路線規劃", "核定",
+    "獲准", "動工", "開工", "施工", "工程進度", "招標", "決標", "發包",
+]
+
+SERVICE_OPENING_TESTING_TERMS = [
+    "testing begins", "trial runs", "test operation", "dynamic testing",
+    "commissioning test", "train testing", "trial operation",
+    "試車", "動態測試", "系統測試", "試運轉", "測試營運",
+]
 
 # 「機電標案」先接入搜尋、分類與 selection backend；正式報告章節仍沿用
 # ADVANCED_TYPES，避免在 P4-B 提前改動 MaiAgent／報告後處理。

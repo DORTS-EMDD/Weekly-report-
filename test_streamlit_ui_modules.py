@@ -14,10 +14,10 @@ import streamlit_sidebar_ui
 
 
 EXPECTED_SIDEBAR_SHA256 = (
-    "2088195ca873b711f089e39172f3e231a71587ca36057d7e2ae65e006371ce89"
+    "6448e79fd754192e23180e03635ac6ea4444c7e8438c21ab45a1677c4417f71d"
 )
 EXPECTED_DASHBOARD_SHA256 = (
-    "4dfa770f9ada8fa1723858dd78af7d40e7a27f8d9daea414d7b3c9e7e87f3d93"
+    "695d51d636c58e5b2ad7405cfa014b90485a27217fb970c385d96d7c3ff17221"
 )
 EXPECTED_REPORT_SHA256 = (
     "4dd2e5ffa5d148c99a246d79f429aee533b539390ecfef8152374dd46ec0e5e8"
@@ -268,7 +268,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
         )
         self.assertEqual(settings.week_start, datetime.date(2026, 7, 16))
         self.assertEqual(settings.date_range, "2026年07月16日 至 2026年07月23日")
-        self.assertEqual(settings.report_title, "【2026/07/23】國際捷運技術新知、營運議題週報")
+        self.assertEqual(settings.report_title, "【2026/07/23】國際捷運技術新知、營運動態週報")
         self.assertEqual(settings.report_scope_label, "美國、日本")
         config = run_config_service.build_current_run_config(
             run_config_service.RunConfigContext(
@@ -300,7 +300,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
             "lookback_days": 7,
             "date_range": "2026年07月16日 至 2026年07月23日",
             "report_label": "週報",
-            "report_title": "【2026/07/23】國際捷運技術新知、營運議題週報",
+            "report_title": "【2026/07/23】國際捷運技術新知、營運動態週報",
             "selected_types": ["技術新知", "營運政策", "營運爭議"],
             "scope_mode": "指定先進國家/地區",
             "selected_regions": ["美國", "日本"],
