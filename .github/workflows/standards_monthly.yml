@@ -1,0 +1,42 @@
+name: 每月捷運機電規範更新監測
+
+on:
+  schedule:
+    - cron: '37 1 2 * *'
+  workflow_dispatch:
+
+concurrency:
+  group: standards-monthly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  generate-standards-monthly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 📥 取得程式碼
+        uses: actions/checkout@v4
+
+      - name: 🐍 設定 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 安裝套件
+        run: pip install -r requirements.txt
+
+      - name: 📚 產生捷運機電規範更新月報
+        run: python -u standards_monitor_main.py --output-dir output
+
+      - name: 💾 上傳規範更新月報 Artifact（保留 90 天）
+        uses: actions/upload-artifact@v4
+        with:
+          name: standards-monthly-${{ github.run_id }}
+          path: |
+            output/standards_monthly_*.md
+            output/standards_monthly_*.json
+          retention-days: 90
