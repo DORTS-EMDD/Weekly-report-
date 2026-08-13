@@ -6,6 +6,12 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
+from config import (
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+    OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
+    SERVICE_OPENING_CATEGORY_KEY,
+)
+
 
 @dataclass(frozen=True)
 class ReportPromptContext:
@@ -34,6 +40,18 @@ class ReportPromptContext:
     is_standard_update_candidate: Callable[[str, bool], bool]
     source_label_for_report: Callable[..., str]
     source_verb_for_report: Callable[[str, str], str]
+
+
+def formal_selected_type_labels(selected_types: list[str]) -> list[str]:
+    labels: list[str] = []
+    for category in selected_types or []:
+        if category in {"營運政策", "營運爭議", SERVICE_OPENING_CATEGORY_KEY}:
+            label = OPERATIONAL_DYNAMICS_CATEGORY_LABEL
+        else:
+            label = category
+        if label and label not in labels:
+            labels.append(label)
+    return labels
 
 
 def format_selection_candidate(
@@ -79,10 +97,13 @@ def selected_report_sections(*, context: ReportPromptContext) -> str:
         lines.append("一、技術新知")
     if "重大事故" in context.selected_types:
         lines.append("二、重大事故")
-    if {"營運政策", "營運爭議"}.intersection(context.selected_types):
-        lines.append("三、營運議題")
+    if {"營運政策", "營運爭議", SERVICE_OPENING_CATEGORY_KEY}.intersection(context.selected_types):
+        lines.append(f"三、{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}")
+    if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in context.selected_types:
+        lines.append("四、機電標案")
     if "規範更新" in context.selected_types:
-        lines.append("四、規範更新")
+        standards_number = "五" if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in context.selected_types else "四"
+        lines.append(f"{standards_number}、規範更新")
     if context.include_research_supplement:
         lines.append(research_section_heading(markdown=False, context=context))
     return "\n".join(lines) if lines else "無"
@@ -100,11 +121,9 @@ def research_section_heading(
     *,
     context: ReportPromptContext,
 ) -> str:
-    section_number = (
-        "五"
-        if context.standards_enabled or "規範更新" in context.selected_types
-        else "四"
-    )
+    has_procurement = ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in context.selected_types
+    has_standards = context.standards_enabled or "規範更新" in context.selected_types
+    section_number = "六" if has_procurement and has_standards else "五" if has_procurement or has_standards else "四"
     heading = f"{section_number}、國際學術期刊"
     return f"## {heading}" if markdown else heading
 
@@ -117,10 +136,15 @@ def selected_empty_section_rules(*, context: ReportPromptContext) -> str:
                 f"- {category}若無符合資料，請寫："
                 f"「{context.empty_text_by_type[category]}」"
             )
-    if {"營運政策", "營運爭議"}.intersection(context.selected_types):
+    if {"營運政策", "營運爭議", SERVICE_OPENING_CATEGORY_KEY}.intersection(context.selected_types):
         lines.append(
-            "- 營運政策與營運爭議皆無符合資料時，"
-            "請只寫：「本期未發現符合條件之營運議題。」"
+            f"- {OPERATIONAL_DYNAMICS_CATEGORY_LABEL}若無符合資料，"
+            f"請只寫：「本期未發現符合條件之{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}。」"
+        )
+    if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in context.selected_types:
+        lines.append(
+            f"- {ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL}若無符合資料，"
+            f"請寫：「本期未發現符合條件之{ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL}。」"
         )
     if "規範更新" in context.selected_types:
         lines.append(
@@ -166,8 +190,9 @@ def build_selection_prompt(
     )
     if not candidate_block:
         candidate_block = "本期 Python 初篩後沒有候選新聞。請回傳空的 selected_ids 清單。"
-    selected_types_str = "、".join(context.selected_types) if context.selected_types else "無"
-    example_type = context.selected_types[0] if context.selected_types else "技術新知"
+    formal_types = formal_selected_type_labels(context.selected_types)
+    selected_types_str = "、".join(formal_types) if formal_types else "無"
+    example_type = formal_types[0] if formal_types else "技術新知"
     output_range = context.get_selection_output_range(context.lookback_int)
     return f"""
 請依照你在 MaiAgent 後台設定的國際捷運技術週報角色指令，根據以下候選資料執行第一階段選題。不得自行搜尋或補充候選資料以外的新聞、日期、供應商、技術細節或統計數據。
@@ -177,7 +202,7 @@ def build_selection_prompt(
 使用者勾選的新聞類型：{selected_types_str}
 需要選出的數量：{output_range} 則；高品質候選不足時可少於目標，但不要用低價值資料湊數。
 
-請只使用候選資料中的 id 進行選題；category 必須從使用者勾選的新聞類型中選擇。不得輸出 Markdown 說明。
+請只使用候選資料中的 id 進行選題；category 必須使用「技術新知」、「重大事故」、「營運動態」或「機電標案」其中之一。營運動態的政策、爭議與 service_opening subtype 仍由 Python 候選資料保留，不得自行重新判斷 eligibility。不得輸出 Markdown 說明。
 
 輸出 JSON 格式：
 {{
@@ -284,6 +309,19 @@ def parse_selection_response(
             or item.get("preliminary_type")
             or "技術新知"
         )
+        if classification == OPERATIONAL_DYNAMICS_CATEGORY_LABEL:
+            candidate_category = (
+                candidate_map[candidate_id].get("classification")
+                or candidate_map[candidate_id].get("preliminary_type")
+                or "營運政策"
+            )
+            classification = (
+                candidate_category
+                if candidate_category in {"營運政策", "營運爭議"}
+                else "營運政策"
+            )
+        elif classification == SERVICE_OPENING_CATEGORY_KEY:
+            classification = "營運政策"
         if classification not in context.advanced_types:
             classification = next((category for category in context.advanced_types if category in str(item)), "技術新知")
         if classification not in context.selected_types:
@@ -374,7 +412,7 @@ def build_report_prompt(
     *,
     context: ReportPromptContext,
 ) -> str:
-    selected_types_str = "、".join(context.selected_types) if context.selected_types else "無"
+    selected_types_str = "、".join(formal_selected_type_labels(context.selected_types)) if context.selected_types else "無"
     selected_sections = selected_report_sections(context=context)
     selected_empty_rules = selected_empty_section_rules(context=context)
     research_heading = research_section_heading(markdown=False, context=context)
@@ -485,7 +523,8 @@ def build_report_prompt(
 
 必要寫作提醒：
 - 只根據下方已入選新聞資料撰寫；正式報告只輸出已勾選章節，不得輸出未勾選類型。
-- 營運政策與營運爭議統一置於「三、營運議題」章節；每則仍保留 [營運政策] 或 [營運爭議] 類型標記，並依日期新至舊排列。不得另外輸出「三、營運政策」或「四、營運爭議」。
+- 營運政策、營運爭議與正式通車統一置於「三、營運動態」章節；每則仍可保留 Python internal subtype 標記，並依日期新至舊排列。不得另外輸出營運政策、營運爭議或 service_opening 章節。
+- 機電標案是獨立的「四、機電標案」章節；來源明確提供時，可摘要路線／系統、標案／採購內容、廠商與金額。來源未提供的廠商、金額或技術細節不得自行補寫。
 - 下方共 {len(selected_candidates)} 則新聞已由 Python 完成「入選」。所有不同且符合範圍的事件原則上均須保留。同一事件的不同來源必須合併；明顯屬於非都市軌道、刑事治安、旅遊、公車或其他禁止範圍的候選可排除。不得自行新增候選資料以外的事件。
 - 每則正式新聞標題正前方必須原樣輸出 `<!-- candidate_id: N -->`，其中 N 必須等於候選資料的 candidate_id；不得省略、改號或自行產生 ID。
 - 同一事件若合併多個候選，請在同一個新聞 block 前連續保留所有對應 candidate_id marker；不得把已合併事件拆成多篇，且必須保留所有候選來源 URL。
@@ -500,7 +539,7 @@ def build_report_prompt(
 - 技術新知：原始資料明確描述都市軌道機電設備或系統的新導入、擴充、升級、汰換、改善、測試驗證或正式投入營運。包括新型車輛投入營運、生物辨識或 AFC 系統應用、新票閘設備、電梯或電扶梯汰換、號誌與列車控制、供電、通訊、月臺門、行控、機廠設備、維修監測、能源管理、系統整合、系統保證及資安等具體案例。
 - 技術新知不限於採購、合約或正式上線事件；候選若明確說明都市軌道機電技術原理、工程挑戰或系統應用，即使屬專業技術文章仍應保留。Frauscher 軸計數器與電車號誌工程文章即屬此類，不得只因缺少單一專案事件而刪除。
 - 重大事故：已實際發生，且涉及傷亡、出軌、碰撞、火災、重大設備損壞、停駛、重大營運中斷，或具有明確系統安全檢討價值的事件。
-- 事故後的安全改善、設施改善、監管檢討、治理或政策回應，若不是本期新發生事故，應歸入營運政策或營運議題，不得僅因提到 accident、fatal、safety 或 incident 改列重大事故。
+- 事故後的安全改善、設施改善、監管檢討、治理或政策回應，若不是本期新發生事故，應歸入營運動態，不得僅因提到 accident、fatal、safety 或 incident 改列重大事故。
 - 營運政策：票價、服務調整、營運諮詢、預定封閉、例行維修、一般工程安排、旅客服務及治理措施。若新聞同時具有明確設備導入、系統升級或技術驗證內容，應優先歸為技術新知。
 - 營運爭議：罷工、勞資、票價、合約、預算、工程延誤、訴訟或公共爭議。
 - 規範更新：必須具備明確新版、修訂、增補、草案、公告、徵詢、撤回或取代資訊。

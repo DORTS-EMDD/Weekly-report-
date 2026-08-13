@@ -12,20 +12,20 @@ import report_prompt_service
 
 EXPECTED_PROMPT_SHA256 = {
     "selection_with_candidates": (
-        "e1d3d7d7f6dcf3b75a3115d32a6c7b6b0b9f583e26e239ee82d3f232159d8289"
+        "d65de2e508f42acd49a41e9722c907563d6d0b3371f8397da396e789c2c92352"
     ),
     "selection_empty": (
-        "3537d8813e186f585f3957ce6649f35436bc20fa0f59b4669b710185bf3b11ba"
+        "4930e0434c882b1fc01b3225fa18264228eb50894acae9d33e2239d2d2965925"
     ),
     "formal_with_journal": (
-        "1662043c2295d551c8c61f545c6aaf0b1da99288a848845060511b174f543ab0"
+        "c6b3b43e9930b2aa8b208f10826d93fd2f45bc38bf2ce49db48a0049a528e808"
     ),
     "formal_without_research": (
-        "6357ad9676543f643cfa9e0eea147a8f779a57cfc65a235f32135617b9ad9d15"
+        "39b9365133028815442043a2d6bf3d02e4b3f37cf1b141993ea0c8d099b17edc"
     ),
 }
 EXPECTED_PROMPT_AGGREGATE_SHA256 = (
-    "a52eec180c8ba548a26455a1bbaaeabf5a3824b6cc7b8b63b8024d530fd4328d"
+    "74f08f842b986eec0741e899774fabb2c3e693ab6e9a75e546f7d52562c64731"
 )
 EXPECTED_PARSE_AGGREGATE_SHA256 = (
     "5831f78388fd7fb52bbdb49fb4980142e8f5136913fe5e97340867aa8b7e3e61"

@@ -6,7 +6,14 @@ RUNTIME_ENV_NAMES = (
     "NEWS_LOOKBACK_DAYS", "MAIAGENT_TIMEOUT_SECONDS", "MAIAGENT_MAX_RSS_CHARS",
     "MAIAGENT_MAX_DDG_CHARS", "DDGS_MAX_WORKERS", "DDGS_MAX_QUERIES", "ENABLE_DDGS",
 )
-REPORT_TYPES = ("技術新知", "重大事故", "營運政策", "營運爭議", "規範更新")
+REPORT_TYPES = (
+    "技術新知",
+    "重大事故",
+    "營運政策",
+    "營運爭議",
+    "規範更新",
+    "機電標案",
+)
 NEWS_SCOPE_OPTIONS = ("international", "domestic", "both")
 DEFAULT_NEWS_SCOPE = "international"
 
@@ -19,6 +26,14 @@ ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP = 3
 OPERATIONAL_DYNAMICS_CATEGORY_LABEL = "營運動態"
 SERVICE_OPENING_CATEGORY_KEY = "service_opening"
 OPERATIONAL_DYNAMICS_SELECTION_CAP = 5
+REPORT_CATEGORY_TYPES = [
+    "技術新知",
+    "重大事故",
+    "營運政策",
+    "營運爭議",
+    "規範更新",
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+]
 
 SERVICE_OPENING_ACTUAL_TERMS = [
     "opens to passengers", "opened to passengers",
@@ -57,14 +72,20 @@ SERVICE_OPENING_TESTING_TERMS = [
     "試車", "動態測試", "系統測試", "試運轉", "測試營運",
 ]
 
-# 「機電標案」先接入搜尋、分類與 selection backend；正式報告章節仍沿用
-# ADVANCED_TYPES，避免在 P4-B 提前改動 MaiAgent／報告後處理。
 BACKEND_CATEGORY_TYPES = [
     *ADVANCED_TYPES,
     ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
 ]
 
 DEFAULT_SELECTED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議"]
+STREAMLIT_DEFAULT_SELECTED_TYPES = [
+    "技術新知",
+    "重大事故",
+    "營運政策",
+    "營運爭議",
+    "service_opening",
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+]
 
 SECTION_NUMBER_BY_TYPE = {
     "技術新知": "一",
@@ -72,6 +93,7 @@ SECTION_NUMBER_BY_TYPE = {
     "營運政策": "三",
     "營運爭議": "四",
     "規範更新": "五",
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL: "四",
 }
 
 EMPTY_TEXT_BY_TYPE = {
@@ -80,6 +102,7 @@ EMPTY_TEXT_BY_TYPE = {
     "營運政策": "本期未發現符合條件之營運政策案例。",
     "營運爭議": "本期未發現符合條件之營運爭議事件。",
     "規範更新": "本期未發現符合條件之規範版本更新、修訂草案、公告或徵詢事件。",
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL: "本期未發現符合條件之機電標案。",
 }
 
 MIN_REPORT_ITEMS = 3

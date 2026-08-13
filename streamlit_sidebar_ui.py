@@ -10,9 +10,14 @@ VISIBLE_LOOKBACK_DAYS = (7, 30)
 VISIBLE_REPORT_TYPE_GROUPS = (
     ("技術新知", ("技術新知",)),
     ("重大事故", ("重大事故",)),
-    ("營運議題", ("營運政策", "營運爭議")),
+    ("營運動態", ("營運政策", "營運爭議", "service_opening")),
+    ("機電標案", ("機電標案",)),
 )
-VISIBLE_REPORT_TYPE_DISPLAY_LABELS = {"營運議題": "營運動態"}
+NEWS_SCOPE_OPTIONS = (
+    ("國際捷運", "international"),
+    ("國內捷運", "domestic"),
+    ("國內＋國際", "both"),
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +33,7 @@ class SidebarContext:
     advanced_regions: list[str]
     standards_watchlist: dict[str, list[str]]
     get_research_supplement_lookback_days: Callable[[int], int]
+    default_news_scope: str = "both"
 
 
 @dataclass(frozen=True)
@@ -37,6 +43,7 @@ class SidebarSelection:
     selected_types: list[str]
     standards_enabled: bool
     standard_count: int
+    news_scope: str
     scope_mode: str
     selected_regions: list[str]
     long_term_mode: bool
@@ -62,10 +69,20 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         st.session_state["fast_mode"] = False
         st.session_state["_fast_mode_removed_applied"] = True
 
+    visible_report_type_groups = tuple(
+        (group_label, report_types)
+        for group_label, report_types in VISIBLE_REPORT_TYPE_GROUPS
+        if any(report_type in context.advanced_types for report_type in report_types)
+    )
+
     def select_all_report_types() -> None:
-        st.session_state["selected_types_state"] = context.advanced_types.copy()
-        st.session_state["type_規範更新"] = True
-        for group_label, report_types in VISIBLE_REPORT_TYPE_GROUPS:
+        st.session_state["selected_types_state"] = [
+            report_type
+            for _, report_types in visible_report_type_groups
+            for report_type in report_types
+        ]
+        st.session_state["type_規範更新"] = False
+        for group_label, report_types in visible_report_type_groups:
             st.session_state[f"type_{group_label}"] = True
             for report_type in report_types:
                 st.session_state[f"type_{report_type}"] = True
@@ -75,18 +92,20 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         st.session_state["type_規範更新"] = False
         for report_type in context.advanced_types:
             st.session_state[f"type_{report_type}"] = False
-        for group_label, _ in VISIBLE_REPORT_TYPE_GROUPS:
+        for group_label, _ in visible_report_type_groups:
             st.session_state[f"type_{group_label}"] = False
 
     def selected_group_defaults() -> dict[str, bool]:
         selected_state = set(st.session_state["selected_types_state"])
         defaults = {}
-        for group_label, report_types in VISIBLE_REPORT_TYPE_GROUPS:
+        for group_label, report_types in visible_report_type_groups:
             legacy_values = [
                 bool(st.session_state[f"type_{report_type}"])
                 for report_type in report_types
                 if f"type_{report_type}" in st.session_state
             ]
+            if group_label == "營運動態":
+                legacy_values.append(bool(st.session_state.get("type_營運議題", False)))
             defaults[group_label] = bool(
                 any(legacy_values)
                 or any(report_type in selected_state for report_type in report_types)
@@ -96,7 +115,7 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
     with st.sidebar:
         st.markdown(
             """
-        <div class="sidebar-title">🚇 國際捷運 AI 週報</div>
+        <div class="sidebar-title">🚇 捷運技術週報 AI 系統</div>
         <div class="sidebar-subtitle">臺北市政府捷運工程局｜機電系統設計處</div>
         """,
             unsafe_allow_html=True,
@@ -169,30 +188,49 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
                 on_click=clear_selected_report_types,
             )
 
-            for group_label, report_types in VISIBLE_REPORT_TYPE_GROUPS:
-                display_label = VISIBLE_REPORT_TYPE_DISPLAY_LABELS.get(group_label, group_label)
+            for group_label, report_types in visible_report_type_groups:
                 if st.checkbox(
-                    display_label,
+                    group_label,
                     value=group_defaults[group_label],
                     key=f"type_{group_label}",
                 ):
                     selected_types.extend(report_types)
 
-        for group_label, report_types in VISIBLE_REPORT_TYPE_GROUPS:
+        for group_label, report_types in visible_report_type_groups:
             group_selected = group_label in {
                 group
-                for group, types in VISIBLE_REPORT_TYPE_GROUPS
+                for group, types in visible_report_type_groups
                 if any(report_type in selected_types for report_type in types)
             }
             for report_type in report_types:
                 if report_type != group_label:
                     st.session_state[f"type_{report_type}"] = group_selected
 
-        st.markdown("### 🌏 追蹤範圍")
-        scope_mode = st.radio(
+        st.markdown("### 🌏 報導範圍")
+        news_scope_labels = [label for label, _ in NEWS_SCOPE_OPTIONS]
+        news_scope_default = next(
+            (
+                index
+                for index, (_, value) in enumerate(NEWS_SCOPE_OPTIONS)
+                if value == context.default_news_scope
+            ),
+            2,
+        )
+        news_scope_label = st.radio(
             "報導範圍",
+            news_scope_labels,
+            index=news_scope_default,
+            key="news_scope_state",
+            help="國內＋國際會固定納入國內捷運範圍，國際部分再依下方追蹤設定處理。",
+        )
+        news_scope = dict(NEWS_SCOPE_OPTIONS)[news_scope_label]
+
+        st.markdown("**國際追蹤範圍**")
+        scope_mode = st.radio(
+            "國際來源追蹤方式",
             ["指定先進國家/地區", "全球（安全白名單來源）"],
             index=0,
+            key="international_scope_mode",
             horizontal=False,
             help=(
                 "全球模式不以國家刪除新聞；"
@@ -215,9 +253,14 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             st.session_state["selected_regions_state"]
         )
         selected_regions = stored_selected_regions.copy()
-        global_scope_selected = scope_mode == "全球（安全白名單來源）"
+        global_scope_selected = (
+            scope_mode == "全球（安全白名單來源）"
+            or news_scope == "domestic"
+        )
         if scope_mode == "全球（安全白名單來源）":
             st.caption("報導範圍：全球模式")
+        elif news_scope == "domestic":
+            st.caption("國內捷運模式不受下方國際國家選擇影響。")
         else:
             st.caption(
                 f"已選 {len(stored_selected_regions)} / "
@@ -265,9 +308,11 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         if not global_scope_selected:
             selected_regions = list(dict.fromkeys(next_selected_regions))
             st.session_state["selected_regions_state"] = selected_regions
+        elif news_scope == "domestic":
+            selected_regions = []
         else:
             selected_regions = stored_selected_regions
-        if scope_mode != "全球（安全白名單來源）" and not selected_regions:
+        if news_scope != "domestic" and scope_mode != "全球（安全白名單來源）" and not selected_regions:
             st.warning("請至少選擇一個國家/地區。")
 
         standard_count = sum(
@@ -340,6 +385,7 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         selected_types=selected_types,
         standards_enabled=standards_enabled,
         standard_count=standard_count,
+        news_scope=news_scope,
         scope_mode=scope_mode,
         selected_regions=selected_regions,
         long_term_mode=False,

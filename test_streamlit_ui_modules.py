@@ -14,10 +14,10 @@ import streamlit_sidebar_ui
 
 
 EXPECTED_SIDEBAR_SHA256 = (
-    "6448e79fd754192e23180e03635ac6ea4444c7e8438c21ab45a1677c4417f71d"
+    "a2e5125a14332995f8685a3a69cf84129be2daee059d6b6de2ef8c614308685b"
 )
 EXPECTED_DASHBOARD_SHA256 = (
-    "695d51d636c58e5b2ad7405cfa014b90485a27217fb970c385d96d7c3ff17221"
+    "634f6e484abafc2671200234344674cb1d77ac98f5e92c0e73e07ae319a053cb"
 )
 EXPECTED_REPORT_SHA256 = (
     "4dd2e5ffa5d148c99a246d79f429aee533b539390ecfef8152374dd46ec0e5e8"
@@ -305,6 +305,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
             "scope_mode": "指定先進國家/地區",
             "selected_regions": ["美國", "日本"],
             "report_scope_label": "美國、日本",
+            "news_scope": "international",
             "include_standards": False,
             "include_research_supplement": True,
             "research_supplement_period": {
@@ -418,6 +419,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
                 "selected_types",
                 "standards_enabled",
                 "standard_count",
+                "news_scope",
                 "scope_mode",
                 "selected_regions",
                 "long_term_mode",

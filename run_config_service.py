@@ -5,7 +5,12 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
-from config import OPERATIONAL_DYNAMICS_CATEGORY_LABEL
+from config import (
+    DEFAULT_NEWS_SCOPE,
+    NEWS_SCOPE_OPTIONS,
+    OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
+    SERVICE_OPENING_CATEGORY_KEY,
+)
 
 
 @dataclass(frozen=True)
@@ -24,6 +29,7 @@ class RunSettingsContext:
     report_target_by_days: dict[int, int]
     research_supplement_allowed_for_report: Callable[[int], bool]
     get_research_supplement_lookback_days: Callable[[int], int]
+    news_scope: str = DEFAULT_NEWS_SCOPE
 
 
 @dataclass(frozen=True)
@@ -49,13 +55,14 @@ class RunSettings:
     is_global_scope: bool
     active_regions: list[str]
     report_scope_label: str
+    news_scope: str
 
 
 def _formal_report_topic_labels(report_types: list[str]) -> list[str]:
     labels: list[str] = []
     operations_added = False
     for category in report_types or []:
-        if category in {"營運政策", "營運爭議"}:
+        if category in {"營運政策", "營運爭議", SERVICE_OPENING_CATEGORY_KEY}:
             if not operations_added:
                 labels.append(OPERATIONAL_DYNAMICS_CATEGORY_LABEL)
                 operations_added = True
@@ -124,13 +131,25 @@ def build_run_settings(context: RunSettingsContext) -> RunSettings:
         if context.selected_types
         else "技術趨勢"
     )
+    news_scope = context.news_scope if context.news_scope in NEWS_SCOPE_OPTIONS else DEFAULT_NEWS_SCOPE
+    report_title_scope = "捷運" if news_scope in {"domestic", "both"} else "國際捷運"
     report_title = (
         f"【{context.today.strftime('%Y/%m/%d')}】"
-        f"國際捷運{selected_report_topic}{report_period_label}"
+        f"{report_title_scope}{selected_report_topic}{report_period_label}"
     )
-    is_global_scope = context.scope_mode == "全球（安全白名單來源）"
+    is_global_scope = (
+        context.scope_mode == "全球（安全白名單來源）"
+        or news_scope == "domestic"
+    )
     active_regions = [] if is_global_scope else context.selected_regions
-    report_scope_label = "全球" if is_global_scope else "、".join(active_regions)
+    if news_scope == "domestic":
+        report_scope_label = "國內捷運"
+    elif news_scope == "both":
+        report_scope_label = "國內＋國際"
+    elif is_global_scope:
+        report_scope_label = "國際捷運"
+    else:
+        report_scope_label = "、".join(active_regions)
     return RunSettings(
         week_start=week_start,
         date_range=date_range,
@@ -153,6 +172,7 @@ def build_run_settings(context: RunSettingsContext) -> RunSettings:
         is_global_scope=is_global_scope,
         active_regions=active_regions,
         report_scope_label=report_scope_label,
+        news_scope=news_scope,
     )
 
 
@@ -176,6 +196,7 @@ class RunConfigContext:
     fast_mode_enabled: bool
     demo_cache_mode_enabled: bool
     current_app_hash: str
+    news_scope: str = DEFAULT_NEWS_SCOPE
 
 
 def build_current_run_config(context: RunConfigContext) -> dict:
@@ -194,6 +215,7 @@ def build_current_run_config(context: RunConfigContext) -> dict:
             ["全球"] if context.is_global_scope else context.active_regions.copy()
         ),
         "report_scope_label": context.report_scope_label,
+        "news_scope": context.news_scope,
         "include_standards": context.standards_enabled,
         "include_research_supplement": context.include_research_supplement,
         "research_supplement_period": {

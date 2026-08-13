@@ -95,7 +95,7 @@ class ReportPostprocessorCompatibilityTest(unittest.TestCase):
         encoded = json.dumps(results, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         self.assertEqual(
             hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
-            "457cf6b07023c3991e0a5b1a440f7d41c40dc04c00b90032311016144c3765a6",
+            "d97d2978ea80cafd039f7072dcdbb4477b06b7927cca772ec458a676ea163827",
         )
 
 
