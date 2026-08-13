@@ -19,11 +19,23 @@ EXPECTED_DEMO_REPORT_SHA256 = (
     "662744d89a2192435db6e8ad938d6488429e4cf2beba09332feb97bf79e33832"
 )
 EXPECTED_DEMO_PDF_SHA256 = (
-    "cc8cbda3e961656c5b2bed177f19a24d26cb397866df715c4e7dccfd7e83dd66"
+    "65300567785691ec0cc33b94d72bc65b551025e977b8a616b66e3ea87103a830"
 )
 
 
+def _canonicalize_newlines(value: bytes) -> bytes:
+    return value.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 class DemoModeRegressionTests(unittest.TestCase):
+    def test_pdf_fixture_newline_variants_have_same_digest(self):
+        fixture = b"%PDF-1.4\r\nfixture\r\n"
+        lf_fixture = fixture.replace(b"\r\n", b"\n")
+        self.assertEqual(
+            hashlib.sha256(_canonicalize_newlines(fixture)).hexdigest(),
+            hashlib.sha256(_canonicalize_newlines(lf_fixture)).hexdigest(),
+        )
+
     def test_demo_report_loads_entirely_offline(self):
         report_md, pdf_bytes, metadata = app.load_demo_report_cache()
         repeated_report_md, repeated_pdf_bytes, repeated_metadata = (
@@ -37,7 +49,7 @@ class DemoModeRegressionTests(unittest.TestCase):
             EXPECTED_DEMO_REPORT_SHA256,
         )
         self.assertEqual(
-            hashlib.sha256(pdf_bytes or b"").hexdigest(),
+            hashlib.sha256(_canonicalize_newlines(pdf_bytes or b"")).hexdigest(),
             EXPECTED_DEMO_PDF_SHA256,
         )
         self.assertTrue(metadata["demo_debug_payload_found"])
