@@ -174,6 +174,38 @@ class DomesticNewsScopeTests(unittest.TestCase):
             {"domestic"},
         )
 
+    def test_domestic_queries_are_recall_friendly(self):
+        context = ddgs_search_service.DdgsSearchContext(
+            selected_types=["技術新知", "重大事故", "營運政策", "營運爭議", "機電標案"],
+            active_regions=[],
+            lookback_days=30,
+            lookback_int=30,
+            is_global_scope=True,
+            today=FIXED_DATE,
+            ddgs_client_factory=None,
+            news_scope="domestic",
+        )
+        queries, _news_indices = ddgs_search_service.build_search_queries(context=context)
+        domestic_queries = {
+            query
+            for query in queries
+            if context.query_metadata[query]["query_region"] == "domestic"
+        }
+        self.assertEqual(
+            domestic_queries,
+            {
+                "臺灣 捷運 號誌",
+                "臺灣 捷運 維修",
+                "臺灣 捷運 安全",
+                "臺灣 捷運 票務",
+                "臺灣 捷運 爭議",
+                "臺灣 捷運 通車",
+                "臺灣 捷運 機電 決標",
+                "臺灣 捷運 車輛 採購",
+            },
+        )
+        self.assertTrue(all(len(query.split()) <= 4 for query in domestic_queries))
+
     def test_both_scope_adds_domestic_queries_without_changing_default(self):
         context = ddgs_search_service.DdgsSearchContext(
             selected_types=["技術新知"],

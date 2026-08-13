@@ -76,35 +76,35 @@ DOMESTIC_METRO_QUERY_SPECS = [
         "domestic_topic": "technology",
         "types": ("技術新知",),
         "lang": "zh",
-        "query": "臺灣 臺北捷運 新北捷運 號誌 CBTC 通訊 AFC 月臺門 車輛 供電",
+        "query": "臺灣 捷運 號誌",
     },
     {
         "family": "domestic_metro",
         "domestic_topic": "technology",
         "types": ("技術新知",),
         "lang": "zh",
-        "query": "臺灣 桃園捷運 臺中捷運 高雄捷運 維修 狀態監測 故障預測 AI 數位孿生 節能",
+        "query": "臺灣 捷運 維修",
     },
     {
         "family": "domestic_metro",
         "domestic_topic": "major_accident",
         "types": ("重大事故",),
         "lang": "zh",
-        "query": "臺灣 捷運 臺北 新北 桃園 臺中 高雄 碰撞 撞車 出軌 脫軌 火災 疏散 重傷 死亡 安全調查",
+        "query": "臺灣 捷運 安全",
     },
     {
         "family": "domestic_metro",
         "domestic_topic": "policy",
         "types": ("營運政策",),
         "lang": "zh",
-        "query": "臺灣 捷運 臺北 新北 桃園 臺中 高雄 票價 票務制度 服務制度 營運制度 班距 營運時間 重大營運調整",
+        "query": "臺灣 捷運 票務",
     },
     {
         "family": "domestic_metro",
         "domestic_topic": "dispute",
         "types": ("營運爭議",),
         "lang": "zh",
-        "query": "臺灣 捷運 臺北 新北 桃園 臺中 高雄 勞資爭議 合約爭議 服務中斷 仲裁 成本超支 停駛",
+        "query": "臺灣 捷運 爭議",
     },
 ]
 
@@ -129,7 +129,7 @@ DOMESTIC_SERVICE_OPENING_QUERY_SPECS = [
         "domestic_topic": "service_opening",
         "types": ("營運政策",),
         "lang": "zh",
-        "query": "臺灣 臺北 新北 桃園 臺中 高雄 捷運 輕軌 正式通車 正式啟用 正式營運 開始載客",
+        "query": "臺灣 捷運 通車",
     },
 ]
 
@@ -167,14 +167,14 @@ DOMESTIC_ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS = [
         "domestic_topic": "electromechanical_procurement",
         "types": (ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,),
         "lang": "zh",
-        "query": "臺灣 捷運 臺北 新北 桃園 臺中 高雄 號誌 供電 通訊 AFC 機電 招標 決標 發包 採購",
+        "query": "臺灣 捷運 機電 決標",
     },
     {
         "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
         "domestic_topic": "electromechanical_procurement",
         "types": (ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,),
         "lang": "zh",
-        "query": "臺灣 捷運 臺北 新北 桃園 臺中 高雄 電聯車 車輛 月臺門 車站機電 系統標 決標 採購",
+        "query": "臺灣 捷運 車輛 採購",
     },
 ]
 
