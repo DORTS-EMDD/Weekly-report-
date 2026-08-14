@@ -25,19 +25,17 @@ import streamlit_app as app
 
 
 EXPECTED_SCENARIO_SHA256 = {
-    "fast_mode": "8812284f7837237fdb83238381f3d5c60dcd6d43b8e6f0dc9e8b6dd6d8837cfa",
-    "full_weekly": "f43f9a531b16c3ce9af02ad0b448feda87930ba814a7ef45201d030bef329e34",
-    "no_debug_info": "01d3b5a81adde2eec7384520a2abd91c7e688a8d19684745a0a6cb94a9736430",
-    "missing_report_stats": "14a34f8da40fb34d7ac574beccbcad2993d3e93a6d228eddb697b4f0deb452ef",
-    "current_config_fallback": "b77f99306d9d544e22a37080369421eb671531c5b0b1853ad16932f782c46448",
+    "fast_mode": "ae92f3e0ff15a7609a3ea4c78e3eae9984a76fd2c8fe8b23592aecbe34d70f33",
+    "full_weekly": "162f8285d33774e21a3f90b58b74999d578e12ff53c49a54e67221ea74572928",
+    "no_debug_info": "8e263789d9ff1a966ca967f0494bf8457ad5567e5ac295ac8a06a31c4d4ecd29",
+    "missing_report_stats": "72b741b3c4ae62c295a47d858a211c16df3dad35438435f9596191e7a6e83b4d",
+    "current_config_fallback": "0574a8ae68e1d6e86aebbf69805c1022ee82855652fa2a6a0bd28208766ce232",
     "json_safe_types": "5cf8865f0d742f7a4911fb086b889607650d1e869334fdd7ea7de420b17160f5",
-    "internal_fields": "b4fdab0a7b3e4eb8a3720d0a06214a7d44cbc6e414bfc1119d84440be980b11c",
-    "empty_candidates": "f50cfb0b3e2d985c76afe83bee92a595303bc6842f5f3d87982c924b5baa52c8",
-    "full_candidates": "87f26fdd62b5742c2b53ddea18c9b7225c1930f1e377792edb7d6557504d6c02",
+    "internal_fields": "8cabfe101ee625f8c41d492805fbe77afd58cd6b5263c50ca930cd756bbf478b",
+    "empty_candidates": "b9849233814834280e4695457eb7098c197ef5cc35dab889490cf8ef495d74dc",
+    "full_candidates": "df53b4f79910cae31b0882acc411dd3540828eb38741af551d9746aa7e437a5c",
 }
-EXPECTED_AGGREGATE_SHA256 = (
-    "5a04af7e4160579079748d28faff4ce66b5205c2eb6d8ec29d5a6b04e1efb5f8"
-)
+EXPECTED_AGGREGATE_SHA256 = "c12f21b3362c6d50620f2e0c4269b507703f029441dee6627beb73a0d2e917ce"
 
 
 class FixedDateTime(real_datetime.datetime):
@@ -578,6 +576,8 @@ class DeveloperDebugServiceRegressionTests(unittest.TestCase):
             set(developer_debug_service.RUNTIME_FINGERPRINT_MODULES),
         )
         self.assertTrue(all(len(value) == 40 for value in module_hashes.values()))
+        for module_name, module_hash in module_hashes.items():
+            self.assertEqual(runtime_version[f"{module_name}_hash"], module_hash)
 
 
 if __name__ == "__main__":

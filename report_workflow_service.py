@@ -352,7 +352,14 @@ class WorkflowRuntime:
             progress_callback=self.dependencies.progress_callback,
             status_callback=self.dependencies.status_callback,
         )
-        queries, news_indices = build_search_queries(context=ddgs_context)
+        include_forward_technology = (
+            self.config.lookback_int >= 365
+            and "技術新知" in self.config.selected_types
+        )
+        queries, news_indices = build_search_queries(
+            context=ddgs_context,
+            include_forward_technology=include_forward_technology,
+        )
         ddg_result, ddgs_statuses, _ = run_duckduckgo_searches(
             context=ddgs_context,
             search_queries=queries,
@@ -369,11 +376,17 @@ class WorkflowRuntime:
     def prepare_candidate_pool(self, raw_rss: str, raw_ddg: str) -> dict:
         pool_started = time.perf_counter()
         selector = self.selector_api
+        parse_started = time.perf_counter()
         parsed_candidates = self.parse_candidates(raw_rss, raw_ddg)
+        parse_elapsed = time.perf_counter() - parse_started
         raw_candidates: list[dict] = []
         excluded_candidates: list[dict] = []
         exclusion_stats: dict[str, int] = {}
-        timings = {"candidate_count": len(parsed_candidates)}
+        timings = {
+            "candidate_count": len(parsed_candidates),
+            "parse_candidates": parse_elapsed,
+        }
+        gate_started = time.perf_counter()
         for candidate in parsed_candidates:
             candidate["page_type"], candidate["page_type_reason"] = selector[
                 "_compute_candidate_page_type"
@@ -389,11 +402,15 @@ class WorkflowRuntime:
                 raw_candidates.append(
                     selector["annotate_candidate_for_scheme_d"](candidate, profile_timings=timings)
                 )
+        timings["page_type_and_category_gates"] = time.perf_counter() - gate_started
 
+        dedupe_started = time.perf_counter()
         deduped_candidates, dedupe_stats = dedupe_candidates(
             raw_candidates,
             self.config.lookback_days,
         )
+        timings["event_dedupe"] = time.perf_counter() - dedupe_started
+        prefetch_started = time.perf_counter()
         if self.dependencies.prefetch_enabled:
             prefetch_stats = selector["prefetch_candidates_before_filter"](deduped_candidates)
         else:
@@ -406,8 +423,10 @@ class WorkflowRuntime:
                 "skipped_limit_count": 0,
                 "elapsed_seconds": 0.0,
             }
+        timings["prefetch"] = time.perf_counter() - prefetch_started
 
         filtered_candidates: list[dict] = []
+        preliminary_started = time.perf_counter()
         for candidate in deduped_candidates:
             if candidate.get("prefetch_status") == "success":
                 refreshed = selector["annotate_candidate_for_scheme_d"](
@@ -428,7 +447,9 @@ class WorkflowRuntime:
                 candidate["selection_stage"] = "excluded"
                 excluded_candidates.append(candidate)
                 exclusion_stats[reason] = exclusion_stats.get(reason, 0) + 1
+        timings["preliminary_filter"] = time.perf_counter() - preliminary_started
 
+        sorting_started = time.perf_counter()
         filtered_candidates.sort(
             key=lambda item: (
                 -int(item.get("final_selection_score", item.get("python_score", 0)) or 0),
@@ -454,6 +475,7 @@ class WorkflowRuntime:
             selector["build_candidate_card"](candidate)
             for candidate in model_candidates[:candidate_limit]
         ]
+        timings["sorting_and_card_build"] = time.perf_counter() - sorting_started
         pipeline_debug_stats = (
             self.dependencies.debug_stats_builder(
                 raw_candidates,
@@ -478,6 +500,11 @@ class WorkflowRuntime:
             "candidate_count": len(parsed_candidates),
             "total": round(time.perf_counter() - pool_started, 4),
         }
+        candidate_pool_timings.update({
+            name: round(value, 4)
+            for name, value in timings.items()
+            if name != "candidate_count" and isinstance(value, (int, float))
+        })
         pipeline_debug_stats["candidate_pool_timings"] = candidate_pool_timings
         return {
             "raw_candidates": raw_candidates,

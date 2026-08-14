@@ -770,6 +770,9 @@ def build_search_queries() -> tuple[list[str], set[int]]:
     query_metadata: dict[str, dict] = {}
     result = service_build_search_queries(
         context=_ddgs_search_context(query_metadata=query_metadata),
+        include_forward_technology=(
+            lookback_int >= 365 and "技術新知" in selected_types
+        ),
     )
     LAST_DDGS_QUERY_METADATA = query_metadata
     return result
@@ -888,6 +891,17 @@ def build_pipeline_debug_stats(
     for item in (filtered_candidates or []) + (excluded_candidates or []):
         method = item.get("region_resolution_method") or "未記錄"
         region_resolution_method_counts[method] = region_resolution_method_counts.get(method, 0) + 1
+    raw_candidate_count_by_family = _count_by(raw_candidates, "search_family")
+    search_summary = LAST_DDGS_SEARCH_SUMMARY or {}
+    forward_raw_candidates = [
+        item for item in raw_candidates or []
+        if item.get("search_family") == "forward_technology"
+    ]
+    forward_gate_pass_count = sum(
+        1 for item in filtered_candidates or []
+        if (item.get("category_gates") or {}).get("forward_technology")
+        or item.get("passes_forward_technology_gate") is True
+    )
     return {
         "pipeline_counts": {
             "raw": len(raw_candidates or []),
@@ -958,6 +972,21 @@ def build_pipeline_debug_stats(
         ),
         "gate_failure_reason_stats": gate_failure_reason_stats,
         "operational_topic_selected_count": 0,
+        "planned_query_count_by_family": search_summary.get("planned_query_count_by_family", {}),
+        "executed_query_count_by_family": search_summary.get("executed_query_count_by_family", {}),
+        "raw_candidate_count_by_family": raw_candidate_count_by_family,
+        "gate_pass_count_by_category": category_gate_pass_counts,
+        "forward_technology_query_count": search_summary.get("forward_technology_query_count", 0),
+        "forward_technology_raw_count": len(forward_raw_candidates),
+        "forward_technology_gate_pass_count": forward_gate_pass_count,
+        "forward_technology_selected_count": 0,
+        "forward_technology_material_candidate_count": sum(
+            1 for item in forward_raw_candidates
+            if item.get("innovation_level") in {"A", "B"}
+            or item.get("novelty_evidence")
+            or item.get("validation_evidence")
+            or item.get("benefit_evidence")
+        ),
     }
 
 
@@ -1701,11 +1730,20 @@ def compact_report_line_for_pdf(line: str) -> str:
     line = normalize_source_line(remove_internal_candidate_markers(line))
     line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
     if "資料來源" in line:
+        protected_links: list[str] = []
+
+        def _protect_link(match: re.Match) -> str:
+            protected_links.append(match.group(0))
+            return f"__PDF_SOURCE_LINK_{len(protected_links) - 1}__"
+
+        line = re.sub(r"\[([^\]]+)\]\((https?://[^\s\)]+)\)", _protect_link, line)
         line = re.sub(
             r"https?://[^\s\)\]）＞>，,；;。]+",
             lambda match: f"[原文連結]({match.group(0).rstrip('。；;,，)')})",
             line,
         )
+        for index, link in enumerate(protected_links):
+            line = line.replace(f"__PDF_SOURCE_LINK_{index}__", link)
     return line
 
 
@@ -2424,6 +2462,19 @@ if generate_btn:
             pipeline_debug_stats["service_opening_selected_count"] = LAST_PYTHON_SELECTION_DEBUG.get(
                 "service_opening_selected_count", 0
             )
+            forward_selected_candidates = [
+                item for item in selected_candidates
+                if item.get("search_family") == "forward_technology"
+                or item.get("forward_status")
+            ]
+            pipeline_debug_stats["forward_technology_selected_count"] = len(forward_selected_candidates)
+            pipeline_debug_stats["forward_technology_material_selected_count"] = sum(
+                1 for item in forward_selected_candidates
+                if item.get("innovation_level") in {"A", "B"}
+                or item.get("novelty_evidence")
+                or item.get("validation_evidence")
+                or item.get("benefit_evidence")
+            )
             pipeline_debug_stats["strict_selected_count"] = LAST_PYTHON_SELECTION_DEBUG.get("strict_selected_count", 0)
             pipeline_debug_stats["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("B_added_count", 0)
             incident_coverage = build_final_incident_coverage_debug(
@@ -2502,6 +2553,22 @@ if generate_btn:
                     "operational_dynamics_selected_count", operational_topic_selected_count
                 ),
                 "service_opening_selected_count": pipeline_debug_stats.get("service_opening_selected_count", 0),
+                "eligible_A_count": LAST_PYTHON_SELECTION_DEBUG.get("eligible_A_count", 0),
+                "eligible_after_event_dedupe_count": LAST_PYTHON_SELECTION_DEBUG.get("eligible_after_event_dedupe_count", 0),
+                "final_selected_count": LAST_PYTHON_SELECTION_DEBUG.get("final_selected_count", len(selected_candidates)),
+                "excluded_by_hard_quality_count": LAST_PYTHON_SELECTION_DEBUG.get("excluded_by_hard_quality_count", 0),
+                "excluded_by_same_event_count": LAST_PYTHON_SELECTION_DEBUG.get("excluded_by_same_event_count", 0),
+                "excluded_by_count_cap_count": LAST_PYTHON_SELECTION_DEBUG.get("excluded_by_count_cap_count", 0),
+                "planned_query_count_by_family": pipeline_debug_stats.get("planned_query_count_by_family", {}),
+                "executed_query_count_by_family": pipeline_debug_stats.get("executed_query_count_by_family", {}),
+                "raw_candidate_count_by_family": pipeline_debug_stats.get("raw_candidate_count_by_family", {}),
+                "gate_pass_count_by_category": pipeline_debug_stats.get("gate_pass_count_by_category", {}),
+                "forward_technology_query_count": pipeline_debug_stats.get("forward_technology_query_count", 0),
+                "forward_technology_raw_count": pipeline_debug_stats.get("forward_technology_raw_count", 0),
+                "forward_technology_gate_pass_count": pipeline_debug_stats.get("forward_technology_gate_pass_count", 0),
+                "forward_technology_selected_count": pipeline_debug_stats.get("forward_technology_selected_count", 0),
+                "forward_technology_material_candidate_count": pipeline_debug_stats.get("forward_technology_material_candidate_count", 0),
+                "forward_technology_material_selected_count": pipeline_debug_stats.get("forward_technology_material_selected_count", 0),
                 "candidate_card_limit": candidate_pool.get("candidate_card_limit", len(candidate_pool["candidate_cards"])),
                 "candidate_card_count": len(candidate_pool["candidate_cards"]),
                 "elapsed_seconds_total": timings["elapsed_seconds_total"],

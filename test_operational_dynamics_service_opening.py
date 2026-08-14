@@ -6,7 +6,7 @@ import developer_debug_service
 import search_queries
 import article_selector
 from article_selector import build_selector_api
-from config import OPERATIONAL_DYNAMICS_SELECTION_CAP, SERVICE_OPENING_CATEGORY_KEY
+from config import SERVICE_OPENING_CATEGORY_KEY
 
 
 FIXED_DATE = datetime.date(2026, 8, 11)
@@ -158,7 +158,7 @@ class ServiceOpeningGateTests(unittest.TestCase):
             1,
         )
 
-    def test_operational_dynamics_cap_and_debug_fields(self):
+    def test_operational_dynamics_selection_and_debug_fields(self):
         api = _selector(selected_types=["營運政策", "營運爭議"])
         candidates = [
             _evaluated(
@@ -172,10 +172,7 @@ class ServiceOpeningGateTests(unittest.TestCase):
             for index in range(30, 38)
         ]
         selected = api["select_candidates_by_python"](candidates)
-        self.assertLessEqual(
-            sum(item.get("classification") in {"營運政策", "營運爭議"} for item in selected),
-            OPERATIONAL_DYNAMICS_SELECTION_CAP,
-        )
+        self.assertEqual(len(selected), len(candidates))
         self.assertTrue(all(item.get("operational_subtype") == SERVICE_OPENING_CATEGORY_KEY for item in selected))
         self.assertEqual(article_selector.LAST_PYTHON_SELECTION_DEBUG["service_opening_selected_count"], len(selected))
         rows = developer_debug_service._debug_candidate_rows(candidates[:1])

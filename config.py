@@ -682,6 +682,16 @@ JOURNAL_SOURCE_PAGES = [
     ("Springer Urban Rail Transit articles", "https://link.springer.com/journal/40864/articles"),
 ]
 
+JOURNAL_SOURCE_QUERY_SPECS = [
+    ("IEEE Xplore", 'site:ieeexplore.ieee.org ("urban rail" OR metro) (CBTC OR signalling OR maintenance)'),
+    ("ScienceDirect", 'site:sciencedirect.com ("urban rail" OR metro) (maintenance OR signalling OR energy)'),
+    ("MDPI", 'site:mdpi.com ("urban rail" OR metro) (rail transit OR metro)'),
+    ("Taylor & Francis", 'site:tandfonline.com ("urban rail" OR metro) (railway OR transit)'),
+    ("Springer", 'site:link.springer.com ("urban rail" OR metro) (rail transit OR CBTC)'),
+]
+
+JOURNAL_SOURCE_QUERY_BUDGET = 1
+
 JOURNAL_EXCLUDE_TERMS = [
     "high-speed rail", "freight railway", "intercity rail", "road traffic",
     "bus", "autonomous vehicle", "air traffic", "pure algorithm",

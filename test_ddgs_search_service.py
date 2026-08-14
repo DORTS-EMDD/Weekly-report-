@@ -33,17 +33,17 @@ EXPECTED_SCENARIO_SHA256 = {
     "plan_no_selected": "549d7739bddc7e487b502525c794834298a7916dbb1bdff68612b2162cb457fa",
     "plan_regions": "3588607c7280f86232618fc8affac65accc85e4e006c8a621dc12f86648cac27",
     "plan_standards": "5e641af9c1c12dfdba5377e8de1b120fecc5bfabb7243b7ddee63c47a68d33bf",
-    "run_403": "77ce75422b2f97f2148b0fd0f97c10cc35ba40a83ee46ecf5071397285fa06b8",
-    "run_429": "1ef415824448ae077a34c92052a0c4ad4471780ac30fca868d11d19f60ff2874",
-    "run_exception": "504065260c6513960cd731214d975156bff423cf84c12a173d0124914ffd96e0",
-    "run_excluded": "63db5013341fb803ed0b129cbff84d15083379f2291237541b5cc56bd8caa1d3",
-    "run_missing": "3096af1516c1b0c41987f272dacf342185481e7551ac5eb77403f6f567b8a52b",
-    "run_no_selected": "a71eb2048b1efd634f8ddcafe7365a24c0ccdda37f8365b20d0c143de72b3a81",
-    "run_success": "90a17f1726c77b46df4da78deb1d1522c464aff9fddec5fcdc2a4181a4b3e485",
-    "run_timeout": "d49ab3f0bea53a1c6ec8d500959d32f7a290250e0d58681be416237c23994e58",
-    "run_zero": "78561c510c10e1b0ae3cdaf6a2dd1a536e9f222fe773ba4950542cbd5d536ee9",
+    "run_403": "f63c0c481e687af2013903db4da8da5cbd4a9e0055e7872933b0d99a37486c85",
+    "run_429": "9798572a537f43165dca1dcf8267e7b066276b46958ff0df0260b9472c7e32e1",
+    "run_exception": "da36b8e1a7e4e2dc0346aacfdc99c9558fcc6593bda4bcd5a1756178e4a4ebb4",
+    "run_excluded": "5b24e01c6f062e3704e50a982cd20a8cc378d9a5289738538341dfe92aaedf9b",
+    "run_missing": "69562d9b31e3727ddb1993e5df312cbdddb266238d05e289512c3761dcfa69a0",
+    "run_no_selected": "da227b1f5778723ab6f1011bd568fcd1d6e7eea4181bff3436a09c0bd19abf99",
+    "run_success": "049113f28025c74ae28c249e650362e8911f684c1ef4296880285f266a007fb0",
+    "run_timeout": "90ace2d79d86601267f8d0c4bd3d44e05eb3cd7fdc4c3103127570eae8265aed",
+    "run_zero": "ef6faa67e26fcae8564a054584e3dbb7ae81fb2b4a95ccb9797e11bac865c9d7",
 }
-EXPECTED_AGGREGATE_SHA256 = "274aa7b27b7ef0c635a1590256b51fb16f60eed9e78d0b6bbcf74bbd16350b1f"
+EXPECTED_AGGREGATE_SHA256 = "b9ca403abf61da024619ddaec227030e704fd5e663a104c6f1b674436edf676a"
 
 
 class ProgressRecorder:

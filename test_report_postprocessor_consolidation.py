@@ -18,17 +18,17 @@ import streamlit_app as app
 
 EXPECTED_SCENARIO_SHA256 = {
     "weekly_without_journal": (
-        "015e1d561bf31c656533ffc675a838a9487a48d10f95c2926ebf44429ac70f15"
+        "dd607a3c873346b3097acba382c83cbe81957b8686d0fbb8c90815b7fc0aaa4d"
     ),
     "weekly_with_journal": (
-        "e384f3138114c8d10e7ad325512620ad6dcd83a2eade574588a241da12b1ec12"
+        "dc6e88fa836814fed12b2bce2e8835fd8080c2483cd365fa9f8c65d2e53f6be6"
     ),
     "annual_with_journal": (
-        "a7888eaf44fde74bcaf40bfbf3e627a67939368a28a136c7707007119359912c"
+        "a1ec7fddf82eb6fbda4a05e462d1230fc670001c5acd760dd74713f7d60c539a"
     ),
 }
 EXPECTED_AGGREGATE_SHA256 = (
-    "c22e6db9b3c7fede546b08733535ca60d16e6f34f936b32644c8a6ead7db8fcf"
+    "0b9e23555583406b7c86ce16b0d55ad707f8a910a0d606530d1daf8b4f94cba9"
 )
 
 

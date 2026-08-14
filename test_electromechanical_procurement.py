@@ -7,7 +7,6 @@ from article_selector import build_selector_api
 from config import (
     ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
     ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
-    ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP,
 )
 from search_queries import (
     DOMESTIC_ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS,
@@ -377,7 +376,7 @@ class ElectromechanicalProcurementScopeQueryAndSelectionTests(unittest.TestCase)
         ):
             self.assertIn(expected, candidate["procurement_failure_reasons"])
 
-    def test_selection_caps_procurement_at_three_items(self):
+    def test_selection_keeps_all_qualifying_procurement_items_without_cap(self):
         api = _selector(
             selected_types=[ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL]
         )
@@ -393,7 +392,7 @@ class ElectromechanicalProcurementScopeQueryAndSelectionTests(unittest.TestCase)
             candidate = _evaluate(api, _candidate(index, title, source_domain=f"source{index}.com"))
             candidates.append(api["annotate_candidate_for_scheme_d"](candidate))
         selected = api["select_candidates_by_python"](candidates)
-        self.assertEqual(len(selected), ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP)
+        self.assertEqual(len(selected), len(fixtures))
         self.assertTrue(
             all(
                 item["classification"]

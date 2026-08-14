@@ -3,6 +3,7 @@
 import datetime
 import json
 import re
+import time
 import urllib.parse
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
@@ -32,6 +33,8 @@ from config import (
     JOURNAL_RAIL_CONTEXT_TERMS,
     JOURNAL_SECONDARY_SYSTEM_TERMS,
     JOURNAL_SOURCE_PAGES,
+    JOURNAL_SOURCE_QUERY_BUDGET,
+    JOURNAL_SOURCE_QUERY_SPECS,
     JOURNAL_SYSTEM_TERMS,
 )
 
@@ -281,11 +284,12 @@ def _journal_source_page_results(*, context: JournalServiceContext) -> tuple[lis
     fetched = 0
     seen_links: set[str] = set()
     for source_name, page_url in JOURNAL_SOURCE_PAGES:
+        source_started = time.perf_counter()
         if context.status_callback:
             context.status_callback("正在整理候選資料")
         html = _journal_safe_get(page_url, http_session_factory=context.http_session_factory)
         if not html:
-            statuses.append({"query": source_name, "status": "來源頁讀取失敗", "count": 0, "url": page_url})
+            statuses.append({"query": source_name, "status": "來源頁讀取失敗", "count": 0, "url": page_url, "elapsed_seconds": round(time.perf_counter() - source_started, 3), "timing_stage": "source_page_fetch"})
             continue
         links = []
         for href in re.findall(r'href=["\\\']([^"\\\']*(?:/article/)[^"\\\']+)["\\\']', html, flags=re.IGNORECASE):
@@ -312,7 +316,7 @@ def _journal_source_page_results(*, context: JournalServiceContext) -> tuple[lis
                 "journal_metadata": meta,
                 "source_page": source_name,
             })
-        statuses.append({"query": source_name, "status": "成功" if links else "無文章連結", "count": len(links), "url": page_url})
+        statuses.append({"query": source_name, "status": "成功" if links else "無文章連結", "count": len(links), "url": page_url, "elapsed_seconds": round(time.perf_counter() - source_started, 3), "timing_stage": "source_page_fetch"})
     return results, statuses
 
 
@@ -389,6 +393,7 @@ def collect_journal_candidates(
         return [], [{"query": "國際學術期刊補充", "status": "ddgs 套件未安裝", "count": 0}], []
 
     target_min, target_max = get_journal_target_count(context.research_supplement_lookback_days)
+    total_started = time.perf_counter()
     queries = JOURNAL_PRECISION_QUERIES + JOURNAL_EXPLORATORY_QUERIES
     candidates: list[dict] = []
     statuses: list[dict] = []
@@ -396,6 +401,13 @@ def collect_journal_candidates(
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
     metadata_fetch_count = 0
+    journal_timings = {
+        "source_page_fetch": 0.0,
+        "ddgs_search": 0.0,
+        "metadata_fetch": 0.0,
+        "candidate_scoring": 0.0,
+        "dedupe_and_selection": 0.0,
+    }
 
     def _exclude(query: str, title: str, url: str, reason: str, snippet: str = "", extra: dict | None = None) -> None:
         if len(excluded) < 120:
@@ -431,7 +443,9 @@ def collect_journal_candidates(
             date_info["date_confidence"] != "high"
             or not date_info["is_within_research_period"]
         ) and metadata_fetch_count < JOURNAL_ARTICLE_FETCH_LIMIT:
+            metadata_started = time.perf_counter()
             fetched = fetch_journal_page_metadata(url, context=context)
+            journal_timings["metadata_fetch"] += time.perf_counter() - metadata_started
             metadata_fetch_count += 1
             if fetched.get("metadata_fetch_status") == "success":
                 metadata.update(fetched)
@@ -492,7 +506,9 @@ def collect_journal_candidates(
         candidate["doi"] = metadata.get("doi", "")
         candidate["journal_name"] = metadata.get("journal_name", source)
         candidate["metadata_fetch_status"] = metadata.get("metadata_fetch_status", "not_needed")
+        scoring_started = time.perf_counter()
         candidate.update(score_journal_candidate(candidate))
+        journal_timings["candidate_scoring"] += time.perf_counter() - scoring_started
         if candidate["journal_score"] < 60:
             _exclude(query, title, url, "journal_score 低於候補門檻", snippet, candidate)
             return False
@@ -516,11 +532,14 @@ def collect_journal_candidates(
         if context.status_callback:
             context.status_callback("正在整理候選資料")
         query_text = f'{query} journal OR research OR paper OR IEEE OR "Transportation Research"'
+        query_started = time.perf_counter()
         try:
             with context.ddgs_client_factory() as ddgs:
                 results = ddgs.text(query_text, max_results=JOURNAL_MAX_RESULTS_PER_QUERY, backend="auto")
         except Exception as exc:
-            statuses.append({"query": query, "status": f"失敗：{exc}", "count": 0})
+            elapsed = time.perf_counter() - query_started
+            journal_timings["ddgs_search"] += elapsed
+            statuses.append({"query": query_text, "status": f"失敗：{exc}", "count": 0, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
             continue
 
         accepted = 0
@@ -529,25 +548,106 @@ def collect_journal_candidates(
                 break
             if _try_accept_result(result, query):
                 accepted += 1
-        statuses.append({"query": query, "status": "成功" if accepted else "無符合研究", "count": accepted})
+        elapsed = time.perf_counter() - query_started
+        journal_timings["ddgs_search"] += elapsed
+        statuses.append({"query": query_text, "status": "成功" if accepted else "無符合研究", "count": accepted, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
+
+    for source_name, query in JOURNAL_SOURCE_QUERY_SPECS:
+        for _ in range(max(0, int(JOURNAL_SOURCE_QUERY_BUDGET))):
+            query_started = time.perf_counter()
+            query_text = f"{query} journal research paper"
+            try:
+                with context.ddgs_client_factory() as ddgs:
+                    results = ddgs.text(query_text, max_results=JOURNAL_MAX_RESULTS_PER_QUERY, backend="auto")
+            except Exception as exc:
+                elapsed = time.perf_counter() - query_started
+                journal_timings["ddgs_search"] += elapsed
+                statuses.append({"query": query_text, "source_family": source_name, "status": f"失敗：{exc}", "count": 0, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
+                continue
+            accepted = 0
+            for result in results or []:
+                if _try_accept_result(result, query_text):
+                    accepted += 1
+            elapsed = time.perf_counter() - query_started
+            journal_timings["ddgs_search"] += elapsed
+            statuses.append({"query": query_text, "source_family": source_name, "status": "成功" if accepted else "無符合研究", "count": accepted, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
 
     high_score = [item for item in candidates if int(item.get("journal_score", 0) or 0) >= 75]
     borderline = [item for item in candidates if 60 <= int(item.get("journal_score", 0) or 0) < 75]
-    selected = sorted(
-        high_score,
-        key=lambda item: (-int(item.get("journal_score", 0) or 0), item.get("published_date", "")),
-    )
+    def _select_with_source_diversity(items: list[dict], limit: int | None = None) -> list[dict]:
+        remaining = list(items)
+        selected_items: list[dict] = []
+        seen_domains: set[str] = set()
+        while remaining and (limit is None or len(selected_items) < limit):
+            def _priority(item: dict) -> tuple:
+                domain = _domain_from_url(item.get("url", "")) or "unknown"
+                score = int(item.get("journal_score", 0) or 0)
+                diversity_bonus = 4 if domain not in seen_domains else 0
+                return (
+                    score + diversity_bonus,
+                    score,
+                    item.get("published_date", ""),
+                    item.get("journal_name", ""),
+                    domain,
+                )
+            chosen = max(remaining, key=_priority)
+            remaining.remove(chosen)
+            domain = _domain_from_url(chosen.get("url", "")) or "unknown"
+            chosen["journal_source_diversity_bonus"] = 4 if domain not in seen_domains else 0
+            seen_domains.add(domain)
+            selected_items.append(chosen)
+        return selected_items
+
+    selection_started = time.perf_counter()
+    selected = _select_with_source_diversity(high_score)
     if len(selected) < target_min:
-        selected.extend(
-            sorted(
-                borderline,
-                key=lambda item: (-int(item.get("journal_score", 0) or 0), item.get("published_date", "")),
-            )[: target_min - len(selected)]
-        )
+        selected.extend(_select_with_source_diversity(borderline, target_min - len(selected)))
     selected = sorted(
         selected,
-        key=lambda item: (-int(item.get("journal_score", 0) or 0), item.get("published_date", "")),
+        key=lambda item: (-int(item.get("journal_score", 0) or 0), item.get("journal_name", ""), item.get("published_date", "")),
     )[:target_max]
+    journal_timings["dedupe_and_selection"] = time.perf_counter() - selection_started
+    domain_candidate_counts: dict[str, int] = {}
+    journal_selected_counts: dict[str, int] = {}
+    domain_selected_counts: dict[str, int] = {}
+    for item in candidates:
+        domain = _domain_from_url(item.get("url", "")) or "unknown"
+        domain_candidate_counts[domain] = domain_candidate_counts.get(domain, 0) + 1
+    for item in selected:
+        journal = str(item.get("journal_name") or item.get("source") or "unknown")
+        domain = _domain_from_url(item.get("url", "")) or "unknown"
+        journal_selected_counts[journal] = journal_selected_counts.get(journal, 0) + 1
+        domain_selected_counts[domain] = domain_selected_counts.get(domain, 0) + 1
+    elapsed_by_source: dict[str, float] = {}
+    for row in statuses:
+        if row.get("timing_stage") not in {"source_page_fetch", "ddgs_search"}:
+            continue
+        source_key = str(row.get("source_family") or row.get("query") or "unknown")
+        elapsed_by_source[source_key] = round(
+            elapsed_by_source.get(source_key, 0.0) + float(row.get("elapsed_seconds", 0) or 0),
+            3,
+        )
+    journal_timings["source_page_fetch"] = sum(
+        float(row.get("elapsed_seconds", 0) or 0)
+        for row in statuses
+        if row.get("timing_stage") == "source_page_fetch"
+    )
+    journal_timings = {
+        key: round(value, 3)
+        for key, value in journal_timings.items()
+    }
+    journal_timings["total"] = round(time.perf_counter() - total_started, 3)
+    statuses.append({
+        "query": "journal_diagnostics",
+        "status": "summary",
+        "count": len(candidates),
+        "journal_candidate_count_by_domain": domain_candidate_counts,
+        "journal_selected_count_by_journal": journal_selected_counts,
+        "journal_selected_count_by_domain": domain_selected_counts,
+        "journal_elapsed_by_source": elapsed_by_source,
+        "journal_timings": journal_timings,
+        "timing_stage": "summary",
+    })
     for item in selected:
         item["journal_target_count"] = target_min
         item["journal_selected_count"] = len(selected)

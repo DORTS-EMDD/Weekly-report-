@@ -637,6 +637,11 @@ REPORT_SELECTION_DEBUG_DEFAULT = {
     "service_opening_selected_count": 0,
     "electromechanical_procurement_selection_cap": ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP,
     "electromechanical_procurement_selected_count": 0,
+    "eligible_A_count": 0,
+    "eligible_after_event_dedupe_count": 0,
+    "excluded_by_hard_quality_count": 0,
+    "excluded_by_same_event_count": 0,
+    "excluded_by_count_cap_count": 0,
 }
 
 URBAN_RAIL_MODE_TERMS.extend(["metros"])
@@ -3274,6 +3279,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         enriched["search_query"] = enriched.get("search_query") or enriched.get("query", "")
         enriched["search_language"] = enriched.get("search_language") or _search_language_from_query(enriched.get("query", ""))
         enriched["source_domain_normalized"] = enriched.get("source_domain_normalized") or _normalize_source_domain(enriched.get("source_domain", ""))
+        region_started = time.perf_counter()
+        enriched["resolved_region"] = _canonical_candidate_region(enriched)
+        _profile_timing_add(profile_timings, "region_resolution", time.perf_counter() - region_started)
         fingerprint_started = time.perf_counter()
         enriched["event_fingerprint"] = build_event_fingerprint(enriched)
         _profile_timing_add(profile_timings, "event_fingerprint", time.perf_counter() - fingerprint_started)
@@ -3391,12 +3399,6 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                         return False
                     if _is_duplicate_selected_event(candidate, selected):
                         return False
-                    if (
-                        candidate.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
-                        and sum(item.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL for item in selected)
-                        >= ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP
-                    ):
-                        return False
                     replacement_candidates = [
                         (index, item)
                         for index, item in enumerate(selected)
@@ -3449,7 +3451,6 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if lookback_int != 7 or "營運政策" not in selected_types:
             return selected
         balanced: list[dict] = []
-        policy_count = 0
         for candidate in selected:
             if candidate.get("classification") != "營運政策":
                 balanced.append(candidate)
@@ -3459,11 +3460,6 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 candidate["selected_reason"] = (
                     f"{candidate.get('selected_reason', '')}；因屬一般服務公告，週報中降權。"
                 ).strip("；")
-                if policy_count >= 3:
-                    continue
-            if policy_count >= 5:
-                continue
-            policy_count += 1
             balanced.append(candidate)
         return balanced
 
@@ -4089,27 +4085,6 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 except Exception:
                     pass
                 continue
-            diversity_reason = _long_term_diversity_skip_reason(candidate, selected)
-            if diversity_reason:
-                try:
-                    LAST_PYTHON_SELECTION_DEBUG.setdefault("duplicate_event_records", []).append({
-                        "candidate_id": candidate.get("id", ""),
-                        "candidate_title": candidate.get("title", ""),
-                        "duplicate_of_id": "",
-                        "duplicate_of_title": "",
-                        "duplicate_event_reason": diversity_reason,
-                        "candidate_location": _candidate_specific_event_location(candidate) or _candidate_event_location(candidate),
-                        "duplicate_of_location": "",
-                        "candidate_date": candidate.get("date", ""),
-                        "duplicate_of_date": "",
-                        "candidate_theme": _candidate_system_theme(candidate),
-                        "duplicate_of_theme": "",
-                        "candidate_incident_type": _candidate_incident_type(candidate),
-                        "candidate_fingerprint": build_event_fingerprint(candidate),
-                    })
-                except Exception:
-                    pass
-                continue
             return candidate
         return None
 
@@ -4408,14 +4383,6 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate = dict(raw_candidate)
             classification = _selection_classification(candidate)
             candidate["classification"] = classification
-            if (
-                classification == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
-                and sum(
-                    item.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
-                    for item in selected
-                ) >= ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP
-            ):
-                continue
             allowed, reason = _is_borderline_report_candidate(candidate)
             if not allowed:
                 continue
@@ -4438,14 +4405,6 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate = _take_next_python_candidate(borderline_pool, selected)
             if not candidate:
                 break
-            if (
-                candidate.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
-                and sum(
-                    item.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
-                    for item in selected
-                ) >= ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP
-            ):
-                continue
             selected.append(candidate)
             candidate["selection_stage"] = "B_backfilled_selected"
             selected_ids.add(int(candidate.get("id", 0) or 0))
@@ -4466,22 +4425,6 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _cap_operational_dynamics(selected: list[dict]) -> list[dict]:
-        operational_indexes = [
-            index
-            for index, candidate in enumerate(selected)
-            if candidate.get("classification") in {"營運政策", "營運爭議"}
-        ]
-        if len(operational_indexes) > OPERATIONAL_DYNAMICS_SELECTION_CAP:
-            ranked_indexes = sorted(
-                operational_indexes,
-                key=lambda index: _python_selection_sort_key(selected[index]),
-            )
-            keep_indexes = set(ranked_indexes[:OPERATIONAL_DYNAMICS_SELECTION_CAP])
-            selected = [
-                candidate
-                for index, candidate in enumerate(selected)
-                if index not in operational_indexes or index in keep_indexes
-            ]
         LAST_PYTHON_SELECTION_DEBUG["operational_dynamics_selected_count"] = sum(
             1
             for candidate in selected
@@ -4500,7 +4443,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         global LAST_PYTHON_SELECTION_DEBUG
         LAST_PYTHON_SELECTION_DEBUG = _selection_debug_reset()
         min_items, max_items = _selection_target_range(lookback_int)
+        max_items = max(len(model_candidates or []), min_items)
         grouped: dict[str, list[dict]] = {category: [] for category in selected_types}
+        eligible_A_count = 0
         for raw_candidate in model_candidates or []:
             candidate = dict(raw_candidate)
             classification = _selection_classification(candidate)
@@ -4508,10 +4453,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             if classification not in selected_types:
                 continue
             if classification == "技術新知" and not _is_strict_technical_candidate(candidate):
+                LAST_PYTHON_SELECTION_DEBUG["excluded_by_hard_quality_count"] += 1
                 continue
             if not _python_candidate_allowed_for_scope(candidate):
+                LAST_PYTHON_SELECTION_DEBUG["excluded_by_hard_quality_count"] += 1
                 continue
             if _is_low_value_python_selection_candidate(candidate):
+                LAST_PYTHON_SELECTION_DEBUG["excluded_by_hard_quality_count"] += 1
                 continue
             candidate["selected_reason"] = (
                 f"Python 嚴格規則選題：score={candidate.get('python_score', 0)}；"
@@ -4521,14 +4469,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate["selection_stage"] = "A_strict_selected"
             candidate["candidate_level"] = "A"
             grouped.setdefault(classification, []).append(candidate)
+            eligible_A_count += 1
+
+        LAST_PYTHON_SELECTION_DEBUG["eligible_A_count"] = eligible_A_count
 
         for category in grouped:
             grouped[category] = sorted(grouped[category], key=_python_selection_sort_key)
-        grouped[ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL] = grouped.get(
-            ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
-            [],
-        )[:ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP]
-
         selected = _select_from_grouped_pools(grouped, max_items)
         selected = _ensure_operational_topic_coverage(
             selected,
@@ -4548,6 +4494,17 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         LAST_PYTHON_SELECTION_DEBUG["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("borderline_added_count", 0)
         annual_pool = [candidate for candidates in grouped.values() for candidate in candidates]
         selected = rebalance_selected_candidates(selected, annual_pool)
+        same_event_count = sum(
+            1
+            for record in LAST_PYTHON_SELECTION_DEBUG.get("duplicate_event_records", [])
+            if record.get("duplicate_of_id")
+        )
+        LAST_PYTHON_SELECTION_DEBUG["excluded_by_same_event_count"] = same_event_count
+        LAST_PYTHON_SELECTION_DEBUG["eligible_after_event_dedupe_count"] = max(
+            0,
+            eligible_A_count - same_event_count,
+        )
+        LAST_PYTHON_SELECTION_DEBUG["excluded_by_count_cap_count"] = 0
         return _cap_operational_dynamics(selected)
 
     return {

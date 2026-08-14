@@ -15,6 +15,9 @@ RUNTIME_FINGERPRINT_MODULES = (
     "article_selector",
     "report_postprocessor",
     "ddgs_search_service",
+    "journal_service",
+    "report_workflow_service",
+    "search_queries",
 )
 
 
@@ -42,11 +45,14 @@ def build_runtime_version() -> dict:
             module_hashes[module_name] = hashlib.sha1(module_path.read_bytes()).hexdigest()
         except OSError:
             module_hashes[module_name] = ""
-    return {
+    fingerprint = {
         "git_commit_sha": _git_value(repository_root, "rev-parse", "HEAD"),
         "branch": _git_value(repository_root, "branch", "--show-current") or os.getenv("GIT_BRANCH", ""),
         "module_sha1": module_hashes,
     }
+    for module_name, module_hash in module_hashes.items():
+        fingerprint[f"{module_name}_hash"] = module_hash
+    return fingerprint
 
 
 @dataclass(frozen=True)
@@ -251,6 +257,22 @@ def build_developer_debug_payload(
             "elapsed_seconds_ddgs": latest_stats.get("elapsed_seconds_ddgs", 0),
             "elapsed_seconds_candidate_pool": latest_stats.get("elapsed_seconds_candidate_pool", 0),
             "candidate_pool_timings": latest_stats.get("candidate_pool_timings", debug_info.get("candidate_pool_timings", debug_info.get("pipeline_debug_stats", {}).get("candidate_pool_timings", {}))),
+            "eligible_A_count": latest_stats.get("eligible_A_count", debug_info.get("selection_debug", {}).get("eligible_A_count", 0)),
+            "eligible_after_event_dedupe_count": latest_stats.get("eligible_after_event_dedupe_count", debug_info.get("selection_debug", {}).get("eligible_after_event_dedupe_count", 0)),
+            "final_selected_count": latest_stats.get("final_selected_count", debug_info.get("selection_debug", {}).get("final_selected_count", latest_stats.get("ai_selected_count", 0))),
+            "excluded_by_hard_quality_count": latest_stats.get("excluded_by_hard_quality_count", debug_info.get("selection_debug", {}).get("excluded_by_hard_quality_count", 0)),
+            "excluded_by_same_event_count": latest_stats.get("excluded_by_same_event_count", debug_info.get("selection_debug", {}).get("excluded_by_same_event_count", 0)),
+            "excluded_by_count_cap_count": latest_stats.get("excluded_by_count_cap_count", debug_info.get("selection_debug", {}).get("excluded_by_count_cap_count", 0)),
+            "planned_query_count_by_family": latest_stats.get("planned_query_count_by_family", debug_info.get("pipeline_debug_stats", {}).get("planned_query_count_by_family", {})),
+            "executed_query_count_by_family": latest_stats.get("executed_query_count_by_family", debug_info.get("pipeline_debug_stats", {}).get("executed_query_count_by_family", {})),
+            "raw_candidate_count_by_family": latest_stats.get("raw_candidate_count_by_family", debug_info.get("pipeline_debug_stats", {}).get("raw_candidate_count_by_family", {})),
+            "gate_pass_count_by_category": latest_stats.get("gate_pass_count_by_category", debug_info.get("pipeline_debug_stats", {}).get("gate_pass_count_by_category", {})),
+            "forward_technology_query_count": latest_stats.get("forward_technology_query_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_query_count", 0)),
+            "forward_technology_raw_count": latest_stats.get("forward_technology_raw_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_raw_count", 0)),
+            "forward_technology_gate_pass_count": latest_stats.get("forward_technology_gate_pass_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_gate_pass_count", 0)),
+            "forward_technology_selected_count": latest_stats.get("forward_technology_selected_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_selected_count", 0)),
+            "forward_technology_material_candidate_count": latest_stats.get("forward_technology_material_candidate_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_material_candidate_count", 0)),
+            "forward_technology_material_selected_count": latest_stats.get("forward_technology_material_selected_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_material_selected_count", 0)),
             "elapsed_seconds_journal": latest_stats.get("elapsed_seconds_journal", 0),
             "elapsed_seconds_selection": latest_stats.get("elapsed_seconds_selection", 0),
             "elapsed_seconds_python_selection": latest_stats.get("elapsed_seconds_python_selection", 0),

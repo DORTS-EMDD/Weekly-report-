@@ -71,6 +71,7 @@ class DdgsSearchContext:
     news_scope: str = DEFAULT_NEWS_SCOPE
     planned_required_families: list[str] = field(default_factory=list)
     annual_breakthrough_query_count: int = 0
+    forward_technology_query_count: int = 0
 
 
 DDGS_ERROR_STATUSES = {"http_403", "rate_limited_429", "timeout", "other_exception"}
@@ -196,6 +197,8 @@ def _selected_query_families(*, context: DdgsSearchContext) -> list[str]:
         families.append("official_investigation")
     if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in context.selected_types:
         families.append(ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY)
+    if SERVICE_OPENING_CATEGORY_KEY in context.selected_types:
+        families.append(SERVICE_OPENING_CATEGORY_KEY)
     return families
 
 
@@ -316,7 +319,9 @@ def build_search_queries(
     include_official = "official_investigation" in selected_families
     content_families = [family for family in selected_families if family != "official_investigation"]
     if include_forward_technology:
-        content_families.insert(0, "forward_technology")
+        forward_specs = _active_query_specs("forward_technology")
+    else:
+        forward_specs = []
 
     annual_breakthrough_specs = (
         ANNUAL_TECHNOLOGY_BREAKTHROUGH_QUERY_SPECS
@@ -324,7 +329,7 @@ def build_search_queries(
         else []
     )
     required_families = list(content_families)
-    if {"營運政策", "營運爭議"}.intersection(context.selected_types):
+    if {"營運政策", "營運爭議", SERVICE_OPENING_CATEGORY_KEY}.intersection(context.selected_types):
         required_families.append(SERVICE_OPENING_CATEGORY_KEY)
     context.planned_required_families = (
         list(dict.fromkeys(required_families))
@@ -332,6 +337,7 @@ def build_search_queries(
         else []
     )
     context.annual_breakthrough_query_count = 0
+    context.forward_technology_query_count = 0
 
     annual_bucket_queries = []
     if context.lookback_int >= 365 and context.news_scope != "domestic":
@@ -379,7 +385,7 @@ def build_search_queries(
                 )
 
     if context.news_scope != "domestic" and context.is_global_scope:
-        if "營運政策" in context.selected_types or "營運爭議" in context.selected_types:
+        if {"營運政策", "營運爭議", SERVICE_OPENING_CATEGORY_KEY}.intersection(context.selected_types):
             for spec in SERVICE_OPENING_QUERY_SPECS:
                 _add(
                     spec.get("query", ""),
@@ -389,7 +395,11 @@ def build_search_queries(
                 )
         if annual_bucket_queries:
             specs = _regional_query_spec_sequence(content_families, "en")
-            annual_supplement_reserve = len(annual_bucket_queries) + min(3, len(annual_breakthrough_specs))
+            annual_supplement_reserve = (
+                len(annual_bucket_queries)
+                + min(3, len(annual_breakthrough_specs))
+                + min(len(forward_specs), 8)
+            )
             core_query_limit = max(0, query_limit - annual_supplement_reserve)
             for spec in specs:
                 if len(queries) >= core_query_limit:
@@ -418,6 +428,14 @@ def build_search_queries(
                         lang=spec.get("lang", "en"),
                         use_news=bool(spec.get("use_news", True)),
                     )
+        for spec in forward_specs:
+            if _add(
+                spec.get("query", ""),
+                family="forward_technology",
+                lang=spec.get("lang", "en"),
+                use_news=bool(spec.get("use_news", True)),
+            ):
+                context.forward_technology_query_count += 1
         for spec in annual_breakthrough_specs[:3]:
             if _add(
                 spec.get("query", ""),
@@ -427,7 +445,7 @@ def build_search_queries(
             ):
                 context.annual_breakthrough_query_count += 1
     elif context.news_scope != "domestic" and content_families and context.active_regions:
-        if "營運政策" in context.selected_types or "營運爭議" in context.selected_types:
+        if {"營運政策", "營運爭議", SERVICE_OPENING_CATEGORY_KEY}.intersection(context.selected_types):
             for spec in SERVICE_OPENING_QUERY_SPECS:
                 _add(
                     spec.get("query", ""),
@@ -439,9 +457,10 @@ def build_search_queries(
         official_reserve = 1 if include_official else 0
         bucket_reserve = len(annual_bucket_queries) if annual_bucket_queries else 0
         breakthrough_reserve = min(3, len(annual_breakthrough_specs))
+        forward_reserve = min(len(forward_specs), 8)
         country_budget = max(
             0,
-            query_limit - official_reserve - bucket_reserve - breakthrough_reserve - len(queries),
+            query_limit - official_reserve - bucket_reserve - breakthrough_reserve - forward_reserve - len(queries),
         )
         max_per_country = min(8, max(2, len(content_families)))
         allocations = {region: min(2, country_budget // max(1, len(regions))) for region in regions}
@@ -480,6 +499,15 @@ def build_search_queries(
                     query_region=regions[0],
                     date_bucket=bucket,
                 )
+        for spec in forward_specs:
+            if _add(
+                f"{REGION_SEARCH_TERMS.get(regions[0], regions[0])} {spec.get('query', '')}",
+                family="forward_technology",
+                lang=REGION_QUERY_LANGUAGES.get(regions[0], "en"),
+                use_news=bool(spec.get("use_news", True)),
+                query_region=regions[0],
+            ):
+                context.forward_technology_query_count += 1
         for spec in annual_breakthrough_specs[:3]:
             if _add(
                 f"{REGION_SEARCH_TERMS.get(regions[0], regions[0])} {spec.get('query', '')}",
@@ -677,6 +705,30 @@ def build_ddgs_search_summary(
         "success_with_raw_count": len(ddgs_queries_by_outcome(rows, "success_with_raw")),
         "rate_limited_query_count": sum(1 for row in rows if row.get("execution_status") in {"http_403", "rate_limited_429"}),
         "DDGS_added_to_raw_count": sum(int(row.get("added_to_raw_count", 0) or 0) for row in rows),
+        "planned_query_count_by_family": _count_by("search_family", "family"),
+        "executed_query_count_by_family": {
+            family: sum(
+                1
+                for row in rows
+                if (row.get("search_family") or row.get("family") or "unassigned") == family
+                and row.get("execution_status") not in {"not_executed", "not_executed_dependency_missing"}
+            )
+            for family in sorted({
+                str(row.get("search_family") or row.get("family") or "unassigned")
+                for row in rows
+            })
+        },
+        "raw_candidate_count_by_family": {
+            family: sum(
+                int(row.get("added_to_raw_count", 0) or 0)
+                for row in rows
+                if (row.get("search_family") or row.get("family") or "unassigned") == family
+            )
+            for family in sorted({
+                str(row.get("search_family") or row.get("family") or "unassigned")
+                for row in rows
+            })
+        },
         "outcome_definitions": {
             "no_backend_result_count": "execution_status=zero_results",
             "all_results_basic_excluded_count": "backend returned results but every result failed basic exclusions",
@@ -685,6 +737,11 @@ def build_ddgs_search_summary(
             "success_with_raw_count": "added_to_raw_count>0",
         },
     }
+    forward_rows = [row for row in rows if (row.get("search_family") or row.get("family")) == "forward_technology"]
+    summary["forward_technology_query_count"] = len(forward_rows)
+    summary["forward_technology_raw_count"] = sum(
+        int(row.get("added_to_raw_count", 0) or 0) for row in forward_rows
+    )
     if any(row.get("date_bucket") for row in rows):
         summary["query_count_by_date_bucket"] = _count_by("date_bucket")
     if planned_required_families:

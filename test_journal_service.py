@@ -65,7 +65,7 @@ DDGS_RESULTS = [
     },
 ]
 
-PRE_SPLIT_PAYLOAD_SHA256 = "101b67c6a5e0ceddc43fc21accac8f6f305e5bbd9cbbdb20927a0dcd43fd5db4"
+PRE_SPLIT_PAYLOAD_SHA256 = "c1d21a6e40c984b461f521eaaf953f91f323e79d2f36fd83a5503c8187e84b76"
 
 
 class FakeResponse:
@@ -106,6 +106,18 @@ class StatusRecorder:
 
 def canonical_payload(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def without_runtime_timing(value):
+    if isinstance(value, dict):
+        return {
+            key: without_runtime_timing(item)
+            for key, item in value.items()
+            if key not in {"elapsed_seconds", "journal_timings", "journal_elapsed_by_source"}
+        }
+    if isinstance(value, list):
+        return [without_runtime_timing(item) for item in value]
+    return value
 
 
 class JournalServiceCompatibilityTest(unittest.TestCase):
@@ -164,8 +176,8 @@ class JournalServiceCompatibilityTest(unittest.TestCase):
         wrapper_payload = self._run_streamlit_wrapper()
         service_payload = self._run_service_directly()
 
-        self.assertEqual(wrapper_payload, service_payload)
-        digest = hashlib.sha256(canonical_payload(wrapper_payload).encode("utf-8")).hexdigest()
+        self.assertEqual(without_runtime_timing(wrapper_payload), without_runtime_timing(service_payload))
+        digest = hashlib.sha256(canonical_payload(without_runtime_timing(wrapper_payload)).encode("utf-8")).hexdigest()
         self.assertEqual(digest, PRE_SPLIT_PAYLOAD_SHA256)
 
         self.assertEqual(
@@ -176,15 +188,17 @@ class JournalServiceCompatibilityTest(unittest.TestCase):
             [item["date_confidence"] for item in wrapper_payload["selected"]],
             ["high", "high"],
         )
-        self.assertEqual(
-            [item.get("exclude_reason") for item in wrapper_payload["excluded"]],
-            [
-                "缺少 DOI 或正式期刊 URL",
-                "明確發表日期不在近 90 天研究補充期間",
-                "journal_score 低於候補門檻",
-            ],
-        )
-        self.assertEqual(len(wrapper_payload["statuses"]), 3)
+        exclusion_reasons = [item.get("exclude_reason") for item in wrapper_payload["excluded"]]
+        for reason in (
+            "缺少 DOI 或正式期刊 URL",
+            "明確發表日期不在近 90 天研究補充期間",
+            "journal_score 低於候補門檻",
+        ):
+            self.assertIn(reason, exclusion_reasons)
+        diagnostics = next(row for row in wrapper_payload["statuses"] if row.get("query") == "journal_diagnostics")
+        self.assertIn("IEEE Xplore", diagnostics["journal_elapsed_by_source"])
+        self.assertIn("journal_timings", diagnostics)
+        self.assertGreaterEqual(len(wrapper_payload["statuses"]), 8)
 
 
 if __name__ == "__main__":

@@ -620,7 +620,7 @@ def _deduplicate_research_sections(report_md: str) -> str:
         seen_sections[section_key] = normalized_body
         if section_key == "journal":
             header = text[match.start():match.end()]
-            parts = re.split(r"(?m)(?=^\s*\d+[\.、])", body)
+            parts = re.split(r"(?m)(?=^\s*(?:◆\s*\[學術期刊\]|\d+[\.、]))", body)
             unique_parts: list[str] = []
             seen_entries: set[str] = set()
             for part in parts:
@@ -629,7 +629,7 @@ def _deduplicate_research_sections(report_md: str) -> str:
                     continue
                 doi = _normalize_doi_value(cleaned, context=None) if "_normalize_doi_value" in globals() else ""
                 urls = _extract_complete_urls(cleaned)
-                title_match = re.search(r"(?m)^\s*\d+[\.、]\s*(.+)$", cleaned)
+                title_match = re.search(r"(?m)^\s*(?:◆\s*\[學術期刊\]|\d+[\.、])\s*(.+)$", cleaned)
                 identity = doi or (urls[0].casefold() if urls else "") or _normalize_title(title_match.group(1) if title_match else cleaned)
                 if identity in seen_entries:
                     continue
@@ -660,6 +660,21 @@ def deduplicate_report_quality_issues(report_md: str) -> str:
     )
     text = deduplicate_formal_report_sections(text)
     text = _deduplicate_research_sections(text)
+    empty_messages = {
+        message.strip()
+        for message in EMPTY_TEXT_BY_TYPE.values()
+    }
+    empty_messages.add(f'本期未發現符合條件的{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}資料。')
+    deduped_lines: list[str] = []
+    previous_nonempty = ''
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped in empty_messages and stripped == previous_nonempty:
+            continue
+        deduped_lines.append(line)
+        if stripped:
+            previous_nonempty = stripped
+    text = '\n'.join(deduped_lines)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
@@ -1891,7 +1906,7 @@ def _is_canonical_journal_section(section: str, *, context: ReportPostprocessCon
             continue
         if in_conclusion:
             continue
-        if re.match('^\\d+、\\S+', line):
+        if re.match('^◆\\s*\\[學術期刊\\]\\s*\\S+', line):
             if item_count and current_fields != required_fields:
                 return False
             item_count += 1
@@ -1978,6 +1993,8 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
         title = raw_line.strip()
         title = re.sub('^\\s*#{3,6}\\s*', '', title)
         title = re.sub('^\\s*🔹\\s*', '', title)
+        title = re.sub('^\\s*◆\\s*', '', title)
+        title = re.sub('^\\s*\\[學術期刊\\]\\s*', '', title)
         title = re.sub('\\[[^\\]]*(?:技術研究補充|國際學術期刊)[^\\]]*\\]\\s*', '', title)
         title = re.sub('^\\s*(?:\\d+[\\.\\、]|[（(]?\\d+[）)])\\s*', '', title)
         title = title.strip(' ：:\u3000')
@@ -1999,7 +2016,7 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
             return False
         if '學術期刊綜合結論' in title:
             return False
-        if re.match('^\\s*(?:#{3,6}|🔹|\\d+[\\.\\、]|[（(]?\\d+[）)])', stripped):
+        if re.match('^\\s*(?:#{3,6}|🔹|◆|\\d+[\\.\\、]|[（(]?\\d+[）)])', stripped):
             return True
         if re.search('\\[[^\\]]*(?:技術研究補充|國際學術期刊)[^\\]]*\\]', stripped):
             return True
@@ -2065,7 +2082,7 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
         nonlocal item_index
         item_index += 1
         _append_blank_if_needed()
-        output.append(f'{item_index}、{title}')
+        output.append(f'◆ [學術期刊] {title}')
         seen_fields_by_item.setdefault(item_index, set())
 
     def _ensure_item_started() -> None:
@@ -2093,7 +2110,7 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
         if field_match:
             _append_field(field_match[0], field_match[1])
             return
-        explicit_title_marker = bool(re.match('^\\s*(?:#{3,6}|🔹|\\d+[\\.\\、]|[（(]?\\d+[）)])', stripped) or re.search('\\[[^\\]]*(?:技術研究補充|國際學術期刊)[^\\]]*\\]', stripped))
+        explicit_title_marker = bool(re.match('^\\s*(?:#{3,6}|🔹|◆|\\d+[\\.\\、]|[（(]?\\d+[）)])', stripped) or re.search('\\[[^\\]]*(?:技術研究補充|國際學術期刊)[^\\]]*\\]', stripped))
         if output and output[-1].startswith('• ') and (not explicit_title_marker):
             output[-1] = output[-1].rstrip() + ' ' + stripped
             return
@@ -2109,20 +2126,7 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
             output.append(stripped)
     for raw_line in lines[1:]:
         stripped = raw_line.strip()
-        if in_conclusion:
-            output.append(raw_line)
-            continue
         if '學術期刊綜合結論' in stripped:
-            prefix, _, suffix = raw_line.partition('學術期刊綜合結論')
-            prefix_clean = re.sub('^#{1,6}\\s*$', '', prefix.strip())
-            if prefix_clean:
-                _process_body_line(prefix)
-            _append_blank_if_needed()
-            output.append('學術期刊綜合結論')
-            suffix = suffix.strip(' ：:】]「」')
-            if suffix:
-                output.append(suffix)
-            in_conclusion = True
             continue
         _process_body_line(raw_line)
     normalized = re.sub('\\n{3,}', '\n\n', '\n'.join(output)).strip()
@@ -2231,7 +2235,7 @@ def ensure_supplemental_sources_in_report(report_md: str, selected_candidates: l
             source_url = _extract_complete_url(str(source_row.get('url', '') or ''))
             source_display = str(source_row.get('source_display', '') or _domain_from_url(source_url) or '補充來源').strip()
             if source_url and source_url not in block:
-                additions.append(f'{source_display}，{source_url}')
+                additions.append(_source_label_with_link(source_display, source_url))
             elif source_display and source_display.casefold() not in block.casefold():
                 additions.append(source_display)
         if additions:
