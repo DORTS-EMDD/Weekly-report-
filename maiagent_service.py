@@ -4,6 +4,7 @@ Secrets and Streamlit UI objects are deliberately supplied by the caller. Import
 this module performs no HTTP request and does not import Streamlit.
 """
 
+import os
 import re
 import requests
 
@@ -11,6 +12,46 @@ REPORT_CANDIDATE_ID_PATTERN = re.compile(r"<!--\s*candidate_id\s*:\s*(\d+)\s*-->
 REPORT_ESCAPED_CANDIDATE_ID_PATTERN = re.compile(r"&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;", flags=re.IGNORECASE)
 INTERNAL_CANDIDATE_MARKER_PATTERN = re.compile(r"<!--\s*candidate\\?_id\s*:\s*[^>]*-->", flags=re.IGNORECASE)
 ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN = re.compile(r"&lt;!--\s*candidate\\?_id\s*:\s*.*?--&gt;", flags=re.IGNORECASE)
+
+MAIAGENT_CONNECT_TIMEOUT_SECONDS = 15
+MAIAGENT_READ_TIMEOUT_SECONDS = 660
+MAIAGENT_CONNECT_TIMEOUT_MIN_SECONDS = 1
+MAIAGENT_CONNECT_TIMEOUT_MAX_SECONDS = 120
+MAIAGENT_READ_TIMEOUT_MIN_SECONDS = 1
+MAIAGENT_READ_TIMEOUT_MAX_SECONDS = 1800
+
+
+def _bounded_timeout_seconds(
+    env_name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        value = int(os.environ.get(env_name, ""))
+    except (TypeError, ValueError):
+        return default
+    if not minimum <= value <= maximum:
+        return default
+    return value
+
+
+def get_maiagent_timeout_seconds() -> tuple[int, int]:
+    """Return bounded connect/read timeouts without changing the retry policy."""
+    connect_timeout = _bounded_timeout_seconds(
+        "MAIAGENT_CONNECT_TIMEOUT_SECONDS",
+        MAIAGENT_CONNECT_TIMEOUT_SECONDS,
+        minimum=MAIAGENT_CONNECT_TIMEOUT_MIN_SECONDS,
+        maximum=MAIAGENT_CONNECT_TIMEOUT_MAX_SECONDS,
+    )
+    read_timeout = _bounded_timeout_seconds(
+        "MAIAGENT_READ_TIMEOUT_SECONDS",
+        MAIAGENT_READ_TIMEOUT_SECONDS,
+        minimum=MAIAGENT_READ_TIMEOUT_MIN_SECONDS,
+        maximum=MAIAGENT_READ_TIMEOUT_MAX_SECONDS,
+    )
+    return connect_timeout, read_timeout
 
 
 def extract_maiagent_text(data) -> str:
@@ -86,6 +127,7 @@ def _format_maiagent_attempt_log(attempts: list[dict]) -> str:
             f"  URL: {attempt.get('url', '')}",
             f"  Payload streaming field: {attempt.get('payload_streaming_field', '')}",
             f"  HTTP status: {attempt.get('http_status', '')}",
+            f"  Timeout: connect={attempt.get('connect_timeout_seconds', '')}s, read={attempt.get('read_timeout_seconds', '')}s",
             f"  Response body: {attempt.get('response_body', '')}",
             f"  Location: {attempt.get('location', '')}",
             f"  Allow: {attempt.get('allow', '')}",
@@ -100,6 +142,7 @@ def call_maiagent_cloud(prompt: str, *, api_key: str, chatbot_id: str, api_base:
     if not chatbot_id:
         raise RuntimeError("未設定 MAIAGENT_CHATBOT_ID")
     url, headers, payload = build_maiagent_request(prompt, api_key, chatbot_id, api_base)
+    connect_timeout, read_timeout = get_maiagent_timeout_seconds()
     payload_streaming_field = (
         "isStreaming" if "isStreaming" in payload
         else "is_streaming" if "is_streaming" in payload
@@ -107,12 +150,19 @@ def call_maiagent_cloud(prompt: str, *, api_key: str, chatbot_id: str, api_base:
     )
     attempt_log: list[dict] = []
     try:
-        response = http_client.post(url, headers=headers, json=payload, timeout=240)
+        response = http_client.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=(connect_timeout, read_timeout),
+        )
     except Exception as exc:
         attempt_log.append({
             "url": _maiagent_log_excerpt(url, api_key=api_key, prompt=prompt),
             "payload_streaming_field": payload_streaming_field,
             "http_status": "N/A",
+            "connect_timeout_seconds": connect_timeout,
+            "read_timeout_seconds": read_timeout,
             "response_body": _maiagent_log_excerpt(
                 f"Request error: {exc}", api_key=api_key, prompt=prompt
             ),
@@ -127,6 +177,8 @@ def call_maiagent_cloud(prompt: str, *, api_key: str, chatbot_id: str, api_base:
         "url": _maiagent_log_excerpt(url, api_key=api_key, prompt=prompt),
         "payload_streaming_field": payload_streaming_field,
         "http_status": response.status_code,
+        "connect_timeout_seconds": connect_timeout,
+        "read_timeout_seconds": read_timeout,
         "response_body": _maiagent_log_excerpt(
             response.text, api_key=api_key, prompt=prompt
         ),
