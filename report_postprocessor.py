@@ -752,7 +752,10 @@ def normalize_electromechanical_system_value(value: str, context: str = "") -> s
     raw_value = re.sub(r"\s+", " ", (value or "").strip())
     placeholders = {
         "未明確載明機電系統", "未明確載明", "未載明", "不明", "未知", "無", "n/a", "na", "-",
+        "依原始候選資料所示之都市軌道系統", "都市軌道系統",
     }
+    if raw_value.casefold() in placeholders:
+        return "未明確"
     if "之" in raw_value and any(mark in raw_value for mark in ("，", ",", "。")):
         return raw_value
     tokens = [
@@ -760,7 +763,7 @@ def normalize_electromechanical_system_value(value: str, context: str = "") -> s
         for token in re.split(r"[、;；]+", raw_value)
     ]
     concrete_tokens = [token for token in tokens if token and token.casefold() not in placeholders]
-    retained = concrete_tokens or [token for token in tokens if token]
+    retained = concrete_tokens
     unique_tokens: list[str] = []
     seen: set[str] = set()
     for token in retained:
@@ -768,7 +771,7 @@ def normalize_electromechanical_system_value(value: str, context: str = "") -> s
         if key and key not in seen:
             seen.add(key)
             unique_tokens.append(token)
-    return "、".join(unique_tokens) if unique_tokens else "未明確載明機電系統"
+    return "、".join(unique_tokens) if unique_tokens else "未明確"
 
 
 def _short_formal_sentence(text: str, limit: int = 180) -> str:
@@ -966,6 +969,41 @@ def _looks_like_english_title(title: str) -> bool:
     return ascii_chars >= 8 and ascii_chars > cjk_chars * 2
 
 
+def _contains_untranslated_report_script(value: str) -> bool:
+    return bool(re.search(r"[\u3040-\u30ff\uac00-\ud7af]", value or ""))
+
+
+def _summary_repeats_title(summary: str, title: str) -> bool:
+    normalized_summary = re.sub(r"[\W_]+", "", unescape(summary or "")).casefold()
+    normalized_title = re.sub(r"[\W_]+", "", unescape(title or "")).casefold()
+    if len(normalized_title) < 8 or len(normalized_summary) < 8:
+        return False
+    if normalized_summary == normalized_title:
+        return True
+    return (
+        normalized_summary.startswith(normalized_title)
+        and len(normalized_summary) - len(normalized_title) <= 24
+    )
+
+
+_GENERIC_TAIPEI_INSIGHTS = {
+    re.sub(r"[\W_]+", "", value).casefold()
+    for value in (
+        "可作為相關設備與系統整合案例之參考。",
+        "應持續核對事故經過、技術原因與安全改善措施。",
+        "可作為都市軌道營運治理與安全改善之追蹤案例。",
+        "可作為都市軌道營運協調與影響評估之追蹤案例。",
+        "可供後續核對規範變更內容及適用範圍。",
+        "後續內容仍應以原始來源核實。",
+    )
+}
+
+
+def _is_meaningful_taipei_insight(value: str) -> bool:
+    normalized = re.sub(r"[\W_]+", "", value or "").casefold()
+    return bool(normalized) and normalized not in _GENERIC_TAIPEI_INSIGHTS
+
+
 def chinese_fallback_title(category: str, title: str) -> str:
     lower = (title or "").casefold()
     if "automated work zone speed enforcement" in lower:
@@ -1029,6 +1067,7 @@ def normalize_final_report_md(md: str) -> str:
 
     lines = text.splitlines()
     output: list[str] = []
+    current_title = ""
     idx = 0
     while idx < len(lines):
         raw_line = lines[idx]
@@ -1043,7 +1082,11 @@ def normalize_final_report_md(md: str) -> str:
 
         field = _match_report_field_line(raw_line)
         if not field:
-            output.append(normalize_report_title_line(raw_line) if stripped.startswith("🔹") else raw_line)
+            normalized_line = normalize_report_title_line(raw_line) if stripped.startswith("🔹") else raw_line
+            output.append(normalized_line)
+            title_match = re.match(r"^\s*🔹\s*\[[^\]]+\]\s*(.*?)\s*$", normalized_line)
+            if title_match:
+                current_title = title_match.group(1).strip()
             idx += 1
             continue
 
@@ -1065,11 +1108,20 @@ def normalize_final_report_md(md: str) -> str:
         if label == "事件摘要":
             field_text = strip_event_summary_source_lead_in(field_text)
             field_text = _dedupe_source_mentions_in_paragraph(field_text)
+            if (
+                _summary_repeats_title(field_text, current_title)
+                or _contains_untranslated_report_script(field_text)
+            ):
+                field_text = "資料不足，未能形成可核實的事件摘要。"
             if field_text:
                 output.extend(["• 事件摘要：", field_text, ""])
         elif label == "臺北捷運局啟示":
             insight = _short_formal_sentence(field_text, 180)
-            if insight:
+            if (
+                insight
+                and _is_meaningful_taipei_insight(insight)
+                and not _contains_untranslated_report_script(insight)
+            ):
                 output.extend(["• 臺北捷運局啟示：", insight, ""])
         elif label == "資料來源":
             output.extend([normalize_source_line(f"• 資料來源：{field_text}"), ""])
@@ -1169,7 +1221,7 @@ PURE_SOURCE_TITLES = {
 
 def _has_valid_chinese_report_title(title: str) -> bool:
     cleaned = re.sub(r"\s+", "", title or "")
-    return not any(fragment in cleaned for fragment in TITLE_PLACEHOLDER_FRAGMENTS) and cleaned not in {
+    return not _contains_untranslated_report_script(cleaned) and not any(fragment in cleaned for fragment in TITLE_PLACEHOLDER_FRAGMENTS) and cleaned not in {
         re.sub(r"\s+", "", item) for item in TITLE_PLACEHOLDERS
     } and len(
         re.findall(r"[\u3400-\u9fff]", cleaned)
@@ -1179,6 +1231,8 @@ def _has_valid_chinese_report_title(title: str) -> bool:
 def _title_needs_repair(title: str, category: str = "") -> bool:
     cleaned = re.sub(r"\s+", "", title or "")
     if not cleaned:
+        return True
+    if _contains_untranslated_report_script(cleaned) or _looks_like_english_title(cleaned):
         return True
     if any(fragment in cleaned for fragment in TITLE_PLACEHOLDER_FRAGMENTS):
         return True
@@ -1945,7 +1999,9 @@ def formal_title_from_candidate(candidate: dict, *, context: ReportPostprocessCo
     if _contains_any_term(text, ['leipzig']) and category == '重大事故':
         return '萊比錫路面電車營運安全事件'
     if category == '重大事故' and _contains_any_term(text, ['collision', 'crash', 'derailment', 'fire', '碰撞', '撞擊', '出軌', '火災']):
-        return f'都市軌道事故：{original_title}' if original_title else '都市軌道事故'
+        if original_title and not _title_needs_repair(original_title, category):
+            return f'都市軌道事故：{original_title}'
+        return chinese_fallback_title(category, original_title)
     if original_title and (not _title_needs_repair(original_title, category)):
         if _looks_like_english_title(original_title):
             return chinese_fallback_title(category, original_title)
@@ -2013,29 +2069,57 @@ def _fallback_reason(candidate: dict, *, context: ReportPostprocessContext) -> s
 
 
 def _fallback_summary(candidate: dict) -> str:
-    for key in ('summary_zh', 'snippet_zh', 'summary'):
+    title = unescape(str(candidate.get('title', '') or '')).strip()
+    for key in ('summary_zh', 'snippet_zh', 'summary', 'snippet', 'short_snippet'):
         value = unescape(str(candidate.get(key, '') or ''))
         value = re.sub(r'<[^>]+>', ' ', value)
         value = _short_formal_sentence(value, 360)
-        if len(re.findall(r'[\u3400-\u9fff]', value)) >= 8:
+        if (
+            len(re.findall(r'[\u3400-\u9fff]', value)) >= 8
+            and not _summary_repeats_title(value, title)
+            and not _contains_untranslated_report_script(value)
+        ):
             return value
-    title = unescape(str(candidate.get('title', '') or '')).strip()
-    if len(re.findall(r'[\u3400-\u9fff]', title)) >= 4:
-        return f'{title}；原始資料未提供可核實的完整摘要。'
-    return '原始候選資料僅提供可核實標題與來源，摘要未予補充。'
+    return '資料不足，未能形成可核實的事件摘要。'
 
 
 def _fallback_insight(category: str, candidate: dict) -> str:
+    del category
     supplied = unescape(str(candidate.get('taipei_insight', '') or '')).strip()
-    if len(re.findall(r'[\u3400-\u9fff]', supplied)) >= 6:
-        return _short_formal_sentence(supplied, 180)
-    return {
-        '技術新知': '可作為相關設備與系統整合案例之參考。',
-        '重大事故': '應持續核對事故經過、技術原因與安全改善措施。',
-        '營運政策': '可作為都市軌道營運治理與安全改善之追蹤案例。',
-        '營運爭議': '可作為都市軌道營運協調與影響評估之追蹤案例。',
-        '規範更新': '可供後續核對規範變更內容及適用範圍。',
-    }.get(category, '後續內容仍應以原始來源核實。')
+    insight = _short_formal_sentence(supplied, 180)
+    if (
+        len(re.findall(r'[\u3400-\u9fff]', insight)) >= 6
+        and _is_meaningful_taipei_insight(insight)
+        and not _contains_untranslated_report_script(insight)
+    ):
+        return insight
+    return ''
+
+
+_FALLBACK_ELECTROMECHANICAL_SYSTEM_LABELS = {
+    'signalling': '號誌系統',
+    'traction_power': '供電系統',
+    'telecommunications': '通訊系統',
+    'afc': '自動收費系統 AFC',
+    'platform_screen_doors': '月臺門系統',
+    'rolling_stock': '車輛系統',
+    'depot_electromechanical': '機廠設備',
+    'station_electromechanical': '車站機電系統',
+    'vertical_transport': '電扶梯／電梯系統',
+    'ventilation_hvac': '通風空調系統',
+}
+
+
+def _fallback_electromechanical_system(candidate: dict) -> str:
+    systems = candidate.get('procurement_systems') or []
+    if isinstance(systems, str):
+        systems = [systems]
+    labels = [
+        _FALLBACK_ELECTROMECHANICAL_SYSTEM_LABELS.get(str(system).strip())
+        for system in systems
+    ]
+    labels = [label for label in labels if label]
+    return '、'.join(dict.fromkeys(labels)) if labels else '未明確'
 
 def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext) -> str:
     if _fallback_reason(candidate, context=context):
@@ -2046,7 +2130,19 @@ def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext
     date_value = _normalize_report_date_text(str(candidate.get('date') or ''))
     if date_value == '日期未知':
         date_value = '日期未明'
-    return '\n'.join([f'<!-- candidate_id: {candidate_id} -->', f'🔹 [{category}] {title}', '', f'• 發布/事件日期：{date_value}', '', f'• 國家/地區：{_candidate_region_display(candidate, context=context)}', '', '• 相關機電系統：依原始候選資料所示之都市軌道系統', '', '• 事件摘要：', _fallback_summary(candidate), '', '• 臺北捷運局啟示：', _fallback_insight(category, candidate), '', _candidate_source_line(candidate, context=context), '', '________________________________________'])
+    summary = _fallback_summary(candidate)
+    insight = _fallback_insight(category, candidate)
+    lines = [
+        f'<!-- candidate_id: {candidate_id} -->', f'🔹 [{category}] {title}', '',
+        f'• 發布/事件日期：{date_value}', '',
+        f'• 國家/地區：{_candidate_region_display(candidate, context=context)}', '',
+        f'• 相關機電系統：{_fallback_electromechanical_system(candidate)}', '',
+        '• 事件摘要：', summary, '',
+    ]
+    if insight:
+        lines.extend(['• 臺北捷運局啟示：', insight, ''])
+    lines.extend([_candidate_source_line(candidate, context=context), '', '________________________________________'])
+    return '\n'.join(lines)
 
 def _force_candidate_fields_in_block(block: str, candidate: dict | list[dict], *, context: ReportPostprocessContext) -> str:
     candidates = candidate if isinstance(candidate, list) else [candidate]

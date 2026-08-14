@@ -1217,6 +1217,19 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return True
 
         topic_text = _strip_source_name_noise(text)
+        bus_event_terms = [
+            "ev bus", "electric bus", "battery electric bus", "autobus", "bus", "coach",
+            "電動巴士", "電動公車", "巴士", "公車", "客運", "evバス", "電動バス", "バス",
+        ]
+        rail_event_terms = [
+            "rail", "train", "rolling stock", "signalling", "signaling", "signal system", "cbtc",
+            "track", "traction", "subway", "light rail", "tram", "platform screen door",
+            "地下鉄", "都市鉄道", "路面電車", "鉄道", "電車", "列車", "軌道", "信号", "号誌",
+            "都市軌道", "捷運", "地鐵", "輕軌", "號誌", "信號", "列車", "車輛", "供電",
+            "지하철", "도시철도", "경전철",
+        ]
+        if _contains_any_term(topic_text, bus_event_terms) and not _contains_any_term(topic_text, rail_event_terms):
+            return False
         has_metro_word = _contains_any_term(topic_text, ["metro"])
         has_metro_with_rail_context = has_metro_word and _contains_any_term(topic_text, METRO_RAIL_CONTEXT_TERMS)
         has_unambiguous_mode = _contains_any_term(topic_text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS)
