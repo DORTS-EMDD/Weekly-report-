@@ -1,8 +1,52 @@
 """Pure data shaping for the developer debug JSON payload."""
 
 import datetime
+import hashlib
+import os
+from pathlib import Path
+import subprocess
 from dataclasses import dataclass
 from typing import Callable
+
+
+RUNTIME_FINGERPRINT_MODULES = (
+    "streamlit_app",
+    "article_processor",
+    "article_selector",
+    "report_postprocessor",
+    "ddgs_search_service",
+)
+
+
+def _git_value(repository_root: Path, *args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip()
+
+
+def build_runtime_version() -> dict:
+    repository_root = Path(__file__).resolve().parent
+    module_hashes: dict[str, str] = {}
+    for module_name in RUNTIME_FINGERPRINT_MODULES:
+        module_path = repository_root / f"{module_name}.py"
+        try:
+            module_hashes[module_name] = hashlib.sha1(module_path.read_bytes()).hexdigest()
+        except OSError:
+            module_hashes[module_name] = ""
+    return {
+        "git_commit_sha": _git_value(repository_root, "rev-parse", "HEAD"),
+        "branch": _git_value(repository_root, "branch", "--show-current") or os.getenv("GIT_BRANCH", ""),
+        "module_sha1": module_hashes,
+    }
 
 
 @dataclass(frozen=True)
@@ -168,6 +212,7 @@ def build_developer_debug_payload(
             "fast_mode": run_config.get("fast_mode", True),
             "demo_cache_mode": run_config.get("demo_cache_mode", False),
             "app_source_hash": context.app_source_hash,
+            "runtime_version": build_runtime_version(),
             "selection_method": latest_stats.get("selection_method", debug_info.get("selection_method", "")),
             "long_term_coverage_warning": long_term_coverage.get("long_term_coverage_warning", False),
             "long_term_coverage_reason": long_term_coverage.get("reason", ""),

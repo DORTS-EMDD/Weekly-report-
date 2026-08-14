@@ -1843,7 +1843,29 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
 
 
+    def _is_accessibility_only_technical_candidate(candidate: dict) -> bool:
+        text = _candidate_selection_text(candidate)
+        access_terms = (
+            "accessibility", "accessible", "barrier-free", "step-free", "ramp", "slope",
+            "無障礙", "無障礙設施", "斜坡", "坡道",
+        )
+        equipment_terms = (
+            "elevator", "lift", "escalator", "signalling", "signaling", "cbtc", "train control",
+            "platform screen door", "afc", "fare gate", "ticketing", "traction power", "substation",
+            "hvac", "ventilation", "rolling stock", "trainset", "metro train", "light rail vehicle",
+            "communication", "telecom", "radio", "track monitoring", "condition monitoring", "sensor",
+            "電梯", "升降機", "電扶梯", "號誌", "信號", "月臺門", "自動收費", "供電", "空調",
+            "車輛", "列車", "通訊", "感測", "監測",
+        )
+        return (
+            _contains_any_term(text, list(access_terms))
+            and not _contains_any_term(text, list(equipment_terms))
+        )
+
+
     def _compute_technical_system_gate(candidate: dict) -> bool:
+        if _is_accessibility_only_technical_candidate(candidate):
+            return False
         text = _candidate_selection_text(candidate)
         has_known_system = _contains_any_term(
             text,
@@ -1906,6 +1928,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if _is_security_or_crime_candidate(candidate):
             return False
         if _is_airport_people_mover_only_text(text, candidate.get("source", "")):
+            return False
+        if _is_accessibility_only_technical_candidate(candidate):
             return False
         if _is_project_only_technical_candidate(candidate):
             return False

@@ -352,7 +352,22 @@ def _full_debug_info() -> dict:
 
 
 def _serialized(value) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    def without_runtime_fingerprint(item):
+        if isinstance(item, dict):
+            return {
+                key: without_runtime_fingerprint(value)
+                for key, value in item.items()
+                if key != "runtime_version"
+            }
+        if isinstance(item, list):
+            return [without_runtime_fingerprint(value) for value in item]
+        return item
+
+    return json.dumps(
+        without_runtime_fingerprint(value),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def _sha256(value) -> str:
@@ -551,6 +566,18 @@ class DeveloperDebugServiceRegressionTests(unittest.TestCase):
         self.assertNotIn("streamlit", imported_modules)
         self.assertEqual(star_imports, [])
         self.assertNotIn("session_state", source)
+
+
+    def test_runtime_version_contains_git_and_module_fingerprints(self):
+        runtime_version = developer_debug_service.build_runtime_version()
+        self.assertIn("git_commit_sha", runtime_version)
+        self.assertIn("branch", runtime_version)
+        module_hashes = runtime_version["module_sha1"]
+        self.assertEqual(
+            set(module_hashes),
+            set(developer_debug_service.RUNTIME_FINGERPRINT_MODULES),
+        )
+        self.assertTrue(all(len(value) == 40 for value in module_hashes.values()))
 
 
 if __name__ == "__main__":

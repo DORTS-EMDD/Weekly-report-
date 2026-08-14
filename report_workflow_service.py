@@ -72,6 +72,8 @@ from report_postprocessor import (
     repair_generic_report_titles,
     repair_journal_dates_in_report,
     repair_report_region_lines,
+    has_candidate_section_mismatch,
+    reconcile_report_candidate_output,
     restore_missing_selected_report_items,
     remove_missing_data_disclaimers,
     sanitize_report_text,
@@ -603,6 +605,25 @@ class WorkflowRuntime:
             selected_types=self.config.selected_types,
             standards_enabled=self.config.standards_enabled,
         )
+        final_reconciliation = dict(context.id_validation_target)
+        final_validation = validate_report_candidate_ids(validated, selected_candidates)
+        if not final_validation.get("valid") or has_candidate_section_mismatch(
+            validated,
+            selected_candidates,
+        ):
+            validated, final_reconciliation = reconcile_report_candidate_output(
+                validated,
+                selected_candidates,
+                context=context,
+            )
+        context.id_validation_target.clear()
+        context.id_validation_target.update(final_reconciliation)
+        final_skipped_ids = set(final_reconciliation.get("skipped_candidate_ids", []))
+        dropped = [
+            candidate
+            for candidate in selected_candidates
+            if int(candidate.get("candidate_id") or candidate.get("id") or 0) in final_skipped_ids
+        ]
         validated = ensure_supplemental_sources_in_report(validated, selected_candidates, context=context)
         validated = remove_missing_data_disclaimers(validated)
         validated = insert_annual_observation_section(validated, context=context)

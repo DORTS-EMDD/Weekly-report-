@@ -69,6 +69,8 @@ class DdgsSearchContext:
     sleep: Callable[[float], None] = time.sleep
     random_uniform: Callable[[float, float], float] = random.uniform
     news_scope: str = DEFAULT_NEWS_SCOPE
+    planned_required_families: list[str] = field(default_factory=list)
+    annual_breakthrough_query_count: int = 0
 
 
 DDGS_ERROR_STATUSES = {"http_403", "rate_limited_429", "timeout", "other_exception"}
@@ -321,6 +323,15 @@ def build_search_queries(
         if context.lookback_int >= 365 and "technology" in content_families
         else []
     )
+    required_families = list(content_families)
+    if {"營運政策", "營運爭議"}.intersection(context.selected_types):
+        required_families.append(SERVICE_OPENING_CATEGORY_KEY)
+    context.planned_required_families = (
+        list(dict.fromkeys(required_families))
+        if context.lookback_int >= 365
+        else []
+    )
+    context.annual_breakthrough_query_count = 0
 
     annual_bucket_queries = []
     if context.lookback_int >= 365 and context.news_scope != "domestic":
@@ -376,30 +387,45 @@ def build_search_queries(
                     lang=spec.get("lang", "en"),
                     use_news=bool(spec.get("use_news", True)),
                 )
-        for query, bucket in annual_bucket_queries:
-            _add(
-                query,
-                family="technology",
-                lang="en",
-                use_news=True,
-                query_region="global",
-                date_bucket=bucket,
-            )
-        for family in content_families:
-            for spec in _active_query_specs(family):
+        if annual_bucket_queries:
+            specs = _regional_query_spec_sequence(content_families, "en")
+            annual_supplement_reserve = len(annual_bucket_queries) + min(3, len(annual_breakthrough_specs))
+            core_query_limit = max(0, query_limit - annual_supplement_reserve)
+            for spec in specs:
+                if len(queries) >= core_query_limit:
+                    break
                 _add(
                     spec.get("query", ""),
-                    family=spec.get("family", family),
+                    family=spec.get("family", "general"),
                     lang=spec.get("lang", "en"),
                     use_news=bool(spec.get("use_news", True)),
                 )
-        for spec in annual_breakthrough_specs:
-            _add(
+            for query, bucket in annual_bucket_queries:
+                _add(
+                    query,
+                    family="technology",
+                    lang="en",
+                    use_news=True,
+                    query_region="global",
+                    date_bucket=bucket,
+                )
+        else:
+            for family in content_families:
+                for spec in _active_query_specs(family):
+                    _add(
+                        spec.get("query", ""),
+                        family=spec.get("family", family),
+                        lang=spec.get("lang", "en"),
+                        use_news=bool(spec.get("use_news", True)),
+                    )
+        for spec in annual_breakthrough_specs[:3]:
+            if _add(
                 spec.get("query", ""),
                 family="technology",
                 lang=spec.get("lang", "en"),
                 use_news=bool(spec.get("use_news", True)),
-            )
+            ):
+                context.annual_breakthrough_query_count += 1
     elif context.news_scope != "domestic" and content_families and context.active_regions:
         if "營運政策" in context.selected_types or "營運爭議" in context.selected_types:
             for spec in SERVICE_OPENING_QUERY_SPECS:
@@ -410,18 +436,14 @@ def build_search_queries(
                     use_news=bool(spec.get("use_news", True)),
                 )
         regions = list(dict.fromkeys(context.active_regions))
-        for query, bucket in annual_bucket_queries:
-            _add(
-                query,
-                family="technology",
-                lang=REGION_QUERY_LANGUAGES.get(regions[0], "en"),
-                use_news=True,
-                query_region=regions[0],
-                date_bucket=bucket,
-            )
         official_reserve = 1 if include_official else 0
-        country_budget = max(0, query_limit - official_reserve)
-        max_per_country = min(4, max(2, len(content_families)))
+        bucket_reserve = len(annual_bucket_queries) if annual_bucket_queries else 0
+        breakthrough_reserve = min(3, len(annual_breakthrough_specs))
+        country_budget = max(
+            0,
+            query_limit - official_reserve - bucket_reserve - breakthrough_reserve - len(queries),
+        )
+        max_per_country = min(8, max(2, len(content_families)))
         allocations = {region: min(2, country_budget // max(1, len(regions))) for region in regions}
         remaining = country_budget - sum(allocations.values())
         while remaining > 0 and any(count < max_per_country for count in allocations.values()):
@@ -434,7 +456,7 @@ def build_search_queries(
 
         for region in regions:
             preferred_lang = REGION_QUERY_LANGUAGES.get(region, "en")
-            specs = list(annual_breakthrough_specs) + _regional_query_spec_sequence(
+            specs = _regional_query_spec_sequence(
                 content_families,
                 preferred_lang,
             )
@@ -447,6 +469,26 @@ def build_search_queries(
                     use_news=bool(spec.get("use_news", True)),
                     query_region=region,
                 )
+        if annual_bucket_queries:
+            preferred_lang = REGION_QUERY_LANGUAGES.get(regions[0], "en")
+            for query, bucket in annual_bucket_queries:
+                _add(
+                    query,
+                    family="technology",
+                    lang=preferred_lang,
+                    use_news=True,
+                    query_region=regions[0],
+                    date_bucket=bucket,
+                )
+        for spec in annual_breakthrough_specs[:3]:
+            if _add(
+                f"{REGION_SEARCH_TERMS.get(regions[0], regions[0])} {spec.get('query', '')}",
+                family="technology",
+                lang=REGION_QUERY_LANGUAGES.get(regions[0], "en"),
+                use_news=bool(spec.get("use_news", True)),
+                query_region=regions[0],
+            ):
+                context.annual_breakthrough_query_count += 1
 
     if context.news_scope != "domestic" and include_official:
         official_spec = next(iter(_active_query_specs("official_investigation")), None)
@@ -606,7 +648,13 @@ def _basic_search_date_exclusion_reason(
     return ""
 
 
-def build_ddgs_search_summary(statuses: list[dict], planned_query_count: int | None = None) -> dict:
+def build_ddgs_search_summary(
+    statuses: list[dict],
+    planned_query_count: int | None = None,
+    *,
+    planned_required_families: list[str] | None = None,
+    annual_breakthrough_query_count: int = 0,
+) -> dict:
     rows = statuses or []
 
     def _count_by(key: str, fallback_key: str = "") -> dict[str, int]:
@@ -639,6 +687,23 @@ def build_ddgs_search_summary(statuses: list[dict], planned_query_count: int | N
     }
     if any(row.get("date_bucket") for row in rows):
         summary["query_count_by_date_bucket"] = _count_by("date_bucket")
+    if planned_required_families:
+        planned_by_family = summary["query_count_by_family"]
+        missing_families = [
+            family for family in planned_required_families
+            if not planned_by_family.get(family, 0)
+        ]
+        summary["annual_query_plan_family_coverage"] = {
+            "required_families": list(planned_required_families),
+            "planned_query_count_by_family": {
+                family: planned_by_family.get(family, 0)
+                for family in planned_required_families
+            },
+            "missing_families": missing_families,
+            "warning": bool(missing_families),
+        }
+        summary["annual_breakthrough_query_count"] = int(annual_breakthrough_query_count or 0)
+        summary["annual_breakthrough_query_cap"] = 3
     return summary
 
 
@@ -775,7 +840,12 @@ def run_duckduckgo_searches(
         return (
             "ddgs 套件未安裝，略過 ddgs 搜尋；請確認 requirements.txt 已包含 ddgs。",
             statuses,
-            build_ddgs_search_summary(statuses, total),
+            build_ddgs_search_summary(
+                statuses,
+                total,
+                planned_required_families=context.planned_required_families,
+                annual_breakthrough_query_count=context.annual_breakthrough_query_count,
+            ),
         )
     if not search_queries:
         return "沒有規劃 DDGS 查詢。", statuses, build_ddgs_search_summary([], 0)
@@ -820,5 +890,10 @@ def run_duckduckgo_searches(
         statuses,
         key=lambda row: (int(row.get("planned_index", 0) or 0), str(row.get("query", ""))),
     )
-    summary = build_ddgs_search_summary(statuses, total)
+    summary = build_ddgs_search_summary(
+        statuses,
+        total,
+        planned_required_families=context.planned_required_families,
+        annual_breakthrough_query_count=context.annual_breakthrough_query_count,
+    )
     return "\n\n".join(results_map[i] for i in sorted(results_map)), statuses, summary

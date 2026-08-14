@@ -1,8 +1,15 @@
 import datetime
 import unittest
+from collections import Counter
 
 from article_processor import _canonical_candidate_region
-from ddgs_search_service import DdgsSearchContext, _annual_quarter_windows, _query_with_period, build_search_queries
+from ddgs_search_service import (
+    DdgsSearchContext,
+    _annual_quarter_windows,
+    _query_with_period,
+    build_search_queries,
+    run_duckduckgo_searches,
+)
 from report_postprocessor import (
     deduplicate_report_quality_issues,
     deduplicate_formal_report_sections,
@@ -253,6 +260,64 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
         self.assertIn(title, repaired)
         self.assertNotIn("捷運列車更新案", repaired)
 
+    def test_final_reconciliation_rehomes_model_block_by_selected_category(self):
+        candidate = _candidate(
+            15,
+            "Manchester Piccadilly 電車出軌調查終止",
+            "Metrolink tram derailment investigation ended.",
+            category="重大事故",
+        )
+        report = "\n".join([
+            "<!-- candidate_id: 15 -->",
+            "🔹 [營運動態] Manchester Piccadilly 電車出軌調查終止",
+            "• 發布/事件日期：2026-08-01",
+            "• 國家/地區：英國",
+            "• 相關機電系統：車輛系統",
+            "• 事件摘要：Manchester Piccadilly 的 Metrolink 電車出軌調查已終止。",
+            "• 資料來源：https://example.com/v22-quality/15",
+        ])
+
+        output, diagnostics = self._reconcile(
+            report,
+            [candidate],
+            ["技術新知", "重大事故", "營運政策", "營運爭議", "機電標案"],
+        )
+
+        self.assertIn("## 二、重大事故", output)
+        self.assertNotIn("## 三、營運動態\n\n<!-- candidate_id: 15 -->", output)
+        self.assertEqual(diagnostics["final_candidate_ids"], [15])
+        self.assertTrue(diagnostics["final_candidate_id_integrity_passed"])
+        self.assertEqual(diagnostics["final_count_by_category"]["重大事故"], 1)
+
+    def test_electromechanical_taxonomy_uses_specific_vertical_transport_labels(self):
+        self.assertEqual(
+            app.normalize_electromechanical_system_value(
+                "",
+                "MTA opened two elevators at Crown Hts-Utica Av subway station.",
+            ),
+            "電梯",
+        )
+        self.assertEqual(
+            app.normalize_electromechanical_system_value(
+                "",
+                "station elevators and escalators were modernized",
+            ),
+            "電梯、電扶梯",
+        )
+        self.assertEqual(
+            app.normalize_electromechanical_system_value("車站無障礙設施"),
+            "未明確",
+        )
+
+    def test_accessibility_ramp_without_equipment_does_not_pass_technical_gate(self):
+        candidate = _candidate(
+            20,
+            "Finch West LRT station ramp accessibility upgrade",
+            "Finch West station adds a ramp and slope improvements for accessibility.",
+        )
+        self.assertFalse(app._selector_api["_passes_technical_triad"](candidate))
+        self.assertFalse(app.evaluate_category_gates(candidate)["category_gates"]["technology"])
+
     def test_region_content_overrides_query_region_and_records_conflict(self):
         chennai = _candidate(16, "Chennai Metro Rail ropes in consultant", "Chennai Metro Rail appointed a consultant for the system.")
         chennai["region"] = "臺灣"
@@ -393,6 +458,28 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
         self.assertEqual(output.count("## 五、規範更新"), 1)
         self.assertEqual(output.count("## 六、國際學術期刊"), 1)
 
+    def test_formal_section_headings_are_canonicalized_once(self):
+        report = "\n".join([
+            "## 技術新知",
+            "🔹 [技術新知] Fixture",
+            "## 二、重大事故## 二、重大事故",
+            "本期未發現符合條件之重大事故案例。",
+        ])
+
+        original_types = app.selected_types
+        original_standards = app.standards_enabled
+        try:
+            app.selected_types = ["技術新知", "重大事故"]
+            app.standards_enabled = False
+            output = app.normalize_report_section_numbering(report)
+        finally:
+            app.selected_types = original_types
+            app.standards_enabled = original_standards
+
+        self.assertEqual(output.count("## 一、技術新知"), 1)
+        self.assertEqual(output.count("## 二、重大事故"), 1)
+        self.assertNotIn("重大事故##", output)
+
     def test_canonical_system_mapping_and_source_link_normalization(self):
         self.assertEqual(
             app.normalize_electromechanical_system_value(
@@ -431,6 +518,37 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
         self.assertEqual(len(breakthrough_queries), 3)
         self.assertTrue(all(any(term in query.casefold() for term in ("metro", "subway", "mrt", "light rail")) for query in breakthrough_queries))
         self.assertEqual(_query_with_period("metro advanced material", context=context), "metro advanced material")
+
+    def test_annual_regional_plan_covers_selected_families_before_breakthrough_supplement(self):
+        context = DdgsSearchContext(
+            selected_types=["技術新知", "重大事故", "營運政策", "營運爭議", "機電標案"],
+            active_regions=["日本", "德國"],
+            lookback_days=365,
+            lookback_int=365,
+            is_global_scope=False,
+            today=datetime.date(2026, 8, 14),
+            ddgs_client_factory=None,
+            news_scope="international",
+        )
+
+        queries, _ = build_search_queries(context=context)
+        family_counts = Counter(
+            metadata.get("family")
+            for metadata in context.query_metadata.values()
+        )
+
+        for family in context.planned_required_families:
+            self.assertGreaterEqual(family_counts[family], 1, family)
+        self.assertLessEqual(context.annual_breakthrough_query_count, 3)
+        self.assertEqual(len(queries), len(context.query_metadata))
+
+        _, statuses, summary = run_duckduckgo_searches(
+            context=context,
+            search_queries=queries,
+            news_query_indices=set(),
+        )
+        self.assertEqual(len(statuses), len(queries))
+        self.assertFalse(summary["annual_query_plan_family_coverage"]["warning"])
 
 
 if __name__ == "__main__":

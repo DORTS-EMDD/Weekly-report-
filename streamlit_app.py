@@ -2370,13 +2370,17 @@ if generate_btn:
             reconciliation_diagnostics = dict(postprocess_result["id_validation"])
 
             # Internal IDs remain available through reconciliation and count validation.
-            report_id_validation_before_clean = validate_report_candidate_ids(
-                validated_report, selected_candidates
+            report_id_validation_before_clean = reconciliation_diagnostics.get(
+                "after_reconcile", {}
             )
-            validated_report_count = count_report_items(validated_report)
+            validated_report_count = reconciliation_diagnostics.get(
+                "final_unique_article_count", count_report_items(validated_report)
+            )
             selected_final_count_validation_passed = bool(
-                report_id_validation_before_clean.get("valid")
-                and validated_report_count == len(selected_candidates)
+                reconciliation_diagnostics.get("final_candidate_id_integrity_passed", False)
+                and validated_report_count == len(
+                    reconciliation_diagnostics.get("final_candidate_ids", [])
+                )
             )
 
             long_term_coverage = build_final_report_coverage_warning(clean_report, lookback_int, today)
@@ -2392,9 +2396,13 @@ if generate_btn:
                 )
                 for item in dropped_selected_candidates
             ]
-            formal_count = count_report_items(clean_report)
+            formal_count = reconciliation_diagnostics.get(
+                "final_unique_article_count", count_report_items(clean_report)
+            )
             postprocess_news_count_delta = formal_count - maiagent_report_response_count
-            category_counts = count_report_items_by_category(clean_report)
+            category_counts = reconciliation_diagnostics.get(
+                "final_count_by_category", count_report_items_by_category(clean_report)
+            )
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
                 re.search(r"(?m)^🔹\s*\[規範更新\]", clean_report)
             )

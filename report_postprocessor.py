@@ -33,6 +33,7 @@ from config import (
 from journal_service import _parse_full_research_date
 from maiagent_service import (
     REPORT_CANDIDATE_ID_PATTERN,
+    extract_report_candidate_ids,
     ensure_selected_candidate_ids,
     remove_internal_candidate_markers,
     validate_report_candidate_ids,
@@ -643,6 +644,13 @@ def _deduplicate_research_sections(report_md: str) -> str:
 def deduplicate_report_quality_issues(report_md: str) -> str:
     text = report_md or ""
     text = re.sub(
+        r"(?m)^\s*#{0,6}\s*([一二三四五六七八九十]\s*、\s*"
+        r"(技術新知|重大事故|營運政策|營運爭議|營運議題|營運動態|機電標案))\s*"
+        r"#{1,6}\s*[一二三四五六七八九十]\s*、\s*\2\s*$",
+        r"## \1",
+        text,
+    )
+    text = re.sub(
         r"(?m)^(\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*"
         r"(技術新知|重大事故|營運政策|營運爭議|營運議題|營運動態|機電標案))"
         r"\s*#{1,6}\s*[一二三四五六七八九十]\s*、\s*\2\s*$",
@@ -722,7 +730,7 @@ def normalize_report_section_numbering(
     for label, number in section_numbers.items():
         aliases = "(?:營運議題|營運動態)" if label == OPERATIONAL_DYNAMICS_CATEGORY_LABEL else "(?:國際學術期刊|技術研究補充)" if label == "國際學術期刊" else re.escape(label)
         normalized = re.sub(
-            rf"(?m)^\s*#{{0,6}}\s*[一二三四五六七八九十]\s*、\s*{aliases}\s*$",
+            rf"(?m)^\s*#{{0,6}}\s*(?:[一二三四五六七八九十]\s*、\s*)?{aliases}\s*$",
             f"## {number}、{label}",
             normalized,
         )
@@ -769,13 +777,13 @@ def merge_operational_report_sections(
     if not text:
         return text
     heading_pattern = re.compile(
-        r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:營運政策|營運爭議|營運議題|營運動態)\s*$"
+        r"(?m)^\s*#{0,6}\s*(?:[一二三四五六七八九十]\s*、\s*)?(?:營運政策|營運爭議|營運議題|營運動態)\s*$"
     )
     heading_matches = list(heading_pattern.finditer(text))
     spans: list[tuple[int, int]] = []
     blocks: list[str] = []
     next_section_pattern = re.compile(
-        r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、|^\s*📊|^\s*⏰"
+        r"(?m)^\s*#{0,6}\s*(?:[一二三四五六七八九十]\s*、\s*)?(?:技術新知|重大事故|營運政策|營運爭議|營運議題|營運動態|機電標案|規範更新|國際學術期刊|技術研究補充)\s*$|^\s*📊|^\s*⏰"
     )
     for match in heading_matches:
         next_match = next_section_pattern.search(text, match.end())
@@ -814,7 +822,7 @@ def merge_operational_report_sections(
         text = "".join(pieces)
     elif operations_enabled:
         insert_match = re.search(
-            r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*(?:規範更新|機電標案|國際學術期刊|技術研究補充)\s*$|^\s*📊|^\s*⏰",
+            r"(?m)^\s*#{0,6}\s*(?:[一二三四五六七八九十]\s*、\s*)?(?:規範更新|機電標案|國際學術期刊|技術研究補充)\s*$|^\s*📊|^\s*⏰",
             text,
         )
         insert_at = insert_match.start() if insert_match else len(text)
@@ -980,7 +988,8 @@ def normalize_electromechanical_system_line(line: str) -> str:
 
 
 CANONICAL_ELECTROMECHANICAL_SYSTEMS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("電梯、電扶梯", ("elevator", "elevators", "escalator", "escalators", "lift", "lifts", "電梯", "升降機", "電扶梯", "手扶梯")),
+    ("電梯", ("elevator", "elevators", "lift", "lifts", "電梯", "升降機")),
+    ("電扶梯", ("escalator", "escalators", "電扶梯", "手扶梯")),
     ("號誌系統", ("signalling", "signaling", "signal system", "cbtc", "train control", "ats", "atp", "ato", "號誌", "信號", "列車控制", "列控")),
     ("通訊系統", ("communication", "telecom", "radio", "wireless communication", "通訊", "無線電", "光纖")),
     ("供電系統", ("traction power", "power supply", "substation", "scada", "traction", "供電", "牽引供電", "變電站", "電力系統")),
@@ -994,12 +1003,22 @@ CANONICAL_ELECTROMECHANICAL_SYSTEMS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 def normalize_electromechanical_system_value(value: str, context: str = "") -> str:
     raw_value = re.sub(r"\s+", " ", (value or "").strip())
+    abstract_values = {
+        "車站無障礙設施", "車站機電", "車站機電系統", "軌道運輸安全", "列車營運",
+        "營運安全", "測試驗證", "系統整合", "事故調查與安全管理", "旅客服務",
+    }
     generic_values = {
         "", "未明確資料", "無明確資料", "未明確載明機電系統", "未明確載明", "未載明", "不明", "未知", "無", "n/a", "na", "-",
         "依原始候選資料所示之都市軌道系統", "都市軌道系統", "機電系統", "相關系統",
-        "營運管理", "系統整合", "旅客服務",
+        "營運管理", "系統整合", "旅客服務", *abstract_values,
     }
-    if raw_value.casefold() not in generic_values:
+    value_parts = {
+        part.strip()
+        for part in re.split(r"[、,，/；;|]+", raw_value)
+        if part.strip()
+    }
+    is_abstract_only = bool(value_parts) and value_parts.issubset(abstract_values)
+    if raw_value.casefold() not in generic_values and not is_abstract_only:
         if re.search(r"[\u3400-\u9fff]", raw_value):
             return raw_value
         evidence = raw_value
@@ -2384,8 +2403,7 @@ _FALLBACK_ELECTROMECHANICAL_SYSTEM_LABELS = {
     'platform_screen_doors': '月臺門系統',
     'rolling_stock': '車輛系統',
     'depot_electromechanical': '機廠設備',
-    'station_electromechanical': '車站機電系統',
-    'vertical_transport': '電扶梯／電梯系統',
+    'station_electromechanical': '未明確',
     'ventilation_hvac': '通風空調系統',
 }
 
@@ -2394,11 +2412,24 @@ def _fallback_electromechanical_system(candidate: dict) -> str:
     systems = candidate.get('procurement_systems') or []
     if isinstance(systems, str):
         systems = [systems]
+    evidence = " ".join(
+        str(candidate.get(key, '') or '')
+        for key in ('title', 'snippet', 'summary', 'summary_zh')
+    )
     labels = [
         _FALLBACK_ELECTROMECHANICAL_SYSTEM_LABELS.get(str(system).strip())
         for system in systems
     ]
     labels = [label for label in labels if label]
+    if 'vertical_transport' in {str(system).strip() for system in systems}:
+        vertical_labels = normalize_electromechanical_system_value('', evidence)
+        if vertical_labels != '未明確':
+            labels = [label for label in labels if label != '未明確']
+            labels.append(vertical_labels)
+    inferred_labels = normalize_electromechanical_system_value('', evidence)
+    if inferred_labels != '未明確':
+        labels.extend(inferred_labels.split('、'))
+    labels = [label for label in labels if label != '未明確']
     return '、'.join(dict.fromkeys(labels)) if labels else '未明確'
 
 def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext) -> str:
@@ -2630,6 +2661,16 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         if int(candidate.get('candidate_id') or candidate.get('id') or 0) not in deduplicated_ids
     ]
     final_validation = validate_report_candidate_ids(reconciled, validation_candidates)
+    final_candidate_ids = extract_report_candidate_ids(reconciled)
+    selected_ids = [
+        int(candidate.get('candidate_id') or candidate.get('id') or 0)
+        for candidate in selected_candidates
+    ]
+    expected_final_ids = [
+        candidate_id
+        for candidate_id in selected_ids
+        if candidate_id not in deduplicated_ids
+    ]
     category_counts = count_report_items_by_category(reconciled)
     diagnostics = {
         'before_reconcile': initial_validation,
@@ -2652,8 +2693,36 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         },
         'postprocess_warnings': warnings,
         'after_reconcile': final_validation,
+        'final_candidate_ids': final_candidate_ids,
+        'expected_final_candidate_ids': expected_final_ids,
+        'final_candidate_id_integrity_passed': (
+            final_candidate_ids == expected_final_ids
+            and not skipped_ids
+        ),
     }
     return (reconciled, diagnostics)
+
+
+def has_candidate_section_mismatch(report_md: str, selected_candidates: list[dict]) -> bool:
+    selected_map = {
+        int(candidate.get("candidate_id") or candidate.get("id") or 0): candidate
+        for candidate in selected_candidates or []
+    }
+    for parsed in _parse_report_article_blocks(report_md):
+        category_match = re.search(r"(?m)^\s*🔹\s*\[([^\]]+)\]", parsed.get("body", ""))
+        if not category_match:
+            continue
+        actual = _canonical_report_category_label(category_match.group(1))
+        for candidate_id in parsed.get("candidate_ids", ()):
+            candidate = selected_map.get(candidate_id) or {}
+            expected = candidate.get("classification") or candidate.get("preliminary_type") or ""
+            if expected in {"營運政策", "營運爭議", "營運動態", SERVICE_OPENING_CATEGORY_KEY}:
+                expected = OPERATIONAL_DYNAMICS_CATEGORY_LABEL
+            if actual in {"營運政策", "營運爭議", "營運動態", SERVICE_OPENING_CATEGORY_KEY}:
+                actual = OPERATIONAL_DYNAMICS_CATEGORY_LABEL
+            if expected and actual != expected:
+                return True
+    return False
 
 def identify_dropped_selected_candidates(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> list[dict]:
     missing_ids = set(validate_report_candidate_ids(report_md, selected_candidates).get('missing_ids', []))
