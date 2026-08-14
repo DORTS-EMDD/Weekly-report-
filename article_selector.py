@@ -222,6 +222,10 @@ ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS: dict[str, list[str]] = {
     "order": [
         "places order", "placed order", "orders", "ordered", "order for", "訂購", "下訂",
     ],
+    "maintenance_services": [
+        "maintenance services", "rolling stock maintenance", "vehicle maintenance contract",
+        "維修服務", "車輛維修服務",
+    ],
 }
 
 ELECTROMECHANICAL_PROCUREMENT_CIVIL_TERMS = [
@@ -424,6 +428,7 @@ CORE_METRO_TECHNICAL_TERMS = [
     "platform screen door", "platform door", "psd", "afc", "fare gate",
     "station equipment", "hvac", "air conditioning", "ventilation", "fire system",
     "environmental control", "escalator", "elevator", "condition monitoring",
+    "thermal energy network", "heat recovery", "platform cooling", "thermal management",
     "fault diagnosis", "predictive maintenance", "video analytics", "image recognition",
     "ai image", "system integration", "system assurance", "rams", "safety verification",
     "interface management", "ot security", "ics security", "cybersecurity",
@@ -442,10 +447,12 @@ TECHNICAL_IMPLEMENTATION_TERMS = [
     "renewal", "replace", "replacement", "retrofit", "modernisation", "modernization",
     "commission", "commissioning", "enter service", "entered service", "launch",
     "trial", "pilot", "test", "testing", "verification", "validated", "validation",
+    "study", "feasibility study", "evaluate", "evaluated", "evaluation",
     "installation", "integrated", "integration", "improvement", "new system",
     "new equipment", "導入", "啟用", "部署", "升級", "更新", "汰換",
     "改造", "現代化", "試辦", "試行", "測試", "驗證", "改善", "新系統",
     "新設備", "安裝", "整合", "投入營運", "正式營運",
+    "研究", "可行性研究", "評估", "試驗",
 ]
 
 INNOVATION_NOVELTY_TERMS = [
@@ -3338,7 +3345,83 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return has_low and not has_high
 
 
-    def rebalance_selected_candidates(selected: list[dict]) -> list[dict]:
+    def rebalance_selected_candidates(selected: list[dict], annual_pool: list[dict] | None = None) -> list[dict]:
+        if lookback_int == 365:
+            def _quarter_key(candidate: dict) -> str:
+                date_obj = _candidate_date_obj(candidate.get("date", ""))
+                return f"{date_obj.year:04d}-Q{((date_obj.month - 1) // 3) + 1}" if date_obj else ""
+
+            def _is_recent(candidate: dict) -> bool:
+                date_obj = _candidate_date_obj(candidate.get("date", ""))
+                return bool(date_obj and date_obj >= today - datetime.timedelta(days=60))
+
+            pool = [candidate for candidate in annual_pool or [] if _quarter_key(candidate)]
+            if pool and selected:
+                replaced_ids: list[int] = []
+                selected_quarters = {_quarter_key(candidate) for candidate in selected if _quarter_key(candidate)}
+                candidate_pool = sorted(pool, key=_python_selection_sort_key)
+
+                def _replace_for_coverage(candidate: dict, *, force_recent_balance: bool = False) -> bool:
+                    quarter = _quarter_key(candidate)
+                    if not quarter or quarter in selected_quarters:
+                        return False
+                    if _is_duplicate_selected_event(candidate, selected):
+                        return False
+                    if (
+                        candidate.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
+                        and sum(item.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL for item in selected)
+                        >= ELECTROMECHANICAL_PROCUREMENT_SELECTION_CAP
+                    ):
+                        return False
+                    replacement_candidates = [
+                        (index, item)
+                        for index, item in enumerate(selected)
+                        if _is_recent(item) or sum(_quarter_key(existing) == _quarter_key(item) for existing in selected) > 1
+                    ]
+                    if not replacement_candidates:
+                        return False
+                    replacement_index, replacement = min(
+                        replacement_candidates,
+                        key=lambda pair: (
+                            0 if _is_recent(pair[1]) else 1,
+                            int(pair[1].get("final_selection_score", pair[1].get("python_score", 0)) or 0),
+                        ),
+                    )
+                    candidate_score = int(candidate.get("final_selection_score", candidate.get("python_score", 0)) or 0)
+                    replacement_score = int(replacement.get("final_selection_score", replacement.get("python_score", 0)) or 0)
+                    if not force_recent_balance and candidate_score < replacement_score - 8:
+                        return False
+                    selected[replacement_index] = candidate
+                    selected_quarters.discard(_quarter_key(replacement))
+                    selected_quarters.add(quarter)
+                    replaced_ids.append(int(replacement.get("id", replacement.get("candidate_id", 0)) or 0))
+                    candidate["selection_stage"] = "annual_quarter_backfill"
+                    candidate["selected_reason"] = f"{candidate.get('selected_reason', '')}；年度季度覆蓋回填。".strip("；")
+                    return True
+
+                for candidate in candidate_pool:
+                    _replace_for_coverage(candidate)
+
+                target_recent_count = int(len(selected) * 0.6)
+                while sum(1 for item in selected if _is_recent(item)) > target_recent_count:
+                    older_candidates = [candidate for candidate in candidate_pool if not _is_recent(candidate)]
+                    if not older_candidates:
+                        break
+                    candidate = older_candidates.pop(0)
+                    if not _replace_for_coverage(candidate, force_recent_balance=True):
+                        candidate_pool.remove(candidate)
+                        continue
+
+                LAST_PYTHON_SELECTION_DEBUG["annual_rebalance_triggered"] = bool(replaced_ids)
+                LAST_PYTHON_SELECTION_DEBUG["annual_rebalance_replaced_ids"] = replaced_ids
+                LAST_PYTHON_SELECTION_DEBUG["annual_quarter_coverage"] = sorted(
+                    quarter for quarter in {_quarter_key(item) for item in selected} if quarter
+                )
+                LAST_PYTHON_SELECTION_DEBUG["annual_recent_60_day_share"] = round(
+                    sum(1 for item in selected if _is_recent(item)) / len(selected),
+                    4,
+                )
+            return selected
         if lookback_int != 7 or "營運政策" not in selected_types:
             return selected
         balanced: list[dict] = []
@@ -3826,6 +3909,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if is_global_scope:
             return True
         region = _canonical_candidate_region(candidate)
+        if candidate.get("region_resolution_method") in {"query_region_fallback", "query_text_fallback"}:
+            candidate["scope_validation_failure"] = "event_region_not_explicitly_resolved"
+            return False
         if region in active_regions:
             return True
         text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
@@ -4436,7 +4522,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             if item.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
         )
         LAST_PYTHON_SELECTION_DEBUG["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("borderline_added_count", 0)
-        selected = rebalance_selected_candidates(selected)
+        annual_pool = [candidate for candidates in grouped.values() for candidate in candidates]
+        selected = rebalance_selected_candidates(selected, annual_pool)
         return _cap_operational_dynamics(selected)
 
     return {

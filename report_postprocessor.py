@@ -127,7 +127,10 @@ def normalize_source_line(line: str) -> str:
     if "資料來源" not in (line or ""):
         return line
     match = re.match(
-        r"^\s*(?:[-*]\s*)?(?:•\s*)?(?:\*\*)?資料來源(?:\*\*)?\s*[：:]\s*(.*)$",
+        r"^\s*(?:[-*]\s*)?(?:•\s*)?(?:\*\*)?資料來源"
+        r"(?:\*\*)?\s*[：:]\s*(?:\*\*)?\s*(.*)$|"
+        r"^\s*(?:[-*]\s*)?(?:•\s*)?(?:\*\*)?資料來源"
+        r"\s*[：:]\s*(?:\*\*)?\s*(.*)$",
         line or "",
     )
     if not match:
@@ -478,12 +481,25 @@ _FORMAL_SECTION_KEYS = {
 
 def _dedupe_report_blocks(section_body: str) -> str:
     parts = re.split(r"(?m)(?=^\s*(?:<!--\s*candidate_id\s*:\s*\d+\s*-->\s*\n)*🔹\s*\[[^\]]+\])", section_body or "")
-    if len(parts) <= 1:
-        return (section_body or "").strip()
-    blocks = [part.strip() for part in parts if part.strip()]
+    blocks = [part.strip() for part in parts if part.strip()] if len(parts) > 1 else []
     article_blocks = [block for block in blocks if re.search(r"(?m)^🔹\s*\[[^\]]+\]", block)]
     if not article_blocks:
-        return (section_body or "").strip()
+        unique_paragraphs: list[str] = []
+        seen_empty_messages: set[str] = set()
+        empty_messages = {
+            message.strip()
+            for message in EMPTY_TEXT_BY_TYPE.values()
+        }
+        for paragraph in re.split(r"\n+", section_body or ""):
+            cleaned = paragraph.strip()
+            if not cleaned:
+                continue
+            if cleaned in empty_messages:
+                if cleaned in seen_empty_messages:
+                    continue
+                seen_empty_messages.add(cleaned)
+            unique_paragraphs.append(cleaned)
+        return "\n\n".join(unique_paragraphs).strip()
     unique_blocks: list[str] = []
     seen: set[str] = set()
     for block in article_blocks:
@@ -501,7 +517,10 @@ def _dedupe_report_blocks(section_body: str) -> str:
             continue
         seen.add(identity)
         unique_blocks.append(block)
-    return "\n\n---\n\n".join(unique_blocks)
+    if len(unique_blocks) == len(article_blocks):
+        return (section_body or "").strip()
+    separator = "\n\n---\n\n" if re.search(r"\n\s*---\s*\n", section_body or "") else "\n\n"
+    return separator.join(unique_blocks)
 
 
 def deduplicate_formal_report_sections(report_md: str) -> str:
@@ -512,7 +531,7 @@ def deduplicate_formal_report_sections(report_md: str) -> str:
         r"(技術新知|重大事故|營運政策|營運爭議|營運議題|營運動態|機電標案)\s*$"
     )
     matches = list(heading_pattern.finditer(text))
-    if len(matches) <= 1:
+    if not matches:
         return text
 
     section_boundary_pattern = re.compile(
@@ -527,6 +546,7 @@ def deduplicate_formal_report_sections(report_md: str) -> str:
             "start": match.start(),
             "end": next_start,
             "key": _FORMAL_SECTION_KEYS[label],
+            "heading": text[match.start():match.end()].strip(),
             "body": text[match.end():next_start],
         })
     grouped: dict[str, list[dict]] = {}
@@ -535,7 +555,17 @@ def deduplicate_formal_report_sections(report_md: str) -> str:
 
     replacements: list[tuple[int, int, str]] = []
     for key, group in grouped.items():
-        if len(group) < 2:
+        if len(group) == 1:
+            record = group[0]
+            deduplicated_body = _dedupe_report_blocks(record["body"])
+            if deduplicated_body != record["body"].strip():
+                replacements.append(
+                    (
+                        record["start"],
+                        record["end"],
+                        f"{record['heading']}\n\n{deduplicated_body}\n",
+                    )
+                )
             continue
         combined_body = _dedupe_report_blocks("\n\n".join(record["body"] for record in group))
         if not combined_body:
@@ -558,6 +588,111 @@ def deduplicate_formal_report_sections(report_md: str) -> str:
     for start, end, replacement in sorted(replacements, reverse=True):
         text = text[:start] + replacement + text[end:]
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _deduplicate_research_sections(report_md: str) -> str:
+    text = report_md or ""
+    heading_pattern = re.compile(
+        r"(?m)^\s*#{1,6}\s*[一二三四五六七八九十]\s*、\s*"
+        r"(規範更新|國際學術期刊|技術研究補充)\s*$"
+    )
+    matches = list(heading_pattern.finditer(text))
+    if not matches:
+        return text
+
+    boundary_pattern = re.compile(
+        r"(?m)^\s*(?:#{1,6}\s*)?[一二三四五六七八九十]\s*、|^\s*[📊⏰]"
+    )
+    replacements: list[tuple[int, int, str]] = []
+    seen_sections: dict[str, str] = {}
+    for match in matches:
+        boundary = boundary_pattern.search(text, match.end())
+        end = boundary.start() if boundary else len(text)
+        label = match.group(1)
+        body = text[match.end():end].strip()
+        normalized_body = re.sub(r"\s+", "", body).casefold()
+        section_key = "journal" if label in {"國際學術期刊", "技術研究補充"} else label
+        if section_key in seen_sections and seen_sections[section_key] == normalized_body:
+            replacements.append((match.start(), end, ""))
+            continue
+        seen_sections[section_key] = normalized_body
+        if section_key == "journal":
+            header = text[match.start():match.end()]
+            parts = re.split(r"(?m)(?=^\s*\d+[\.、])", body)
+            unique_parts: list[str] = []
+            seen_entries: set[str] = set()
+            for part in parts:
+                cleaned = part.strip()
+                if not cleaned:
+                    continue
+                doi = _normalize_doi_value(cleaned, context=None) if "_normalize_doi_value" in globals() else ""
+                urls = _extract_complete_urls(cleaned)
+                title_match = re.search(r"(?m)^\s*\d+[\.、]\s*(.+)$", cleaned)
+                identity = doi or (urls[0].casefold() if urls else "") or _normalize_title(title_match.group(1) if title_match else cleaned)
+                if identity in seen_entries:
+                    continue
+                seen_entries.add(identity)
+                unique_parts.append(cleaned)
+            body = "\n\n".join(unique_parts)
+            replacements.append((match.start(), end, f"{header}\n\n{body}\n".rstrip()))
+    for start, end, replacement in sorted(replacements, reverse=True):
+        text = text[:start] + replacement + text[end:]
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def deduplicate_report_quality_issues(report_md: str) -> str:
+    text = report_md or ""
+    text = re.sub(
+        r"(?m)^(\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*"
+        r"(技術新知|重大事故|營運政策|營運爭議|營運議題|營運動態|機電標案))"
+        r"\s*#{1,6}\s*[一二三四五六七八九十]\s*、\s*\2\s*$",
+        r"## \2",
+        text,
+    )
+    text = deduplicate_formal_report_sections(text)
+    text = _deduplicate_research_sections(text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _reorder_formal_report_sections(report_md: str) -> str:
+    text = report_md or ""
+    heading_pattern = re.compile(
+        r"(?m)^\s*#{1,6}\s*[一二三四五六七八九十]\s*、\s*"
+        r"(技術新知|重大事故|營運動態|營運議題|營運政策|營運爭議|機電標案|規範更新|國際學術期刊|技術研究補充)\s*$"
+    )
+    matches = list(heading_pattern.finditer(text))
+    if len(matches) < 2:
+        return text
+    boundary_pattern = re.compile(
+        r"(?m)^\s*#{1,6}\s*[一二三四五六七八九十]\s*、|^\s*[📊⏰]"
+    )
+    sections: list[dict] = []
+    for match in matches:
+        boundary = boundary_pattern.search(text, match.end())
+        end = boundary.start() if boundary else len(text)
+        label = match.group(1)
+        key = {
+            "營運議題": OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
+            "營運政策": OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
+            "營運爭議": OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
+            "技術研究補充": "國際學術期刊",
+        }.get(label, label)
+        sections.append({"start": match.start(), "end": end, "key": key, "text": text[match.start():end].strip()})
+    order = {
+        "技術新知": 1,
+        "重大事故": 2,
+        OPERATIONAL_DYNAMICS_CATEGORY_LABEL: 3,
+        ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL: 4,
+        "規範更新": 5,
+        "國際學術期刊": 6,
+    }
+    ordered = sorted(enumerate(sections), key=lambda item: (order.get(item[1]["key"], 99), item[0]))
+    if [index for index, _ in ordered] == list(range(len(sections))):
+        return text
+    first_start = sections[0]["start"]
+    last_end = sections[-1]["end"]
+    replacement = "\n\n".join(item[1]["text"] for item in ordered)
+    return (text[:first_start].rstrip() + "\n\n" + replacement + "\n\n" + text[last_end:].lstrip()).strip()
 
 
 def normalize_report_section_numbering(
@@ -591,7 +726,7 @@ def normalize_report_section_numbering(
             f"## {number}、{label}",
             normalized,
         )
-    normalized = deduplicate_formal_report_sections(normalized)
+    normalized = _reorder_formal_report_sections(deduplicate_report_quality_issues(normalized))
     return re.sub(r"\n{3,}", "\n\n", normalized).strip()
 
 
@@ -993,15 +1128,17 @@ REPORT_FIELD_ALIASES = {
 
 
 def _match_report_field_line(line: str) -> tuple[str, str] | None:
+    cleaned = re.sub(r"^\s*(?:[-*]\s*)?(?:•\s*)?", "", line or "")
+    labels = sorted(REPORT_FIELD_ALIASES, key=len, reverse=True)
+    label_pattern = "|".join(re.escape(label) for label in labels)
     match = re.match(
-        r"^\s*(?:[-*]\s*)?(?:•\s*)?(?:\*\*)?(?:【)?"
-        r"(發布/事件日期|國家/地區|相關機電系統|事件摘要|臺北捷運局啟示|資料來源)"
-        r"(?:】)?(?:\*\*)?\s*[：:]\s*(.*)$",
-        line or "",
+        rf"^(?:\*\*)?(?:【)?(?P<label>{label_pattern})(?:】)?"
+        r"(?:\*\*)?\s*[：:]\s*(?:\*\*)?\s*(?P<value>.*)$",
+        cleaned,
     )
     if not match:
         return None
-    return REPORT_FIELD_ALIASES[match.group(1)], match.group(2).strip()
+    return REPORT_FIELD_ALIASES[match.group("label")], match.group("value").strip()
 
 
 def _is_report_block_boundary(line: str) -> bool:
@@ -1365,7 +1502,10 @@ def _title_needs_repair(title: str, category: str = "") -> bool:
     cleaned = re.sub(r"\s+", "", title or "")
     if not cleaned:
         return True
-    if _contains_untranslated_report_script(cleaned) or _looks_like_english_title(cleaned):
+    has_cjk_title_content = len(re.findall(r"[\u3400-\u9fff]", cleaned)) >= 4
+    if _contains_untranslated_report_script(cleaned):
+        return True
+    if _looks_like_english_title(cleaned) and not has_cjk_title_content:
         return True
     if any(fragment in cleaned for fragment in TITLE_PLACEHOLDER_FRAGMENTS):
         return True
@@ -1527,7 +1667,7 @@ def build_final_report_coverage_warning(final_report_md: str, report_days: int, 
         quarter_counts[key] = quarter_counts.get(key, 0) + 1
     result = {'long_term_coverage_warning': False, 'reason': '', 'formal_news_with_valid_date_count': len(dates), 'coverage_bucket_type': 'quarter' if days == 365 else 'month', 'coverage_buckets': quarter_counts if days == 365 else monthly_counts, 'monthly_coverage_buckets': monthly_counts, 'quarterly_coverage_buckets': quarter_counts}
     if not dates:
-        result.update({'long_term_coverage_warning': True, 'reason': '最終正式新聞沒有可解析日期，無法確認長期報告覆蓋。', 'max_consecutive_empty_months': len(month_keys), 'recent_60_day_count': 0, 'recent_60_day_share': 0.0})
+        result.update({'long_term_coverage_warning': True, 'reason': '最終正式新聞沒有可解析日期，無法確認長期報告覆蓋。', 'max_consecutive_empty_months': len(month_keys), 'recent_60_day_count': 0, 'recent_60_day_share': 0.0, 'annual_coverage_quality': 'below_threshold' if days == 365 else ''})
         return result
     max_empty_streak = 0
     current_empty_streak = 0
@@ -1547,6 +1687,7 @@ def build_final_report_coverage_warning(final_report_md: str, report_days: int, 
         if reasons:
             result['long_term_coverage_warning'] = True
             result['reason'] = '；'.join(reasons) + '。'
+        result['annual_coverage_quality'] = 'below_threshold' if result['long_term_coverage_warning'] else 'meets_threshold'
     return result
 
 def _annual_observation_report_dates_are_recent(blocks: list[str], *, context: ReportPostprocessContext) -> bool:
@@ -2153,7 +2294,13 @@ def repair_generic_report_titles(report_md: str, selected_candidates: list[dict]
         body = parts[idx + 1] if idx + 1 < len(parts) else ''
         match = re.match('^(🔹\\s*\\[([^\\]]+)\\]\\s*)(.*)$', heading.strip())
         if match:
-            block = heading + body
+            preceding = parts[idx - 1] if idx else ''
+            marker_prefix = re.search(
+                r'(?:<!--\s*candidate_id\s*:\s*\d+\s*-->\s*)+$',
+                preceding,
+                flags=re.IGNORECASE,
+            )
+            block = f'{marker_prefix.group(0) if marker_prefix else ""}{heading}{body}'
             matched = next((candidate for candidate in selected_candidates if _report_block_matches_candidate(block, candidate, context=context)), None)
             if matched:
                 candidate_text = f"{matched.get('title', '')} {matched.get('snippet', '')}".casefold()
@@ -2322,6 +2469,43 @@ def _extract_research_section_for_reconcile(report_md: str, *, context: ReportPo
     match = re.search('(?ms)^\\s*#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:國際學術期刊|技術研究補充)\\s*$.*?(?=^\\s*📊|^\\s*⏰|\\Z)', report_md or '')
     return match.group(0).strip() if match else ''
 
+
+def _report_block_missing_fields(normalized: str) -> list[str]:
+    if not re.search(r"^🔹\s*\[[^\]]+\]\s*\S+", normalized or "", flags=re.MULTILINE):
+        missing = ["title"]
+    else:
+        missing = []
+    lines = (normalized or "").splitlines()
+    field_labels = {
+        "date": "發布/事件日期",
+        "country": "國家/地區",
+        "system": "相關機電系統",
+        "summary": "事件摘要",
+        "source": "資料來源",
+    }
+    for name, label in field_labels.items():
+        found = False
+        for index, line in enumerate(lines):
+            match = re.match(rf"^•\s*{re.escape(label)}\s*[：:]\s*(.*)$", line.strip())
+            if not match:
+                continue
+            if match.group(1).strip():
+                found = True
+                break
+            if name == "summary":
+                for following in lines[index + 1:]:
+                    value = following.strip()
+                    if not value:
+                        continue
+                    if _match_report_field_line(value) or value.startswith(("🔹", "##", "###")):
+                        break
+                    found = True
+                    break
+            break
+        if not found:
+            missing.append(name)
+    return missing
+
 def reconcile_report_candidate_output(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> tuple[str, dict]:
     selected_candidates = ensure_selected_candidate_ids(selected_candidates)
     initial_validation = validate_report_candidate_ids(report_md, selected_candidates)
@@ -2335,33 +2519,11 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
     deduplicated_event_ids: list[int] = []
     fallback_reason_counts: dict[str, int] = {}
     warnings: list[str] = []
+    parser_failures: list[dict] = []
     seen_event_identities: set[str] = set()
-    for parsed in parsed_blocks:
-        candidate_ids = tuple(parsed.get('candidate_ids', ()))
+
+    def _append_record(candidate_ids: tuple[int, ...], text: str, *, model: bool) -> None:
         candidates = [selected_map.get(candidate_id) for candidate_id in candidate_ids]
-        if not candidate_ids or any(candidate_id not in selected_map for candidate_id in candidate_ids) or len(set(candidate_ids)) != len(candidate_ids) or seen_ids.intersection(candidate_ids):
-            warnings.append('報告 block 含未知、重複或無效 candidate_id。')
-            continue
-        normalized = normalize_final_report_md(unescape(parsed.get('body', '') or ''))
-        required_fields = all(re.search(pattern, normalized, flags=re.MULTILINE) for pattern in (
-            r'^🔹\s*\[[^\]]+\]', r'^•\s*發布/事件日期\s*[：:]', r'^•\s*事件摘要\s*[：:]', r'^•\s*資料來源\s*[：:]',
-        ))
-        if not required_fields:
-            warnings.append('報告 block 缺少必要欄位，已排除並記錄。')
-            for candidate_id in candidate_ids:
-                if candidate_id in selected_map:
-                    skipped_ids.append(candidate_id)
-                    seen_ids.add(candidate_id)
-                    fallback_reason_counts['invalid_or_unparseable_model_block'] = fallback_reason_counts.get('invalid_or_unparseable_model_block', 0) + 1
-            continue
-        preserved = _force_candidate_fields_in_block(parsed.get('body', ''), [item for item in candidates if item], context=context)
-        if not preserved:
-            for candidate_id in candidate_ids:
-                skipped_ids.append(candidate_id)
-                seen_ids.add(candidate_id)
-                fallback_reason_counts['invalid_or_unparseable_model_block'] = fallback_reason_counts.get('invalid_or_unparseable_model_block', 0) + 1
-            continue
-        seen_ids.update(candidate_ids)
         event_identities = {
             _candidate_event_identity(candidate)
             for candidate in candidates
@@ -2369,20 +2531,63 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         }
         if event_identities.intersection(seen_event_identities):
             deduplicated_event_ids.extend(candidate_ids)
-            continue
+            return
         seen_event_identities.update(event_identities)
         records.append({
             'candidate_ids': candidate_ids,
             'category': (candidates[0] or {}).get('classification') or (candidates[0] or {}).get('preliminary_type') or context.infer_preliminary_type(candidates[0] or {}),
-            'text': preserved,
-            'model': True,
+            'text': text,
+            'model': model,
         })
+
+    def _fallback_for_candidate(candidate_id: int, reason: str, missing_fields: list[str]) -> None:
+        candidate = selected_map.get(candidate_id)
+        if not candidate:
+            return
+        parser_failures.append({
+            "candidate_id": candidate_id,
+            "missing_fields": list(missing_fields),
+            "reason": reason,
+        })
+        fallback = _fallback_report_block(candidate, context=context)
+        if fallback:
+            fallback_ids.append(candidate_id)
+            seen_ids.add(candidate_id)
+            fallback_reason_counts[reason] = fallback_reason_counts.get(reason, 0) + 1
+            _append_record((candidate_id,), fallback, model=False)
+            return
+        skipped_ids.append(candidate_id)
+        seen_ids.add(candidate_id)
+        fallback_reason = _fallback_reason(candidate, context=context) or reason
+        fallback_reason_counts[fallback_reason] = fallback_reason_counts.get(fallback_reason, 0) + 1
+
+    for parsed in parsed_blocks:
+        candidate_ids = tuple(parsed.get('candidate_ids', ()))
+        candidates = [selected_map.get(candidate_id) for candidate_id in candidate_ids]
+        if not candidate_ids or any(candidate_id not in selected_map for candidate_id in candidate_ids) or len(set(candidate_ids)) != len(candidate_ids) or seen_ids.intersection(candidate_ids):
+            warnings.append(f'報告 block 含未知、重複或無效 candidate_id：{list(candidate_ids)}。')
+            continue
+        normalized = normalize_final_report_md(unescape(parsed.get('body', '') or ''))
+        missing_fields = _report_block_missing_fields(normalized)
+        if missing_fields:
+            reason = 'missing_required_fields:' + ','.join(missing_fields)
+            warnings.append(f'報告 block parser failure candidate_id={list(candidate_ids)}；缺失欄位={missing_fields}。')
+            for candidate_id in candidate_ids:
+                _fallback_for_candidate(candidate_id, reason, missing_fields)
+            continue
+        preserved = _force_candidate_fields_in_block(parsed.get('body', ''), [item for item in candidates if item], context=context)
+        if not preserved:
+            reason = 'model_block_normalization_failed'
+            for candidate_id in candidate_ids:
+                _fallback_for_candidate(candidate_id, reason, [])
+            continue
+        seen_ids.update(candidate_ids)
+        _append_record(candidate_ids, preserved, model=True)
     for candidate_id, candidate in selected_map.items():
         if candidate_id in seen_ids:
             continue
         reason = _fallback_reason(candidate, context=context) or 'missing_model_candidate'
-        fallback_reason_counts[reason] = fallback_reason_counts.get(reason, 0) + 1
-        skipped_ids.append(candidate_id)
+        _fallback_for_candidate(candidate_id, reason, ['model_block'])
     sections: list[str] = [f'# {context.report_title}', f'> 資料涵蓋期間：{context.date_range}', f'> 報導範圍：{context.report_scope_label}']
     category_groups = [
         ('一、技術新知', {'技術新知'}),
@@ -2418,7 +2623,13 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
     if research_section:
         sections.extend(['', research_section])
     reconciled = re.sub('\\n{3,}', '\n\n', '\n'.join(sections)).strip()
-    final_validation = validate_report_candidate_ids(reconciled, selected_candidates)
+    deduplicated_ids = set(deduplicated_event_ids)
+    validation_candidates = [
+        candidate
+        for candidate in selected_candidates
+        if int(candidate.get('candidate_id') or candidate.get('id') or 0) not in deduplicated_ids
+    ]
+    final_validation = validate_report_candidate_ids(reconciled, validation_candidates)
     category_counts = count_report_items_by_category(reconciled)
     diagnostics = {
         'before_reconcile': initial_validation,
@@ -2430,6 +2641,7 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         'preserved_model_block_count': sum(1 for record in records if record['model']),
         'fallback_block_count': sum(1 for record in records if not record['model']),
         'fallback_reason_counts': fallback_reason_counts,
+        'parser_failures': parser_failures,
         'deduplicated_event_candidate_ids': sorted(set(deduplicated_event_ids)),
         'merged_event_groups': [list(record['candidate_ids']) for record in records if record['model'] and len(record['candidate_ids']) > 1],
         'final_unique_article_count': len(records),
@@ -2451,7 +2663,7 @@ def restore_missing_selected_report_items(report_md: str, selected_candidates: l
     reconciled, diagnostics = reconcile_report_candidate_output(report_md, selected_candidates, context=context)
     context.id_validation_target.clear()
     context.id_validation_target.update(diagnostics)
-    dropped_ids = set(diagnostics.get('fallback_candidate_ids', [])) | set(diagnostics.get('skipped_fallback_candidate_ids', []))
+    dropped_ids = set(diagnostics.get('skipped_candidate_ids', []))
     dropped = [
         candidate for candidate in selected_candidates or []
         if int(candidate.get('candidate_id') or candidate.get('id') or 0) in dropped_ids

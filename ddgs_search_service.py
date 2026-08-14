@@ -246,6 +246,25 @@ def _standard_search_queries():
             yield f'"{standard}" revision amendment published draft metro rail standard'
 
 
+def _annual_quarter_windows(context: DdgsSearchContext) -> list[tuple[str, datetime.date, datetime.date]]:
+    start = context.today - datetime.timedelta(days=int(context.lookback_int))
+    end = context.today + datetime.timedelta(days=1)
+    cursor = datetime.date(start.year, ((start.month - 1) // 3) * 3 + 1, 1)
+    windows: list[tuple[str, datetime.date, datetime.date]] = []
+    while cursor < end:
+        if cursor.month == 10:
+            next_cursor = datetime.date(cursor.year + 1, 1, 1)
+        else:
+            next_cursor = datetime.date(cursor.year, cursor.month + 3, 1)
+        bucket = f"{cursor.year:04d}-Q{((cursor.month - 1) // 3) + 1}"
+        bucket_start = max(start, cursor)
+        bucket_end = min(end, next_cursor)
+        if bucket_start < bucket_end:
+            windows.append((bucket, bucket_start, bucket_end))
+        cursor = next_cursor
+    return windows
+
+
 def build_search_queries(
     *,
     context: DdgsSearchContext,
@@ -265,6 +284,7 @@ def build_search_queries(
         use_news: bool = True,
         query_region: str = "global",
         domestic_topic: str = "",
+        date_bucket: str = "",
     ) -> bool:
         if len(queries) >= query_limit:
             return False
@@ -284,6 +304,8 @@ def build_search_queries(
         }
         if domestic_topic:
             context.query_metadata[final_query]["domestic_topic"] = domestic_topic
+        if date_bucket:
+            context.query_metadata[final_query]["date_bucket"] = date_bucket
         if use_news:
             news_indices.add(len(queries))
         return True
@@ -299,6 +321,17 @@ def build_search_queries(
         if context.lookback_int >= 365 and "technology" in content_families
         else []
     )
+
+    annual_bucket_queries = []
+    if context.lookback_int >= 365 and context.news_scope != "domestic":
+        bucket_prefix = "metro subway urban rail (signalling OR rolling stock OR energy OR safety OR station)"
+        if context.active_regions:
+            bucket_prefix = f"{REGION_SEARCH_TERMS.get(context.active_regions[0], context.active_regions[0])} {bucket_prefix}"
+        for bucket, bucket_start, bucket_end in _annual_quarter_windows(context):
+            annual_bucket_queries.append((
+                f"{bucket_prefix} after:{bucket_start.isoformat()} before:{bucket_end.isoformat()}",
+                bucket,
+            ))
 
     if context.news_scope in {"domestic", "both"}:
         selected_type_set = set(context.selected_types)
@@ -343,6 +376,15 @@ def build_search_queries(
                     lang=spec.get("lang", "en"),
                     use_news=bool(spec.get("use_news", True)),
                 )
+        for query, bucket in annual_bucket_queries:
+            _add(
+                query,
+                family="technology",
+                lang="en",
+                use_news=True,
+                query_region="global",
+                date_bucket=bucket,
+            )
         for family in content_families:
             for spec in _active_query_specs(family):
                 _add(
@@ -368,6 +410,15 @@ def build_search_queries(
                     use_news=bool(spec.get("use_news", True)),
                 )
         regions = list(dict.fromkeys(context.active_regions))
+        for query, bucket in annual_bucket_queries:
+            _add(
+                query,
+                family="technology",
+                lang=REGION_QUERY_LANGUAGES.get(regions[0], "en"),
+                use_news=True,
+                query_region=regions[0],
+                date_bucket=bucket,
+            )
         official_reserve = 1 if include_official else 0
         country_budget = max(0, query_limit - official_reserve)
         max_per_country = min(4, max(2, len(content_families)))
@@ -565,7 +616,7 @@ def build_ddgs_search_summary(statuses: list[dict], planned_query_count: int | N
             counts[str(value)] = counts.get(str(value), 0) + 1
         return counts
 
-    return {
+    summary = {
         "planned_query_count": int(planned_query_count if planned_query_count is not None else len(rows)),
         "executed_query_count": sum(1 for row in rows if row.get("execution_status") not in {"not_executed", "not_executed_dependency_missing"}),
         "query_count_by_region": _count_by("query_region"),
@@ -586,6 +637,9 @@ def build_ddgs_search_summary(statuses: list[dict], planned_query_count: int | N
             "success_with_raw_count": "added_to_raw_count>0",
         },
     }
+    if any(row.get("date_bucket") for row in rows):
+        summary["query_count_by_date_bucket"] = _count_by("date_bucket")
+    return summary
 
 
 def _run_single_query(
@@ -598,6 +652,9 @@ def _run_single_query(
 ) -> tuple[int, str, str, list[dict], str, dict]:
     started = context.perf_counter()
     status_row = _ddgs_query_status_template(query, news_timelimit, context=context)
+    metadata = _query_metadata_for(query, context=context) or {}
+    if metadata.get("date_bucket"):
+        status_row["date_bucket"] = metadata["date_bucket"]
     context.sleep(context.random_uniform(0.1, 0.4))
     result_items: list[dict] = []
     final_backend = ""

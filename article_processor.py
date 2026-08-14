@@ -322,7 +322,8 @@ def _region_guess_from_candidate(candidate: dict) -> str:
         return domain_guess
 
     existing = str(candidate.get("region", "") or "").strip()
-    if existing not in {"", "未判定", "國際", "國際研究"}:
+    query_region = str(candidate.get("query_region", "") or "").strip()
+    if existing not in {"", "未判定", "國際", "國際研究"} and existing != query_region:
         return existing
 
     path_text = " ".join(
@@ -332,7 +333,6 @@ def _region_guess_from_candidate(candidate: dict) -> str:
     path_guess = guess_region_from_text(path_text)
     if path_guess != "未判定":
         return path_guess
-    query_region = str(candidate.get("query_region", "") or "").strip()
     if query_region and query_region not in {"global", "unplanned", "domestic", "未判定", "國際", "國際研究"}:
         return query_region
     query_guess = guess_region_from_text(candidate.get("query", ""))
@@ -361,7 +361,8 @@ def _region_resolution(candidate: dict) -> tuple[str, str, str]:
         ).strip()
         return domain_guess, "official_source_domain", evidence
     existing = str(candidate.get("region", "") or "").strip()
-    if existing not in {"", "未判定", "國際", "國際研究"}:
+    query_region = str(candidate.get("query_region", "") or "").strip()
+    if existing not in {"", "未判定", "國際", "國際研究"} and existing != query_region:
         return existing, "candidate_region", existing
     path_text = " ".join(
         urlparse(candidate.get(key, "") or "").path.replace("/", " ")
@@ -370,7 +371,6 @@ def _region_resolution(candidate: dict) -> tuple[str, str, str]:
     path_guess = guess_region_from_text(path_text)
     if path_guess != "未判定":
         return path_guess, "source_url_path", path_text
-    query_region = str(candidate.get("query_region", "") or "").strip()
     if query_region and query_region not in {"global", "unplanned", "domestic", "未判定", "國際", "國際研究"}:
         return query_region, "query_region_fallback", query_region
     query_guess = guess_region_from_text(candidate.get("query", ""))
@@ -396,6 +396,12 @@ def _canonical_candidate_region(candidate: dict) -> str:
     candidate["resolved_region"] = region
     candidate["region_resolution_method"] = method
     candidate["region_resolution_evidence"] = evidence
+    candidate["region_conflict"] = bool(
+        query_region
+        and query_region not in {"global", "unplanned", "domestic", "未判定", "國際", "國際研究"}
+        and method not in {"query_region_fallback", "query_text_fallback"}
+        and region != query_region
+    )
     candidate["region_query_override"] = bool(
         query_region
         and query_region not in {"global", "unplanned", "未判定", "國際", "國際研究"}
@@ -628,10 +634,11 @@ def _explicit_event_region_hint(text: str) -> str:
     # Ambiguous operator names are paired with an event city before generic
     # query or publisher hints are considered.
     explicit_hints = [
-        ("英國", ["translink northern ireland", "translink ni", "belfast", "northern ireland"]),
+        ("英國", ["translink northern ireland", "translink ni", "belfast", "northern ireland", "manchester", "manchester piccadilly", "metrolink"]),
         ("美國", ["austin transit partnership", "austin light rail", "wmata", "washington metro", "new york subway", "nyct", "mta"]),
         ("加拿大", ["ttc", "toronto subway", "toronto", "translink vancouver", "vancouver translink", "vancouver", "skytrain"]),
         ("德國", ["bvg", "berlin", "berlin tram"]),
+        ("印度", ["chennai", "chennai metro", "chennai metro rail", "cmrl"]),
     ]
     for region, terms in explicit_hints:
         if any(_region_term_matches(text_lower, term) for term in terms):
@@ -664,7 +671,7 @@ def guess_region_from_text(text: str) -> str:
         "高雄": ["kaohsiung metro", "kaohsiung mrt", "krtc", "高雄捷運", "高捷"],
         "臺灣": ["taiwan metro", "taiwan mrt", "台灣捷運", "臺灣捷運", "臺灣都市軌道", "台灣都市軌道"],
         "澳洲": ["australia", "sydney", "melbourne", "brisbane", "澳洲"],
-        "英國": ["united kingdom", "uk", "london", "tfl", "underground", "英國", "英国", "倫敦"],
+        "英國": ["united kingdom", "uk", "london", "tfl", "underground", "manchester", "metrolink", "英國", "英国", "倫敦"],
         "法國": ["france", "paris", "ratp", "法國", "法国", "巴黎"],
         "德國": ["germany", "berlin", "munich", "hamburg", "u-bahn", "德國", "德国"],
         "美國": [
@@ -678,7 +685,7 @@ def guess_region_from_text(text: str) -> str:
         ],
         "西班牙": ["spain", "madrid", "barcelona", "西班牙"],
         "巴西": ["brazil", "brasil", "são paulo", "sao paulo", "sao-paulo", "saopaulo", "巴西", "聖保羅", "圣保罗"],
-        "印度": ["india", "mumbai", "delhi metro", "印度", "孟買", "孟买"],
+        "印度": ["india", "mumbai", "delhi metro", "chennai", "chennai metro", "cmrl", "印度", "孟買", "孟买"],
         "荷蘭": ["netherlands", "amsterdam", "rotterdam", "荷蘭", "荷兰"],
         "瑞士": ["switzerland", "zurich", "lausanne", "瑞士"],
         "義大利": ["italy", "milan", "rome", "turin", "義大利", "意大利"],

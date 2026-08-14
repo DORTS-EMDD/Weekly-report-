@@ -1,8 +1,10 @@
 import datetime
 import unittest
 
-from ddgs_search_service import DdgsSearchContext, _query_with_period, build_search_queries
+from article_processor import _canonical_candidate_region
+from ddgs_search_service import DdgsSearchContext, _annual_quarter_windows, _query_with_period, build_search_queries
 from report_postprocessor import (
+    deduplicate_report_quality_issues,
     deduplicate_formal_report_sections,
     normalize_source_line,
 )
@@ -148,16 +150,18 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
         self.assertEqual(diagnostics["skipped_candidate_ids"], [])
         self.assertEqual(diagnostics["fallback_block_count"], 0)
 
-    def test_unreconciled_candidate_is_dropped_without_generic_formal_fallback(self):
+    def test_unreconciled_candidate_gets_deterministic_fallback(self):
         candidate = _candidate(11, "捷運車站設備更新", "候選資料不足。")
 
         output, diagnostics = self._reconcile("", [candidate], ["技術新知"])
 
-        self.assertNotIn("捷運車站設備更新", output)
+        self.assertIn("捷運車站設備更新", output)
+        self.assertIn("資料不足，未能形成可核實的事件摘要。", output)
         self.assertNotIn("依原始候選資料所示之都市軌道系統", output)
         self.assertNotIn("後續內容仍應以原始來源核實", output)
-        self.assertEqual(diagnostics["skipped_candidate_ids"], [11])
-        self.assertEqual(diagnostics["fallback_candidate_ids"], [])
+        self.assertEqual(diagnostics["skipped_candidate_ids"], [])
+        self.assertEqual(diagnostics["fallback_candidate_ids"], [11])
+        self.assertEqual(diagnostics["fallback_block_count"], 1)
 
     def test_title_copy_summary_is_dropped_instead_of_replaced_with_generic_text(self):
         title = "北捷新列車亮相！增無線充電功能 最快2027年投入淡水信義線"
@@ -173,9 +177,138 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
 
         output, diagnostics = self._reconcile(report, [candidate], ["機電標案"])
 
-        self.assertNotIn(title, output)
-        self.assertNotIn("資料不足，未能形成可核實的事件摘要。", output)
-        self.assertEqual(diagnostics["skipped_candidate_ids"], [14])
+        self.assertIn(title, output)
+        self.assertIn("資料不足，未能形成可核實的事件摘要。", output)
+        self.assertNotRegex(output, rf"事件摘要：\s*{title}")
+        self.assertEqual(diagnostics["skipped_candidate_ids"], [])
+        self.assertEqual(diagnostics["fallback_candidate_ids"], [14])
+
+    def test_complete_mta_elevator_block_with_source_variants_is_preserved(self):
+        candidate = _candidate(
+            4,
+            "MTA Announces Two Modernized Elevators Open at Crown Hts-Utica Av Subway Station",
+            "MTA opened two modernized elevators at the subway station to improve accessibility.",
+            category="機電標案",
+        )
+        report = "\n".join([
+            "<!-- candidate_id: 4 -->",
+            "🔹 [機電標案] MTA Crown Hts-Utica Av 站電梯現代化啟用",
+            "• 發布/事件日期：2026-08-01",
+            "• 國家/地區：美國",
+            "• 相關機電系統：電梯、電扶梯",
+            "• 事件摘要：",
+            "MTA 在 Crown Hts-Utica Av 地鐵站啟用兩部現代化電梯，改善車站無障礙通行。",
+            "• 臺北捷運局啟示：可參考車站垂直運輸設備更新與驗證。",
+            "• 資料來源：來源名稱：https://example.com/v22-quality/4",
+        ])
+
+        output, diagnostics = self._reconcile(report, [candidate], ["機電標案"])
+
+        self.assertIn("Crown Hts-Utica Av", output)
+        self.assertEqual(diagnostics["accepted_model_candidate_ids"], [4])
+        self.assertEqual(diagnostics["skipped_candidate_ids"], [])
+        self.assertEqual(diagnostics["fallback_block_count"], 0)
+
+    def test_complete_mexico_metro_block_with_markdown_source_is_preserved(self):
+        candidate = _candidate(
+            8,
+            "Mexico City Metro Line 3 Modernization",
+            "Mexico City Metro is modernizing Line 3 systems and stations.",
+            category="技術新知",
+        )
+        report = "\n".join([
+            "<!-- candidate_id: 8 -->",
+            "🔹 [技術新知] 墨西哥城地鐵第三線現代化",
+            "• 發布/事件日期：2026-07-15",
+            "• 國家/地區：墨西哥",
+            "• 相關機電系統：號誌系統",
+            "• 事件摘要：",
+            "墨西哥城地鐵第三線推動系統現代化，內容涉及號誌設備與車站改善。",
+            "• 臺北捷運局啟示：可參考分階段系統更新的介面整合與驗證安排。",
+            "• 資料來源：**來源名稱：** [官方來源](https://example.com/v22-quality/8)",
+        ])
+
+        output, diagnostics = self._reconcile(report, [candidate], ["技術新知"])
+
+        self.assertIn("墨西哥城地鐵第三線現代化", output)
+        self.assertEqual(diagnostics["accepted_model_candidate_ids"], [8])
+        self.assertEqual(diagnostics["parser_failures"], [])
+
+    def test_normal_model_manchester_title_is_not_replaced_by_generic_title(self):
+        title = "Manchester Piccadilly 電車出軌調查終止"
+        candidate = _candidate(15, title, "Metrolink tram derailment investigation ended.", category="重大事故")
+        report = "\n".join([
+            "<!-- candidate_id: 15 -->",
+            f"🔹 [重大事故] {title}",
+            "• 發布/事件日期：2026-08-01",
+            "• 國家/地區：英國",
+            "• 相關機電系統：車輛系統",
+            "• 事件摘要：Manchester Piccadilly 的 Metrolink 電車出軌調查已終止。",
+            "• 資料來源：https://example.com/v22-quality/15",
+        ])
+
+        normalized = app.normalize_final_report_md(report)
+        repaired = app.repair_generic_report_titles(normalized, [candidate])
+
+        self.assertIn(title, repaired)
+        self.assertNotIn("捷運列車更新案", repaired)
+
+    def test_region_content_overrides_query_region_and_records_conflict(self):
+        chennai = _candidate(16, "Chennai Metro Rail ropes in consultant", "Chennai Metro Rail appointed a consultant for the system.")
+        chennai["region"] = "臺灣"
+        chennai["query_region"] = "臺灣"
+        self.assertEqual(_canonical_candidate_region(chennai), "印度")
+        self.assertTrue(chennai["region_conflict"])
+        self.assertEqual(chennai["region_resolution_method"], "title_snippet_explicit_event")
+
+        manchester = _candidate(17, "Manchester Piccadilly tram derailment", "Metrolink tram derailment investigation.")
+        manchester["region"] = "澳洲"
+        manchester["query_region"] = "澳洲"
+        self.assertEqual(_canonical_candidate_region(manchester), "英國")
+        self.assertTrue(manchester["region_conflict"])
+
+    def test_thermal_energy_network_study_requires_and_satisfies_technical_triad(self):
+        candidate = _candidate(
+            18,
+            "New York to Study Thermal Energy Network for Cooler Subway Platforms",
+            "The MTA and NYC will study a thermal energy network for subway platforms to reduce platform temperature by transferring excess heat.",
+        )
+        gates = app.evaluate_category_gates(candidate)
+        self.assertTrue(app._selector_api["_passes_technical_triad"](candidate))
+        self.assertTrue(gates["category_gates"]["technology"])
+
+    def test_maintenance_services_for_tram_rolling_stock_is_procurement_action(self):
+        candidate = _candidate(
+            19,
+            "Maintenance services for Euskotren Tram rolling stock, Spain",
+            "Euskotren is procuring a contract for maintenance services for its tram rolling stock.",
+            category="機電標案",
+        )
+        original_types = app.selected_types
+        try:
+            app.selected_types = ["機電標案"]
+            payload = app._selector_api["_compute_electromechanical_procurement_gate"](candidate)
+        finally:
+            app.selected_types = original_types
+        self.assertTrue(payload["procurement_gate_pass"])
+        self.assertIn("maintenance_services", payload["procurement_actions"])
+
+    def test_annual_query_plan_contains_each_calendar_quarter(self):
+        context = DdgsSearchContext(
+            selected_types=["技術新知"],
+            active_regions=[],
+            lookback_days=365,
+            lookback_int=365,
+            is_global_scope=True,
+            today=datetime.date(2026, 8, 14),
+            ddgs_client_factory=None,
+            news_scope="international",
+        )
+        windows = _annual_quarter_windows(context)
+        self.assertEqual([bucket for bucket, _, _ in windows], ["2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2", "2026-Q3"])
+        queries, _ = build_search_queries(context=context)
+        bucket_queries = [query for query in queries if "after:" in query and "before:" in query]
+        self.assertEqual(len(bucket_queries), len(windows))
 
     def test_duplicate_event_fingerprint_is_kept_once_in_formal_report(self):
         first = _candidate(12, "捷運月台門完成更新", "月台門更新完成。")
@@ -233,6 +366,32 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
         self.assertIn("第二則", output)
         self.assertIn("## 五、規範更新", output)
         self.assertIn("規範內容保留。", output)
+
+    def test_empty_and_research_sections_are_deduplicated(self):
+        report = "\n".join([
+            "## 二、重大事故",
+            "本期未發現符合條件之重大事故案例。",
+            "本期未發現符合條件之重大事故案例。",
+            "## 四、機電標案",
+            "本期未發現符合條件之機電標案。",
+            "本期未發現符合條件之機電標案。",
+            "## 五、規範更新",
+            "同一規範更新內容。",
+            "## 五、規範更新",
+            "同一規範更新內容。",
+            "## 六、國際學術期刊",
+            "1、同一研究\n• 資料來源：https://doi.org/10.1234/fixture.1",
+            "## 六、國際學術期刊",
+            "1、同一研究\n• 資料來源：https://doi.org/10.1234/fixture.1",
+        ])
+
+        output = deduplicate_report_quality_issues(report)
+
+        self.assertEqual(output.count("## 二、重大事故"), 1)
+        self.assertEqual(output.count("本期未發現符合條件之重大事故案例。"), 1)
+        self.assertEqual(output.count("本期未發現符合條件之機電標案。"), 1)
+        self.assertEqual(output.count("## 五、規範更新"), 1)
+        self.assertEqual(output.count("## 六、國際學術期刊"), 1)
 
     def test_canonical_system_mapping_and_source_link_normalization(self):
         self.assertEqual(
