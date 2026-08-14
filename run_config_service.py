@@ -72,6 +72,16 @@ def _formal_report_topic_labels(report_types: list[str]) -> list[str]:
     return labels
 
 
+def derive_news_scope(scope_mode: str, selected_regions: list[str]) -> str:
+    """Keep pipeline scope automatic after removing the manual UI control."""
+    if scope_mode == "全球（安全白名單來源）":
+        return "both"
+    regions = set(selected_regions or [])
+    if "臺灣" not in regions:
+        return "international"
+    return "domestic" if regions == {"臺灣"} else "both"
+
+
 def build_run_settings(context: RunSettingsContext) -> RunSettings:
     week_start = context.today - datetime.timedelta(days=int(context.lookback_days))
     date_range = f"{week_start.strftime('%Y年%m月%d日')} 至 {context.today.strftime('%Y年%m月%d日')}"
@@ -131,7 +141,7 @@ def build_run_settings(context: RunSettingsContext) -> RunSettings:
         if context.selected_types
         else "技術趨勢"
     )
-    news_scope = context.news_scope if context.news_scope in NEWS_SCOPE_OPTIONS else DEFAULT_NEWS_SCOPE
+    news_scope = derive_news_scope(context.scope_mode, context.selected_regions)
     report_title_scope = "捷運" if news_scope in {"domestic", "both"} else "國際捷運"
     report_title = (
         f"【{context.today.strftime('%Y/%m/%d')}】"

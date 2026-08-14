@@ -34,6 +34,7 @@ from config import (
     STANDARDS_WATCHLIST,
 )
 from search_queries import (
+    ANNUAL_TECHNOLOGY_BREAKTHROUGH_QUERY_SPECS,
     DOMESTIC_ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS,
     DOMESTIC_METRO_QUERY_SPECS,
     DOMESTIC_SERVICE_OPENING_QUERY_SPECS,
@@ -166,7 +167,7 @@ def _compact_query(query: str, limit: int = DDGS_QUERY_CHAR_LIMIT) -> str:
 
 def _query_with_period(query: str, *, context: DdgsSearchContext) -> str:
     q = query.strip()
-    if context.lookback_int > 31:
+    if 31 < context.lookback_int < 365:
         q = f"{q} {context.today:%Y}"
     return _compact_query(q)
 
@@ -293,6 +294,12 @@ def build_search_queries(
     if include_forward_technology:
         content_families.insert(0, "forward_technology")
 
+    annual_breakthrough_specs = (
+        ANNUAL_TECHNOLOGY_BREAKTHROUGH_QUERY_SPECS
+        if context.lookback_int >= 365 and "technology" in content_families
+        else []
+    )
+
     if context.news_scope in {"domestic", "both"}:
         selected_type_set = set(context.selected_types)
         for spec in DOMESTIC_METRO_QUERY_SPECS:
@@ -344,6 +351,13 @@ def build_search_queries(
                     lang=spec.get("lang", "en"),
                     use_news=bool(spec.get("use_news", True)),
                 )
+        for spec in annual_breakthrough_specs:
+            _add(
+                spec.get("query", ""),
+                family="technology",
+                lang=spec.get("lang", "en"),
+                use_news=bool(spec.get("use_news", True)),
+            )
     elif context.news_scope != "domestic" and content_families and context.active_regions:
         if "營運政策" in context.selected_types or "營運爭議" in context.selected_types:
             for spec in SERVICE_OPENING_QUERY_SPECS:
@@ -369,7 +383,10 @@ def build_search_queries(
 
         for region in regions:
             preferred_lang = REGION_QUERY_LANGUAGES.get(region, "en")
-            specs = _regional_query_spec_sequence(content_families, preferred_lang)
+            specs = list(annual_breakthrough_specs) + _regional_query_spec_sequence(
+                content_families,
+                preferred_lang,
+            )
             prefix = REGION_SEARCH_TERMS.get(region, region)
             for spec in specs[:allocations[region]]:
                 _add(

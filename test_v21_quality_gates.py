@@ -202,7 +202,7 @@ class V21QualityGateTests(unittest.TestCase):
         self.assertIn("Buangkok MRT 站", output)
         self.assertNotIn("武吉班讓", output)
 
-    def test_punctuation_normalization_does_not_rewrite_prose(self):
+    def test_system_normalization_preserves_specific_multi_system_evidence(self):
         text = "機電系統之介面整合與測試驗證，確保控制中心與列車通訊正常。"
         self.assertEqual(app.normalize_electromechanical_system_value(text), text)
 

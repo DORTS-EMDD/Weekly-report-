@@ -189,6 +189,12 @@ FORWARD_TECHNOLOGY_QUERY_SPECS = [
     {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail emerging technology first application deployed improve reliability efficiency field test"},
 ]
 
+ANNUAL_TECHNOLOGY_BREAKTHROUGH_QUERY_SPECS = [
+    {"family": "technology", "lang": "en", "query": "metro subway MRT light rail new material advanced material composite lightweight material fire resistant material"},
+    {"family": "technology", "lang": "en", "query": "metro subway MRT light rail SiC semiconductor traction energy storage battery technology"},
+    {"family": "technology", "lang": "en", "query": "metro subway MRT light rail breakthrough novel sensor advanced signalling"},
+]
+
 REGION_QUERY_LANGUAGES = {
     "日本": "ja", "韓國": "ko", "香港": "zh", "法國": "fr", "德國": "de",
     "西班牙": "es", "義大利": "it", "葡萄牙": "pt", "俄羅斯": "ru",

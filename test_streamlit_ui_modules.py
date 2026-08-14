@@ -14,10 +14,10 @@ import streamlit_sidebar_ui
 
 
 EXPECTED_SIDEBAR_SHA256 = (
-    "a2e5125a14332995f8685a3a69cf84129be2daee059d6b6de2ef8c614308685b"
+    "1e611c7aed2f508368cfa81dc0f278aa2c2cbc9c8ce80e129547b55b861a9efd"
 )
 EXPECTED_DASHBOARD_SHA256 = (
-    "634f6e484abafc2671200234344674cb1d77ac98f5e92c0e73e07ae319a053cb"
+    "95e2d49770b2af8a273b96fdc15b1f4ac65fa423d52b2b30bf40843f1ff39c49"
 )
 EXPECTED_REPORT_SHA256 = (
     "4dd2e5ffa5d148c99a246d79f429aee533b539390ecfef8152374dd46ec0e5e8"
@@ -227,8 +227,8 @@ def _sidebar_context():
             365: "年報",
         },
         long_term_target_labels={90: "季度趨勢", 180: "半年度趨勢"},
-        default_regions=["美國", "日本"],
-        advanced_regions=["美國", "日本", "英國"],
+        default_regions=["臺灣", "美國", "日本"],
+        advanced_regions=["臺灣", "美國", "日本", "英國"],
         standards_watchlist={"IEC": ["IEC 62290"], "NFPA": ["NFPA 130"]},
         get_research_supplement_lookback_days=lambda days: (
             180 if days == 180 else 365 if days == 365 else 90
@@ -253,7 +253,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
                 today=today,
                 lookback_days=7,
                 selected_types=["技術新知", "營運政策", "營運爭議"],
-                scope_mode="指定先進國家/地區",
+                scope_mode="指定先進國家",
                 selected_regions=["美國", "日本"],
                 standards_enabled=False,
                 include_research_supplement=True,
@@ -279,7 +279,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
                 report_period_label=settings.report_period_label,
                 report_title=settings.report_title,
                 selected_types=["技術新知", "營運政策", "營運爭議"],
-                scope_mode="指定先進國家/地區",
+                scope_mode="指定先進國家",
                 is_global_scope=settings.is_global_scope,
                 active_regions=settings.active_regions,
                 report_scope_label=settings.report_scope_label,
@@ -302,7 +302,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
             "report_label": "週報",
             "report_title": "【2026/07/23】國際捷運技術新知、營運動態週報",
             "selected_types": ["技術新知", "營運政策", "營運爭議"],
-            "scope_mode": "指定先進國家/地區",
+            "scope_mode": "指定先進國家",
             "selected_regions": ["美國", "日本"],
             "report_scope_label": "美國、日本",
             "news_scope": "international",
@@ -359,7 +359,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
         self.assertFalse(recorder.session_state["type_規範更新"])
 
     def test_sidebar_v2_visible_periods_and_legacy_state(self):
-        for legacy_value in (14, 90, 180, 365, None, "invalid"):
+        for legacy_value in (14, 90, 180, None, "invalid"):
             recorder, result = self._render_sidebar(
                 session_state={
                     "lookback_days_state": legacy_value,
@@ -371,7 +371,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
                 call for call in recorder.calls if call["name"] == "selectbox"
             ]
             self.assertEqual(len(selectbox_calls), 1)
-            self.assertEqual(selectbox_calls[0]["args"][1], [7, 30])
+            self.assertEqual(selectbox_calls[0]["args"][1], [7, 30, 365])
             self.assertEqual(result.lookback_days, 7)
             self.assertFalse(result.long_term_mode)
             self.assertTrue(result.include_research_supplement)
@@ -380,6 +380,11 @@ class StreamlitUiModuleTests(unittest.TestCase):
             self.assertTrue(
                 recorder.session_state["include_research_supplement"]
             )
+        recorder, result = self._render_sidebar(
+            session_state={"lookback_days_state": 365}
+        )
+        self.assertEqual(result.lookback_days, 365)
+        self.assertEqual(recorder.session_state["lookback_days_state"], 365)
 
     def test_sidebar_v2_preserves_controls_and_hides_advanced_modes(self):
         recorder, result = self._render_sidebar(
@@ -401,14 +406,24 @@ class StreamlitUiModuleTests(unittest.TestCase):
         for retained_text in (
             "收件信箱",
             "📰 新聞類型",
-            "規範更新",
+            "標準改版偵測",
             "📚 規範追蹤",
-            "報導範圍",
+            "國際追蹤範圍",
+            "指定先進國家",
             "開發者資訊顯示",
             "展覽快速版",
-            "國際學術期刊補充（近 90 天）",
+            "國際捷運技術期刊",
         ):
             self.assertIn(retained_text, call_text)
+        self.assertNotIn("🌏 報導範圍", call_text)
+
+    def test_sidebar_derives_scope_from_default_taiwan_selection(self):
+        recorder, result = self._render_sidebar()
+        self.assertIn("臺灣", result.selected_regions)
+        self.assertEqual(result.news_scope, "both")
+        radio = next(call for call in recorder.calls if call["name"] == "radio")
+        self.assertEqual(radio["args"][0], "國際追蹤範圍")
+        self.assertEqual(radio["args"][1], ["指定先進國家", "全球（安全白名單來源）"])
 
     def test_sidebar_v2_keeps_interface_and_backend_period_options(self):
         self.assertEqual(
@@ -439,7 +454,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
             report_period_label="週報",
             today=datetime.date(2026, 7, 23),
             week_start=datetime.date(2026, 7, 16),
-            scope_mode="指定先進國家/地區",
+            scope_mode="指定先進國家",
             demo_cache_mode_enabled=True,
         )
         with patch.object(streamlit_report_ui, "st", recorder):

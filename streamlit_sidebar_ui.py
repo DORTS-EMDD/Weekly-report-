@@ -5,21 +5,16 @@ from typing import Callable
 
 import streamlit as st
 
+from run_config_service import derive_news_scope
 
-VISIBLE_LOOKBACK_DAYS = (7, 30)
+
+VISIBLE_LOOKBACK_DAYS = (7, 30, 365)
 VISIBLE_REPORT_TYPE_GROUPS = (
     ("技術新知", ("技術新知",)),
     ("重大事故", ("重大事故",)),
     ("營運動態", ("營運政策", "營運爭議", "service_opening")),
     ("機電標案", ("機電標案",)),
 )
-NEWS_SCOPE_OPTIONS = (
-    ("國際捷運", "international"),
-    ("國內捷運", "domestic"),
-    ("國內＋國際", "both"),
-)
-
-
 @dataclass(frozen=True)
 class SidebarContext:
     default_recipients: str
@@ -56,7 +51,7 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
     visible_lookback_options = [
         days
         for days in VISIBLE_LOOKBACK_DAYS
-        if days in context.normal_lookback_options
+        if days in context.normal_lookback_options or days in context.advanced_lookback_options
     ]
     if not visible_lookback_options:
         raise ValueError("Sidebar requires at least one visible report period")
@@ -206,29 +201,9 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
                 if report_type != group_label:
                     st.session_state[f"type_{report_type}"] = group_selected
 
-        st.markdown("### 🌏 報導範圍")
-        news_scope_labels = [label for label, _ in NEWS_SCOPE_OPTIONS]
-        news_scope_default = next(
-            (
-                index
-                for index, (_, value) in enumerate(NEWS_SCOPE_OPTIONS)
-                if value == context.default_news_scope
-            ),
-            2,
-        )
-        news_scope_label = st.radio(
-            "報導範圍",
-            news_scope_labels,
-            index=news_scope_default,
-            key="news_scope_state",
-            help="國內＋國際會固定納入國內捷運範圍，國際部分再依下方追蹤設定處理。",
-        )
-        news_scope = dict(NEWS_SCOPE_OPTIONS)[news_scope_label]
-
-        st.markdown("**國際追蹤範圍**")
         scope_mode = st.radio(
-            "國際來源追蹤方式",
-            ["指定先進國家/地區", "全球（安全白名單來源）"],
+            "國際追蹤範圍",
+            ["指定先進國家", "全球（安全白名單來源）"],
             index=0,
             key="international_scope_mode",
             horizontal=False,
@@ -253,14 +228,9 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             st.session_state["selected_regions_state"]
         )
         selected_regions = stored_selected_regions.copy()
-        global_scope_selected = (
-            scope_mode == "全球（安全白名單來源）"
-            or news_scope == "domestic"
-        )
+        global_scope_selected = scope_mode == "全球（安全白名單來源）"
         if scope_mode == "全球（安全白名單來源）":
-            st.caption("報導範圍：全球模式")
-        elif news_scope == "domestic":
-            st.caption("國內捷運模式不受下方國際國家選擇影響。")
+            st.caption("全球模式會自動納入臺灣與國際捷運資料。")
         else:
             st.caption(
                 f"已選 {len(stored_selected_regions)} / "
@@ -308,19 +278,18 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         if not global_scope_selected:
             selected_regions = list(dict.fromkeys(next_selected_regions))
             st.session_state["selected_regions_state"] = selected_regions
-        elif news_scope == "domestic":
-            selected_regions = []
         else:
             selected_regions = stored_selected_regions
-        if news_scope != "domestic" and scope_mode != "全球（安全白名單來源）" and not selected_regions:
+        if scope_mode != "全球（安全白名單來源）" and not selected_regions:
             st.warning("請至少選擇一個國家/地區。")
+        news_scope = derive_news_scope(scope_mode, selected_regions)
 
         standard_count = sum(
             len(values) for values in context.standards_watchlist.values()
         )
         with st.expander("⚙️ 進階設定", expanded=False):
             standards_enabled = st.checkbox(
-                "規範更新",
+                "標準改版偵測",
                 value=standards_selected_state,
                 key="type_規範更新",
                 help="啟用規範更新監測與規範追蹤清單；預設關閉。",
@@ -338,7 +307,7 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
                 )
 
             include_research_supplement = st.checkbox(
-                "國際學術期刊補充（近 90 天）",
+                "國際捷運技術期刊",
                 value=bool(
                     st.session_state.get("include_research_supplement", False)
                 ),

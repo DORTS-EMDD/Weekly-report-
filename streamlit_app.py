@@ -2383,12 +2383,12 @@ if generate_btn:
             pdf_bytes = try_markdown_to_pdf_bytes(clean_report)
             dropped_selected_ids = [int(item.get("id", 0) or 0) for item in dropped_selected_candidates]
             dropped_selected_titles = [item.get("title", "") for item in dropped_selected_candidates]
-            skipped_fallback_ids = set(reconciliation_diagnostics.get("skipped_fallback_candidate_ids", []))
+            skipped_report_ids = set(reconciliation_diagnostics.get("skipped_candidate_ids", []))
             dropped_selected_reasons = [
                 (
-                    "資訊不足，未建立 fallback block。"
-                    if int(item.get("id", 0) or 0) in skipped_fallback_ids
-                    else "MaiAgent block 缺失或驗證失敗，已建立保守 fallback block。"
+                    "MaiAgent block 缺失、重複或驗證失敗，已排除並記錄。"
+                    if int(item.get("id", 0) or 0) in skipped_report_ids
+                    else "候選未保留於正式報告，已排除並記錄。"
                 )
                 for item in dropped_selected_candidates
             ]

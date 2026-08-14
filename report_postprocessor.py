@@ -133,6 +133,7 @@ def normalize_source_line(line: str) -> str:
     if not match:
         return line
     content = match.group(1).strip()
+    content = re.sub(r"(原文連結)(?:\s*[，,、]\s*\1)+", r"\1", content)
     if re.search(r"[；;]\s*補充來源\s*[：:]", content):
         primary_content, supplemental_content = re.split(
             r"[；;]\s*補充來源\s*[：:]\s*",
@@ -464,6 +465,101 @@ def normalize_formal_report_title(text: str) -> str:
     return normalized
 
 
+_FORMAL_SECTION_KEYS = {
+    "技術新知": "技術新知",
+    "重大事故": "重大事故",
+    "營運政策": OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
+    "營運爭議": OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
+    "營運議題": OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
+    OPERATIONAL_DYNAMICS_CATEGORY_LABEL: OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL: ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+}
+
+
+def _dedupe_report_blocks(section_body: str) -> str:
+    parts = re.split(r"(?m)(?=^\s*(?:<!--\s*candidate_id\s*:\s*\d+\s*-->\s*\n)*🔹\s*\[[^\]]+\])", section_body or "")
+    if len(parts) <= 1:
+        return (section_body or "").strip()
+    blocks = [part.strip() for part in parts if part.strip()]
+    article_blocks = [block for block in blocks if re.search(r"(?m)^🔹\s*\[[^\]]+\]", block)]
+    if not article_blocks:
+        return (section_body or "").strip()
+    unique_blocks: list[str] = []
+    seen: set[str] = set()
+    for block in article_blocks:
+        marker = re.search(r"<!--\s*candidate_id\s*:\s*(\d+)\s*-->", block, flags=re.IGNORECASE)
+        urls = _extract_complete_urls(block)
+        title = re.search(r"(?m)^🔹\s*\[[^\]]+\]\s*(.+)$", block)
+        identity = (
+            f"candidate:{marker.group(1)}"
+            if marker
+            else f"url:{urls[0].casefold()}"
+            if urls
+            else f"title:{_normalize_title(title.group(1) if title else block)}"
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique_blocks.append(block)
+    return "\n\n---\n\n".join(unique_blocks)
+
+
+def deduplicate_formal_report_sections(report_md: str) -> str:
+    """Keep one canonical heading for each formal-news section."""
+    text = report_md or ""
+    heading_pattern = re.compile(
+        r"(?m)^\s*#{1,6}\s*[一二三四五六七八九十]\s*、\s*"
+        r"(技術新知|重大事故|營運政策|營運爭議|營運議題|營運動態|機電標案)\s*$"
+    )
+    matches = list(heading_pattern.finditer(text))
+    if len(matches) <= 1:
+        return text
+
+    section_boundary_pattern = re.compile(
+        r"(?m)^\s*(?:#{1,6}\s*)?[一二三四五六七八九十]\s*、|^\s*[📊⏰]"
+    )
+    records: list[dict] = []
+    for match in matches:
+        boundary = section_boundary_pattern.search(text, match.end())
+        next_start = boundary.start() if boundary else len(text)
+        label = match.group(1)
+        records.append({
+            "start": match.start(),
+            "end": next_start,
+            "key": _FORMAL_SECTION_KEYS[label],
+            "body": text[match.end():next_start],
+        })
+    grouped: dict[str, list[dict]] = {}
+    for record in records:
+        grouped.setdefault(record["key"], []).append(record)
+
+    replacements: list[tuple[int, int, str]] = []
+    for key, group in grouped.items():
+        if len(group) < 2:
+            continue
+        combined_body = _dedupe_report_blocks("\n\n".join(record["body"] for record in group))
+        if not combined_body:
+            combined_body = "本期未發現符合條件資料。"
+        first = group[0]
+        canonical_number = {
+            "技術新知": "一",
+            "重大事故": "二",
+            OPERATIONAL_DYNAMICS_CATEGORY_LABEL: "三",
+            ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL: "四",
+        }[key]
+        replacements.append(
+            (
+                first["start"],
+                first["end"],
+                f"## {canonical_number}、{key}\n\n{combined_body.strip()}\n",
+            )
+        )
+        replacements.extend((record["start"], record["end"], "") for record in group[1:])
+    for start, end, replacement in sorted(replacements, reverse=True):
+        text = text[:start] + replacement + text[end:]
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def normalize_report_section_numbering(
     text: str,
     *,
@@ -495,6 +591,7 @@ def normalize_report_section_numbering(
             f"## {number}、{label}",
             normalized,
         )
+    normalized = deduplicate_formal_report_sections(normalized)
     return re.sub(r"\n{3,}", "\n\n", normalized).strip()
 
 
@@ -747,31 +844,40 @@ def normalize_electromechanical_system_line(line: str) -> str:
     return f"{prefix}{value}"
 
 
+CANONICAL_ELECTROMECHANICAL_SYSTEMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("電梯、電扶梯", ("elevator", "elevators", "escalator", "escalators", "lift", "lifts", "電梯", "升降機", "電扶梯", "手扶梯")),
+    ("號誌系統", ("signalling", "signaling", "signal system", "cbtc", "train control", "ats", "atp", "ato", "號誌", "信號", "列車控制", "列控")),
+    ("通訊系統", ("communication", "telecom", "radio", "wireless communication", "通訊", "無線電", "光纖")),
+    ("供電系統", ("traction power", "power supply", "substation", "scada", "traction", "供電", "牽引供電", "變電站", "電力系統")),
+    ("自動收費系統", ("automatic fare collection", "fare gate", "ticketing", "afc", "自動收費", "票務", "閘門")),
+    ("車輛系統", ("rolling stock", "trainset", "metro train", "light rail vehicle", "vehicle", "train", "電聯車", "列車", "車輛", "電車", "低地板車")),
+    ("月台門系統", ("platform screen door", "platform door", "psd", "月台門", "月臺門")),
+    ("機廠設備", ("depot electromechanical", "depot e&m", "depot mep", "機廠機電", "機廠設備", "機廠")),
+    ("通風空調系統", ("ventilation", "hvac", "air conditioning", "smoke control", "通風", "空調", "環控")),
+)
+
+
 def normalize_electromechanical_system_value(value: str, context: str = "") -> str:
-    del context
     raw_value = re.sub(r"\s+", " ", (value or "").strip())
-    placeholders = {
-        "未明確載明機電系統", "未明確載明", "未載明", "不明", "未知", "無", "n/a", "na", "-",
-        "依原始候選資料所示之都市軌道系統", "都市軌道系統",
+    generic_values = {
+        "", "未明確資料", "無明確資料", "未明確載明機電系統", "未明確載明", "未載明", "不明", "未知", "無", "n/a", "na", "-",
+        "依原始候選資料所示之都市軌道系統", "都市軌道系統", "機電系統", "相關系統",
+        "營運管理", "系統整合", "旅客服務",
     }
-    if raw_value.casefold() in placeholders:
-        return "未明確"
-    if "之" in raw_value and any(mark in raw_value for mark in ("，", ",", "。")):
-        return raw_value
-    tokens = [
-        token.strip(" \t\r\n、;；。")
-        for token in re.split(r"[、;；]+", raw_value)
+    if raw_value.casefold() not in generic_values:
+        if re.search(r"[\u3400-\u9fff]", raw_value):
+            return raw_value
+        evidence = raw_value
+    else:
+        evidence = context or ""
+    systems = [
+        label
+        for label, terms in CANONICAL_ELECTROMECHANICAL_SYSTEMS
+        if _contains_any_term(evidence, list(terms))
     ]
-    concrete_tokens = [token for token in tokens if token and token.casefold() not in placeholders]
-    retained = concrete_tokens
-    unique_tokens: list[str] = []
-    seen: set[str] = set()
-    for token in retained:
-        key = re.sub(r"\s+", "", token).casefold()
-        if key and key not in seen:
-            seen.add(key)
-            unique_tokens.append(token)
-    return "、".join(unique_tokens) if unique_tokens else "未明確"
+    if systems:
+        return "、".join(systems)
+    return "未明確"
 
 
 def _short_formal_sentence(text: str, limit: int = 180) -> str:
@@ -1046,12 +1152,39 @@ def chinese_fallback_title(category: str, title: str) -> str:
     }.get(category, "國際捷運案例")
 
 
+def _canonical_report_category_label(value: str) -> str:
+    label = re.sub(r"\s+", "", value or "")
+    label = label.replace("營運議題", OPERATIONAL_DYNAMICS_CATEGORY_LABEL)
+    if "營運政策" in label:
+        return "營運政策"
+    if "營運爭議" in label:
+        return "營運爭議"
+    if "通車" in label or SERVICE_OPENING_CATEGORY_KEY in label:
+        return SERVICE_OPENING_CATEGORY_KEY
+    if OPERATIONAL_DYNAMICS_CATEGORY_LABEL in label:
+        return OPERATIONAL_DYNAMICS_CATEGORY_LABEL
+    for category in (
+        "技術新知",
+        "重大事故",
+        ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+        "規範更新",
+    ):
+        if category in label:
+            return category
+    return (value or "").strip() or "技術新知"
+
+
 def normalize_report_title_line(line: str) -> str:
     match = re.match(r"^\s*🔹\s*\[([^\]]+)\]\s*(.*?)\s*$", line or "")
-    if not match:
-        return line
-    category = match.group(1).strip()
-    title = match.group(2).strip()
+    if match:
+        category = _canonical_report_category_label(match.group(1))
+        title = match.group(2).strip()
+    else:
+        pipe_match = re.match(r"^\s*🔹\s*(.+?)\s*[｜|]\s*(.*?)\s*$", line or "")
+        if not pipe_match:
+            return line
+        category = _canonical_report_category_label(pipe_match.group(1))
+        title = pipe_match.group(2).strip()
     if _title_needs_repair(title, category):
         title = chinese_fallback_title(category, title)
     return f"🔹 [{category}] {title}"
@@ -1112,7 +1245,7 @@ def normalize_final_report_md(md: str) -> str:
                 _summary_repeats_title(field_text, current_title)
                 or _contains_untranslated_report_script(field_text)
             ):
-                field_text = "資料不足，未能形成可核實的事件摘要。"
+                field_text = ""
             if field_text:
                 output.extend(["• 事件摘要：", field_text, ""])
         elif label == "臺北捷運局啟示":
@@ -2144,6 +2277,22 @@ def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext
     lines.extend([_candidate_source_line(candidate, context=context), '', '________________________________________'])
     return '\n'.join(lines)
 
+
+def _candidate_event_identity(candidate: dict) -> str:
+    fingerprint = candidate.get("event_fingerprint") or {}
+    if isinstance(fingerprint, dict):
+        values = [
+            str(fingerprint.get(key, "") or "").strip()
+            for key in ("operator_key", "geo_key", "asset_key", "action_key", "incident_key", "date_bucket")
+        ]
+        values = [value.casefold() for value in values if value]
+        if len(values) >= 3:
+            return "|".join(values)
+    source_url = _effective_source_url(candidate)
+    if source_url:
+        return f"url:{source_url.casefold()}"
+    return f"candidate:{int(candidate.get('candidate_id') or candidate.get('id') or 0)}"
+
 def _force_candidate_fields_in_block(block: str, candidate: dict | list[dict], *, context: ReportPostprocessContext) -> str:
     candidates = candidate if isinstance(candidate, list) else [candidate]
     candidates = [item for item in candidates if item]
@@ -2183,8 +2332,10 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
     seen_ids: set[int] = set()
     fallback_ids: list[int] = []
     skipped_ids: list[int] = []
+    deduplicated_event_ids: list[int] = []
     fallback_reason_counts: dict[str, int] = {}
     warnings: list[str] = []
+    seen_event_identities: set[str] = set()
     for parsed in parsed_blocks:
         candidate_ids = tuple(parsed.get('candidate_ids', ()))
         candidates = [selected_map.get(candidate_id) for candidate_id in candidate_ids]
@@ -2196,19 +2347,30 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
             r'^🔹\s*\[[^\]]+\]', r'^•\s*發布/事件日期\s*[：:]', r'^•\s*事件摘要\s*[：:]', r'^•\s*資料來源\s*[：:]',
         ))
         if not required_fields:
-            warnings.append('報告 block 缺少必要欄位，改用保守 fallback。')
+            warnings.append('報告 block 缺少必要欄位，已排除並記錄。')
             for candidate_id in candidate_ids:
                 if candidate_id in selected_map:
-                    fallback_ids.append(candidate_id)
+                    skipped_ids.append(candidate_id)
+                    seen_ids.add(candidate_id)
                     fallback_reason_counts['invalid_or_unparseable_model_block'] = fallback_reason_counts.get('invalid_or_unparseable_model_block', 0) + 1
             continue
         preserved = _force_candidate_fields_in_block(parsed.get('body', ''), [item for item in candidates if item], context=context)
         if not preserved:
             for candidate_id in candidate_ids:
-                fallback_ids.append(candidate_id)
+                skipped_ids.append(candidate_id)
+                seen_ids.add(candidate_id)
                 fallback_reason_counts['invalid_or_unparseable_model_block'] = fallback_reason_counts.get('invalid_or_unparseable_model_block', 0) + 1
             continue
         seen_ids.update(candidate_ids)
+        event_identities = {
+            _candidate_event_identity(candidate)
+            for candidate in candidates
+            if candidate
+        }
+        if event_identities.intersection(seen_event_identities):
+            deduplicated_event_ids.extend(candidate_ids)
+            continue
+        seen_event_identities.update(event_identities)
         records.append({
             'candidate_ids': candidate_ids,
             'category': (candidates[0] or {}).get('classification') or (candidates[0] or {}).get('preliminary_type') or context.infer_preliminary_type(candidates[0] or {}),
@@ -2220,17 +2382,7 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
             continue
         reason = _fallback_reason(candidate, context=context) or 'missing_model_candidate'
         fallback_reason_counts[reason] = fallback_reason_counts.get(reason, 0) + 1
-        fallback_block = _fallback_report_block(candidate, context=context)
-        if fallback_block:
-            fallback_ids.append(candidate_id)
-            records.append({
-                'candidate_ids': (candidate_id,),
-                'category': candidate.get('classification') or candidate.get('preliminary_type') or context.infer_preliminary_type(candidate),
-                'text': fallback_block,
-                'model': False,
-            })
-        else:
-            skipped_ids.append(candidate_id)
+        skipped_ids.append(candidate_id)
     sections: list[str] = [f'# {context.report_title}', f'> 資料涵蓋期間：{context.date_range}', f'> 報導範圍：{context.report_scope_label}']
     category_groups = [
         ('一、技術新知', {'技術新知'}),
@@ -2271,12 +2423,14 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
     diagnostics = {
         'before_reconcile': initial_validation,
         'fallback_candidate_ids': sorted(set(fallback_ids)),
+        'skipped_candidate_ids': sorted(set(skipped_ids)),
         'skipped_fallback_candidate_ids': sorted(set(skipped_ids)),
         'accepted_model_candidate_ids': sorted({candidate_id for record in records if record['model'] for candidate_id in record['candidate_ids']}),
         'model_report_block_count': len(parsed_blocks),
         'preserved_model_block_count': sum(1 for record in records if record['model']),
         'fallback_block_count': sum(1 for record in records if not record['model']),
         'fallback_reason_counts': fallback_reason_counts,
+        'deduplicated_event_candidate_ids': sorted(set(deduplicated_event_ids)),
         'merged_event_groups': [list(record['candidate_ids']) for record in records if record['model'] and len(record['candidate_ids']) > 1],
         'final_unique_article_count': len(records),
         'final_count_by_category': category_counts,

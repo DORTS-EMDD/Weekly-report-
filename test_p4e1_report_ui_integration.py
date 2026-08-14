@@ -100,17 +100,16 @@ class P4E1SidebarTests(unittest.TestCase):
             ],
         )
 
-    def test_domestic_scope_ignores_international_region_selection(self):
+    def test_sidebar_derives_both_scope_when_taiwan_is_selected(self):
         context = replace(
             _sidebar_context(),
             default_selected_types=["技術新知"],
-            default_news_scope="both",
         )
-        recorder = FakeStreamlit(responses={"news_scope_state": "國內捷運"})
+        recorder = FakeStreamlit()
         with patch.object(streamlit_sidebar_ui, "st", recorder):
             result = streamlit_sidebar_ui.render_sidebar(context)
-        self.assertEqual(result.news_scope, "domestic")
-        self.assertEqual(result.selected_regions, [])
+        self.assertEqual(result.news_scope, "both")
+        self.assertIn("臺灣", result.selected_regions)
 
 
 class P4E1ScopeAndReportTests(unittest.TestCase):
@@ -120,8 +119,8 @@ class P4E1ScopeAndReportTests(unittest.TestCase):
                 today=datetime.date(2026, 8, 13),
                 lookback_days=7,
                 selected_types=["技術新知", "重大事故", "營運政策", "營運爭議", "service_opening", "機電標案"],
-                scope_mode="指定先進國家/地區",
-                selected_regions=["日本"],
+                scope_mode="指定先進國家",
+                selected_regions=["臺灣", "日本"],
                 standards_enabled=False,
                 include_research_supplement=False,
                 demo_cache_mode_enabled=False,
@@ -135,7 +134,7 @@ class P4E1ScopeAndReportTests(unittest.TestCase):
             )
         )
         self.assertFalse(settings.is_global_scope)
-        self.assertEqual(settings.active_regions, ["日本"])
+        self.assertEqual(settings.active_regions, ["臺灣", "日本"])
         self.assertEqual(settings.report_scope_label, "國內＋國際")
         self.assertIn("捷運", settings.report_title)
         self.assertNotIn("國際捷運", settings.report_title)
