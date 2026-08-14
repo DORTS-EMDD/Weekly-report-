@@ -18,17 +18,17 @@ import streamlit_app as app
 
 EXPECTED_SCENARIO_SHA256 = {
     "weekly_without_journal": (
-        "d637eebc86900ab1d7d79fbd26f85265a938a69f2178005b1f33525fde84ff58"
+        "015e1d561bf31c656533ffc675a838a9487a48d10f95c2926ebf44429ac70f15"
     ),
     "weekly_with_journal": (
-        "b40251dc05c34187d1f56e2296debdc3205ddfbe6b4ae736f5cef1f4f818a863"
+        "e384f3138114c8d10e7ad325512620ad6dcd83a2eade574588a241da12b1ec12"
     ),
     "annual_with_journal": (
-        "568082798f099cd67c18cb6e51182fcadfe519a7d3987abfe40643117a13db5b"
+        "a7888eaf44fde74bcaf40bfbf3e627a67939368a28a136c7707007119359912c"
     ),
 }
 EXPECTED_AGGREGATE_SHA256 = (
-    "8070c7ee44a9e4eacc60a385804afe258bec06856a6abe2ec6cefa28ccaa0b65"
+    "c22e6db9b3c7fede546b08733535ca60d16e6f34f936b32644c8a6ead7db8fcf"
 )
 
 
@@ -347,7 +347,7 @@ class ConsolidatedReportPostprocessorGoldenTests(unittest.TestCase):
         )
         annual = scenarios["annual_with_journal"]
         self.assertIn("年度觀察重點", annual["final_report"])
-        self.assertIn("學術期刊綜合結論", annual["final_report"])
+        self.assertNotIn("學術期刊綜合結論", annual["final_report"])
         self.assertFalse(annual["dropped_candidates"])
         self.assertTrue(
             annual["id_reconciliation"]["after_reconcile"]["valid"]

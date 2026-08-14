@@ -124,6 +124,12 @@ def _clean_source_label(content: str, url: str, domain: str) -> str:
     return label or "資料來源未明確辨識"
 
 
+def _source_label_with_link(label: str, url: str) -> str:
+    label = str(label or "").strip() or _domain_from_url(url) or "來源"
+    url = _extract_complete_url(str(url or ""))
+    return f"[{label}]({url})" if url else label
+
+
 def normalize_source_line(line: str) -> str:
     if "資料來源" not in (line or ""):
         return line
@@ -157,9 +163,13 @@ def normalize_source_line(line: str) -> str:
             label = re.sub(r"^[、,，：:\s]+|[、,，：:\s]+$", "", label)
             if not label and entry_urls:
                 label = _domain_from_url(entry_urls[0])
-            supplemental_entries.append("，".join([label] + entry_urls) if label else "，".join(entry_urls))
+            supplemental_entries.append(
+                _source_label_with_link(label, entry_urls[0])
+                if entry_urls
+                else label
+            )
         if supplemental_entries:
-            return normalized_primary + "；補充來源：" + "；".join(supplemental_entries)
+            return normalized_primary.rstrip("。") + "；補充來源：" + "；".join(supplemental_entries) + "。"
         return normalized_primary
     date_text = _normalize_report_date_text(content)
     urls = list(dict.fromkeys(_extract_complete_urls(content)))
@@ -187,19 +197,10 @@ def normalize_source_line(line: str) -> str:
     host = _domain_from_url(url)
     source_ref = url or domain_hint
     source_label = _clean_source_label(content, source_ref, domain_hint or host)
-    parts = [source_label]
+    parts = [_source_label_with_link(source_label, url)]
     if date_text and date_text != "日期未知":
         parts.append(date_text)
-    ordered_urls = list(dict.fromkeys(
-        [value for value in urls if "news.google.com" not in _domain_from_url(value) and _is_article_level_url(value)]
-        + [value for value in urls if "news.google.com" in _domain_from_url(value) and _is_article_level_url(value, allow_google_news=True)]
-        + urls
-    ))
-    if ordered_urls:
-        parts.extend(ordered_urls)
-    elif source_ref:
-        parts.append(source_ref)
-    return f"• 資料來源：{'，'.join(part for part in parts if part)}"
+    return f"• 資料來源：{'，'.join(part for part in parts if part)}。"
 
 
 def _protect_journal_sections(text: str) -> tuple[str, list[str]]:
@@ -1780,16 +1781,18 @@ def build_journal_summary_conclusion(journal_candidates: list[dict], *, context:
     source_text = '、'.join(source_names) if source_names else '本期入選研究來源'
     return f'本期國際學術期刊補充依系統取得之正式期刊或可信研究頁面整理，入選研究主要來自{source_text}，觀察主題集中於{theme_text}等方向。整體而言，近期都市軌道研究已由單一設備改善，逐步轉向以資料、模型與系統整合支撐營運安全、維修決策及能源效率管理。相關研究對臺北捷運局之啟示，在於新線規劃與既有系統更新時，應及早界定資料來源、欄位格式、系統介面、模型驗證、維修流程與營運安全邊界；導入 AI、數位分身或預測維護等工具時，也應避免僅著重演算法展示，而需同步建立資料品質、資安權限、異常處置與跨系統驗證機制。後續可將此類研究作為機電系統需求規劃、維修管理制度、能源效率策略及風險控管之參考來源，並以可追溯、可驗證、可維運為技術導入原則。'
 
+
+def remove_journal_summary_conclusion(report_md: str) -> str:
+    return re.sub(
+        r"(?ms)^\s*(?:#{0,6}\s*)?[【\[]?\s*學術期刊綜合結論\s*[】\]]?\s*:?.*?(?=^📊|^⏰|\Z)",
+        "",
+        report_md or "",
+        count=1,
+    ).strip()
+
 def ensure_journal_summary_conclusion(report_md: str, journal_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
-    if not context.include_research_supplement or not journal_candidates:
-        return report_md
-    if '學術期刊綜合結論' in (report_md or ''):
-        return report_md
-    conclusion = '【學術期刊綜合結論】\n' + build_journal_summary_conclusion(journal_candidates, context=context)
-    match = re.search('(?m)^📊', report_md or '')
-    if match:
-        return (report_md[:match.start()].rstrip() + '\n\n' + conclusion + '\n\n' + report_md[match.start():].lstrip()).strip()
-    return (report_md or '').rstrip() + '\n\n' + conclusion
+    del journal_candidates, context
+    return remove_journal_summary_conclusion(report_md)
 
 def _journal_candidate_full_date(item: dict, *, context: ReportPostprocessContext) -> str:
     for key in ('published_date', 'date'):
@@ -1908,6 +1911,7 @@ def _is_canonical_journal_section(section: str, *, context: ReportPostprocessCon
 def normalize_journal_section_format(report_md: str, journal_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
     if not context.include_research_supplement or not journal_candidates or (not report_md):
         return report_md
+    report_md = remove_journal_summary_conclusion(report_md)
     heading_match = re.search('(?m)^#{0,6}\\s*[一二三四五六七八九十]\\s*、\\s*(?:技術研究補充|國際學術期刊)\\s*$', report_md)
     if not heading_match:
         return report_md
@@ -2030,6 +2034,27 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
             if not value or value in {'資料來源未明確辨識', '報導'}:
                 value = expected
             return value
+        if field == '資料來源':
+            candidate = _candidate_for_item(index)
+            candidate_url = _extract_complete_url(str(candidate.get('url', '') or ''))
+            urls = _extract_complete_urls(value)
+            source_url = urls[0] if urls else candidate_url
+            label_text = value
+            for source_url_value in urls:
+                label_text = label_text.replace(source_url_value, '')
+            fallback_label = str(
+                candidate.get('journal_name')
+                or candidate.get('source_display')
+                or candidate.get('source')
+                or _domain_from_url(source_url)
+                or ''
+            )
+            label = _clean_source_label(
+                label_text or fallback_label,
+                source_url,
+                _domain_from_url(source_url),
+            )
+            return _source_label_with_link(label, source_url)
         return value
 
     def _append_blank_if_needed() -> None:
