@@ -2,6 +2,7 @@
 
 import datetime
 import re
+from collections import Counter
 from dataclasses import dataclass
 from html import unescape
 from typing import Callable
@@ -529,7 +530,7 @@ def deduplicate_formal_report_sections(report_md: str) -> str:
     """Keep one canonical heading for each formal-news section."""
     text = report_md or ""
     heading_pattern = re.compile(
-        r"(?m)^\s*#{1,6}\s*[一二三四五六七八九十]\s*、\s*"
+        r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*"
         r"(技術新知|重大事故|營運政策|營運爭議|營運議題|營運動態|機電標案)\s*$"
     )
     matches = list(heading_pattern.finditer(text))
@@ -595,7 +596,7 @@ def deduplicate_formal_report_sections(report_md: str) -> str:
 def _deduplicate_research_sections(report_md: str) -> str:
     text = report_md or ""
     heading_pattern = re.compile(
-        r"(?m)^\s*#{1,6}\s*[一二三四五六七八九十]\s*、\s*"
+        r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*"
         r"(規範更新|國際學術期刊|技術研究補充)\s*$"
     )
     matches = list(heading_pattern.finditer(text))
@@ -681,7 +682,7 @@ def deduplicate_report_quality_issues(report_md: str) -> str:
 def _reorder_formal_report_sections(report_md: str) -> str:
     text = report_md or ""
     heading_pattern = re.compile(
-        r"(?m)^\s*#{1,6}\s*[一二三四五六七八九十]\s*、\s*"
+        r"(?m)^\s*#{0,6}\s*[一二三四五六七八九十]\s*、\s*"
         r"(技術新知|重大事故|營運動態|營運議題|營運政策|營運爭議|機電標案|規範更新|國際學術期刊|技術研究補充)\s*$"
     )
     matches = list(heading_pattern.finditer(text))
@@ -914,6 +915,8 @@ def clean_internal_report_language(text: str) -> str:
     cleaned = re.sub(r"初篩資料(?:指出|顯示|記載|提及)?", "資料", cleaned)
     cleaned = re.sub(r"(?im)^.*(?:模型：MaiAgent\s*雲端\s*API|來源健康|prompt\s*字數|MaiAgent\s*呼叫|本次送入模型|developer\s*debug|python_score|入選原因|初步分類).*$", "", cleaned)
     cleaned = re.sub(r"(?i)\braw data\b", "原始資料", cleaned)
+    cleaned = re.sub(r"(?mi)^\s*編校說明\s*[：:].*$", "", cleaned)
+    cleaned = re.sub(r"(?mi)^\s*編校說明\s*$", "", cleaned)
     cleaned = re.sub(r"(?i)\bcandidates?\b", "資料", cleaned)
     cleaned = re.sub(r"來源連結[（(]\s*Google\s*News\s*[）)]", "來源連結", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"[（(]\s*Google\s*News\s*proxy\s*[）)]", "", cleaned, flags=re.IGNORECASE)
@@ -1014,6 +1017,7 @@ CANONICAL_ELECTROMECHANICAL_SYSTEMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("月台門系統", ("platform screen door", "platform door", "psd", "月台門", "月臺門")),
     ("機廠設備", ("depot electromechanical", "depot e&m", "depot mep", "機廠機電", "機廠設備", "機廠")),
     ("通風空調系統", ("ventilation", "hvac", "air conditioning", "smoke control", "通風", "空調", "環控")),
+    ("軌道／轉轍設備", ("track circuit", "track equipment", "switch machine", "turnout", "軌道設備", "轉轍", "道岔")),
 )
 
 
@@ -1034,17 +1038,37 @@ def normalize_electromechanical_system_value(value: str, context: str = "") -> s
         if part.strip()
     }
     is_abstract_only = bool(value_parts) and value_parts.issubset(abstract_values)
-    if raw_value.casefold() not in generic_values and not is_abstract_only:
-        if re.search(r"[\u3400-\u9fff]", raw_value):
-            return raw_value
-        evidence = raw_value
-    else:
-        evidence = context or ""
+    non_physical_terms = (
+        "營運", "安全調查", "事故調查", "測試", "驗證", "系統整合", "整合",
+        "運行", "服務", "調查",
+    )
+    explicit_system_terms = (
+        "系統", "設備", "elevator", "lift", "escalator", "signalling", "signaling",
+        "cbtc", "train control", "通信", "通訊", "供電", "afc", "scada", "hvac",
+        "車輛", "列車", "機廠", "軌道", "轉轍", "道岔",
+    )
+    raw_has_non_physical = _contains_any_term(raw_value, list(non_physical_terms))
+    raw_has_explicit_system = _contains_any_term(raw_value, list(explicit_system_terms))
+    raw_evidence = "" if raw_has_non_physical and not raw_has_explicit_system else raw_value
+    context_evidence = (context or "").replace(raw_value, "")
+    evidence = " ".join(part for part in (raw_evidence, context_evidence) if part).strip()
     systems = [
         label
         for label, terms in CANONICAL_ELECTROMECHANICAL_SYSTEMS
         if _contains_any_term(evidence, list(terms))
     ]
+    incident_context_terms = (
+        "derailment", "collision", "crash", "incident", "accident", "出軌", "碰撞", "事故", "調查"
+    )
+    explicit_vehicle_evidence_terms = (
+        "rolling stock", "trainset", "vehicle system", "車輛系統", "列車系統", "車輛設備"
+    )
+    if (
+        "車輛系統" in systems
+        and _contains_any_term(context, list(incident_context_terms))
+        and not _contains_any_term(raw_value, list(explicit_vehicle_evidence_terms))
+    ):
+        systems = [system for system in systems if system != "車輛系統"]
     if systems:
         return "、".join(systems)
     return "未明確"
@@ -1363,7 +1387,7 @@ def normalize_report_title_line(line: str) -> str:
 
 
 def normalize_final_report_md(md: str) -> str:
-    text = md or ""
+    text = clean_internal_report_language(md or "")
     text, protected_journal_sections = _protect_journal_sections(text)
     text = re.sub(r"(?m)^\s*[-*]\s*\*\*(發布/事件日期|國家/地區|相關機電系統|事件摘要|臺北捷運局啟示|資料來源)\*\*\s*[：:]", r"• \1：", text)
     text = re.sub(r"(?m)^\s*[-*]\s*\*\*【臺北捷運局啟示】\*\*\s*[：:]", "• 臺北捷運局啟示：", text)
@@ -1506,6 +1530,7 @@ def _clean_formal_source_proxy_label(label: str) -> str:
 GENERIC_FORMAL_TITLES = {
     "國際捷運技術更新案",
     "都市軌道系統更新案",
+    "捷運列車更新案",
     "國際捷運營運政策更新",
     "國際捷運重大事故事件",
     "都市軌道重大事故事件",
@@ -2308,7 +2333,7 @@ def formal_title_from_candidate(candidate: dict, *, context: ReportPostprocessCo
         return 'Gelsenkirchen 電車碰撞事故'
     if _contains_any_term(text, ['frauscher', 'axle counter', 'axle counters']):
         return 'Frauscher 車軸計數器應用於電車號誌現代化'
-    if _contains_any_term(text, ['finch west', 'hitachi']):
+    if _contains_any_term(text, ['finch west']) and _contains_any_term(text, ['hitachi']):
         return '多倫多 Finch West LRT 啟用 Hitachi Rail 號誌系統'
     if _contains_any_term(text, ['broadway subway']):
         return '溫哥華 Broadway Subway 都市軌道專案進展'
@@ -2329,6 +2354,16 @@ def formal_title_from_candidate(candidate: dict, *, context: ReportPostprocessCo
             return chinese_fallback_title(category, original_title)
         return original_title
     return chinese_fallback_title(category, original_title)
+
+
+def _fallback_title_from_candidate(candidate: dict) -> str:
+    title = _clean_text(unescape(str(candidate.get('title', '') or ''))).strip()
+    compact = re.sub(r"\s+", "", title)
+    if not title or _is_generic_formal_title(title) or any(
+        fragment in compact for fragment in TITLE_PLACEHOLDER_FRAGMENTS
+    ):
+        return ''
+    return title
 
 def repair_generic_report_titles(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
     if not report_md or not selected_candidates:
@@ -2353,8 +2388,19 @@ def repair_generic_report_titles(report_md: str, selected_candidates: list[dict]
             if matched:
                 candidate_text = f"{matched.get('title', '')} {matched.get('snippet', '')}".casefold()
                 entity_conflict = 'buangkok' in candidate_text and any(alias in heading.casefold() for alias in ('武吉班讓', 'bukit panjang'))
-                if entity_conflict or ((not _has_valid_chinese_report_title(match.group(3))) and _title_needs_repair(match.group(3), match.group(2))):
-                    heading = f'{match.group(1)}{formal_title_from_candidate(matched, context=context)}'
+                candidate_title = _fallback_title_from_candidate(matched)
+                preserves_candidate_title = bool(
+                    candidate_title
+                    and _normalize_title(match.group(3)) == _normalize_title(candidate_title)
+                )
+                if not preserves_candidate_title and (entity_conflict or ((not _has_valid_chinese_report_title(match.group(3))) and _title_needs_repair(match.group(3), match.group(2)))):
+                    replacement_title = (
+                        _fallback_title_from_candidate(matched)
+                        if _is_generic_formal_title(match.group(3))
+                        else formal_title_from_candidate(matched, context=context)
+                    )
+                    if replacement_title:
+                        heading = f'{match.group(1)}{replacement_title}'
         output.extend([heading, body])
     return ''.join(output)
 
@@ -2380,7 +2426,7 @@ def _candidate_source_line(candidate: dict, *, context: ReportPostprocessContext
     item_date = _normalize_report_date_text(str(candidate.get('date') or ''))
     if item_date == '日期未知':
         item_date = '日期未明'
-    return f'• 資料來源：{source_display}，{item_date}，{source_url}'
+    return normalize_source_line(f'• 資料來源：{source_display}，{item_date}，{source_url}')
 
 
 def _fallback_reason(candidate: dict, *, context: ReportPostprocessContext) -> str:
@@ -2408,7 +2454,7 @@ def _fallback_summary(candidate: dict) -> str:
             and not _contains_untranslated_report_script(value)
         ):
             return value
-    return '資料不足，未能形成可核實的事件摘要。'
+    return ''
 
 
 def _fallback_insight(category: str, candidate: dict) -> str:
@@ -2466,11 +2512,15 @@ def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext
         return ''
     candidate_id = int(candidate.get('candidate_id') or candidate.get('id') or 0)
     category = candidate.get('classification') or candidate.get('preliminary_type') or context.infer_preliminary_type(candidate)
-    title = formal_title_from_candidate(candidate, context=context)
+    title = _fallback_title_from_candidate(candidate)
+    if not title:
+        return ''
     date_value = _normalize_report_date_text(str(candidate.get('date') or ''))
     if date_value == '日期未知':
         date_value = '日期未明'
     summary = _fallback_summary(candidate)
+    if not summary:
+        return ''
     insight = _fallback_insight(category, candidate)
     lines = [
         f'<!-- candidate_id: {candidate_id} -->', f'🔹 [{category}] {title}', '',
@@ -2700,6 +2750,12 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         for candidate_id in selected_ids
         if candidate_id not in deduplicated_ids
     ]
+    final_candidate_id_counts = Counter(final_candidate_ids)
+    final_candidate_id_duplicates = sorted(
+        candidate_id
+        for candidate_id, count in final_candidate_id_counts.items()
+        if count > 1
+    )
     category_counts = count_report_items_by_category(reconciled)
     diagnostics = {
         'before_reconcile': initial_validation,
@@ -2724,8 +2780,9 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         'after_reconcile': final_validation,
         'final_candidate_ids': final_candidate_ids,
         'expected_final_candidate_ids': expected_final_ids,
+        'final_candidate_id_duplicates': final_candidate_id_duplicates,
         'final_candidate_id_integrity_passed': (
-            final_candidate_ids == expected_final_ids
+            Counter(final_candidate_ids) == Counter(expected_final_ids)
             and not skipped_ids
         ),
     }

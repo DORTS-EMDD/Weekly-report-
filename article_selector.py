@@ -30,6 +30,7 @@ from article_processor import (
     _original_source_domain,
     _prefetch_candidate_article,
     _quality_rank,
+    region_matches_selected_regions,
     _shorten,
     _source_tier_rank,
     _strip_source_name_noise,
@@ -1854,6 +1855,18 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "accessibility", "accessible", "barrier-free", "step-free", "ramp", "slope",
             "無障礙", "無障礙設施", "斜坡", "坡道",
         )
+        accessibility_request_terms = (
+            "advocacy", "advocate", "request", "requested", "calls out", "call for",
+            "complaint", "complains", "design concern", "design concerns", "campaign",
+            "倡議", "要求", "呼籲", "爭議", "設計問題",
+        )
+        physical_equipment_action_terms = (
+            "elevator replacement", "elevator modernization", "elevator modernisation",
+            "modernized elevator", "modernised elevator", "elevator upgrade", "upgraded elevator",
+            "elevator installed", "installed elevator", "elevator construction", "elevator opened",
+            "replace elevator", "replaced elevator", "電梯汰換", "電梯更新", "電梯升級", "電梯新建",
+            "電梯啟用", "電扶梯更新", "電扶梯升級",
+        )
         equipment_terms = (
             "elevator", "lift", "escalator", "signalling", "signaling", "cbtc", "train control",
             "platform screen door", "afc", "fare gate", "ticketing", "traction power", "substation",
@@ -1862,10 +1875,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "電梯", "升降機", "電扶梯", "號誌", "信號", "月臺門", "自動收費", "供電", "空調",
             "車輛", "列車", "通訊", "感測", "監測",
         )
-        return (
-            _contains_any_term(text, list(access_terms))
-            and not _contains_any_term(text, list(equipment_terms))
-        )
+        if not _contains_any_term(text, list(access_terms)):
+            return False
+        if _contains_any_term(text, list(physical_equipment_action_terms)):
+            return False
+        if _contains_any_term(text, list(accessibility_request_terms)):
+            return True
+        return not _contains_any_term(text, list(equipment_terms))
 
 
     def _compute_technical_system_gate(candidate: dict) -> bool:
@@ -3932,7 +3948,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if candidate.get("region_resolution_method") in {"query_region_fallback", "query_text_fallback"}:
             candidate["scope_validation_failure"] = "event_region_not_explicitly_resolved"
             return False
-        if region in active_regions:
+        if region_matches_selected_regions(region, active_regions):
             return True
         text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
         looks_like_standard = candidate.get("classification") == "規範更新" or _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True)

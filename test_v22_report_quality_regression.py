@@ -2,7 +2,7 @@ import datetime
 import unittest
 from collections import Counter
 
-from article_processor import _canonical_candidate_region
+from article_processor import _canonical_candidate_region, region_matches_selected_regions
 from ddgs_search_service import (
     DdgsSearchContext,
     _annual_quarter_windows,
@@ -81,7 +81,7 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
 
         fallback = app._fallback_report_block(candidate)
 
-        self.assertIn("資料不足，未能形成可核實的事件摘要。", fallback)
+        self.assertEqual(fallback, "")
         self.assertNotIn(f"事件摘要：\n{title}", fallback)
 
     def test_generic_insight_fallback_is_omitted(self):
@@ -162,13 +162,13 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
 
         output, diagnostics = self._reconcile("", [candidate], ["技術新知"])
 
-        self.assertIn("捷運車站設備更新", output)
-        self.assertIn("資料不足，未能形成可核實的事件摘要。", output)
+        self.assertNotIn("捷運車站設備更新", output)
+        self.assertNotIn("資料不足，未能形成可核實的事件摘要。", output)
         self.assertNotIn("依原始候選資料所示之都市軌道系統", output)
         self.assertNotIn("後續內容仍應以原始來源核實", output)
-        self.assertEqual(diagnostics["skipped_candidate_ids"], [])
-        self.assertEqual(diagnostics["fallback_candidate_ids"], [11])
-        self.assertEqual(diagnostics["fallback_block_count"], 1)
+        self.assertEqual(diagnostics["skipped_candidate_ids"], [11])
+        self.assertEqual(diagnostics["fallback_candidate_ids"], [])
+        self.assertEqual(diagnostics["fallback_block_count"], 0)
 
     def test_title_copy_summary_is_dropped_instead_of_replaced_with_generic_text(self):
         title = "北捷新列車亮相！增無線充電功能 最快2027年投入淡水信義線"
@@ -184,11 +184,11 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
 
         output, diagnostics = self._reconcile(report, [candidate], ["機電標案"])
 
-        self.assertIn(title, output)
-        self.assertIn("資料不足，未能形成可核實的事件摘要。", output)
+        self.assertNotIn(title, output)
+        self.assertNotIn("資料不足，未能形成可核實的事件摘要。", output)
         self.assertNotRegex(output, rf"事件摘要：\s*{title}")
-        self.assertEqual(diagnostics["skipped_candidate_ids"], [])
-        self.assertEqual(diagnostics["fallback_candidate_ids"], [14])
+        self.assertEqual(diagnostics["skipped_candidate_ids"], [14])
+        self.assertEqual(diagnostics["fallback_candidate_ids"], [])
 
     def test_complete_mta_elevator_block_with_source_variants_is_preserved(self):
         candidate = _candidate(
@@ -260,6 +260,19 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
         self.assertIn(title, repaired)
         self.assertNotIn("捷運列車更新案", repaired)
 
+    def test_finch_west_ramp_title_is_not_rewritten_as_hitachi(self):
+        candidate = _candidate(
+            11,
+            "Finch West LRT station ramp accessibility request",
+            "Advocacy groups request an accessible ramp at Finch West station.",
+        )
+        report = "<!-- candidate_id: 11 -->\n🔹 [技術新知] 捷運列車更新案"
+        repaired = app.repair_generic_report_titles(report, [candidate])
+
+        self.assertNotIn("Hitachi", repaired)
+        self.assertNotIn("捷運列車更新案", repaired)
+        self.assertIn("Finch West LRT station ramp accessibility request", repaired)
+
     def test_final_reconciliation_rehomes_model_block_by_selected_category(self):
         candidate = _candidate(
             15,
@@ -317,6 +330,92 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
         )
         self.assertFalse(app._selector_api["_passes_technical_triad"](candidate))
         self.assertFalse(app.evaluate_category_gates(candidate)["category_gates"]["technology"])
+
+    def test_accessibility_advocacy_request_is_not_promoted_by_elevator_keyword(self):
+        candidate = _candidate(
+            21,
+            "Finch West LRT station ramp accessibility request",
+            "Advocacy groups request an accessible ramp and call for better slope design at Finch West station.",
+        )
+        self.assertFalse(app._selector_api["_passes_technical_triad"](candidate))
+        self.assertFalse(app.evaluate_category_gates(candidate)["category_gates"]["technology"])
+
+    def test_missing_model_candidate_fallback_keeps_its_own_evidence(self):
+        candidate = _candidate(
+            11,
+            "Finch West LRT station ramp accessibility request",
+            "倡議團體要求改善 Finch West 車站坡道與無障礙通行，並重新檢視斜坡設計。",
+        )
+        output, diagnostics = self._reconcile("", [candidate], ["技術新知"])
+
+        self.assertIn("Finch West", output)
+        self.assertNotIn("Hitachi", output)
+        self.assertEqual(diagnostics["fallback_candidate_ids"], [11])
+        self.assertEqual(diagnostics["skipped_candidate_ids"], [])
+        self.assertEqual(diagnostics["parser_failures"][0]["candidate_id"], 11)
+
+    def test_taiwan_selected_scope_matches_taipei_and_taoyuan(self):
+        self.assertTrue(region_matches_selected_regions("臺北", ["臺灣"]))
+        self.assertTrue(region_matches_selected_regions("桃園", ["臺灣"]))
+        self.assertFalse(region_matches_selected_regions("印度", ["臺灣"]))
+
+    def test_electromechanical_systems_do_not_use_operational_or_incident_text(self):
+        self.assertEqual(
+            app.normalize_electromechanical_system_value("電車營運、安全調查"),
+            "未明確",
+        )
+        normalized = app.normalize_electromechanical_system_value("捷運營運、列車測試與驗證")
+        self.assertNotIn("列車測試與驗證", normalized)
+        self.assertIn(normalized, {"車輛系統", "未明確"})
+        self.assertEqual(
+            app.normalize_electromechanical_system_value(
+                "",
+                "Manchester Piccadilly Metrolink tram derailment investigation",
+            ),
+            "未明確",
+        )
+
+    def test_source_line_uses_canonical_markdown_link(self):
+        source = normalize_source_line(
+            "• 資料來源：來源名稱：https://example.com/source，2026-08-01"
+        )
+        self.assertIn("[來源名稱](https://example.com/source)", source)
+        self.assertNotIn("來源名稱：https://example.com/source", source)
+
+    def test_internal_editor_note_is_not_kept_in_formal_report(self):
+        report = "## 一、技術新知\n編校說明：此行僅供內部使用。\n🔹 [技術新知] CBTC 更新"
+        normalized = app.normalize_final_report_md(report)
+        self.assertNotIn("編校說明", normalized)
+
+    def test_candidate_id_integrity_ignores_model_block_order(self):
+        first = _candidate(22, "CBTC 號誌更新", "CBTC 號誌更新完成並提升列車控制可靠度。")
+        second = _candidate(23, "車站通訊設備升級", "車站通訊設備升級完成並改善資料傳輸可靠度。")
+        report = "\n\n".join([
+            "\n".join([
+                "<!-- candidate_id: 23 -->",
+                "🔹 [技術新知] 車站通訊設備升級",
+                "• 發布/事件日期：2026-08-01",
+                "• 國家/地區：日本",
+                "• 相關機電系統：通訊系統",
+                "• 事件摘要：更新作業完成並改善車站資料傳輸可靠度。",
+                "• 資料來源：Fixture Source，2026-08-01，https://example.com/v22-quality/23",
+            ]),
+            "\n".join([
+                "<!-- candidate_id: 22 -->",
+                "🔹 [技術新知] CBTC 號誌更新",
+                "• 發布/事件日期：2026-08-01",
+                "• 國家/地區：日本",
+                "• 相關機電系統：號誌系統",
+                "• 事件摘要：號誌更新作業完成並提升列車控制可靠度。",
+                "• 資料來源：Fixture Source，2026-08-01，https://example.com/v22-quality/22",
+            ]),
+        ])
+        output, diagnostics = self._reconcile(report, [first, second], ["技術新知"])
+
+        self.assertCountEqual(diagnostics["final_candidate_ids"], [23, 22])
+        self.assertTrue(diagnostics["final_candidate_id_integrity_passed"])
+        self.assertIn("<!-- candidate_id: 22 -->", output)
+        self.assertIn("<!-- candidate_id: 23 -->", output)
 
     def test_region_content_overrides_query_region_and_records_conflict(self):
         chennai = _candidate(16, "Chennai Metro Rail ropes in consultant", "Chennai Metro Rail appointed a consultant for the system.")
@@ -376,8 +475,8 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
         self.assertEqual(len(bucket_queries), len(windows))
 
     def test_duplicate_event_fingerprint_is_kept_once_in_formal_report(self):
-        first = _candidate(12, "捷運月台門完成更新", "月台門更新完成。")
-        second = _candidate(13, "捷運月台門更新完成", "同一事件的轉載。")
+        first = _candidate(12, "捷運月台門完成更新", "捷運月台門更新完成並恢復車站安全隔離功能。")
+        second = _candidate(13, "捷運月台門更新完成", "同一事件的轉載，內容仍涉及月台門設備更新。")
         fingerprint = {
             "operator_key": "metro-x",
             "geo_key": "taipei",

@@ -411,6 +411,35 @@ def _canonical_candidate_region(candidate: dict) -> str:
     return region
 
 
+_REGION_ALIASES = {
+    "台北": "臺北",
+    "台中": "臺中",
+    "台南": "臺南",
+    "台東": "臺東",
+    "台湾": "臺灣",
+    "台灣": "臺灣",
+    "Taiwan": "臺灣",
+}
+
+_TAIWAN_SUBREGIONS = {
+    "臺北", "新北", "桃園", "臺中", "臺南", "高雄",
+    "基隆", "新竹", "苗栗", "彰化", "南投", "雲林", "嘉義",
+    "屏東", "宜蘭", "花蓮", "臺東", "澎湖",
+}
+
+
+def region_matches_selected_regions(region: str, selected_regions: list[str] | tuple[str, ...]) -> bool:
+    def normalize(value: str) -> str:
+        cleaned = re.sub(r"\s+", "", str(value or "")).strip()
+        return _REGION_ALIASES.get(cleaned, cleaned)
+
+    normalized_region = normalize(region)
+    normalized_selected = {normalize(value) for value in selected_regions or []}
+    if normalized_region in normalized_selected:
+        return True
+    return normalized_region in _TAIWAN_SUBREGIONS and "臺灣" in normalized_selected
+
+
 def _normalize_title(title: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^\w\u4e00-\u9fff]+", " ", title.casefold())).strip()
 

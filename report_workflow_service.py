@@ -654,6 +654,11 @@ class WorkflowRuntime:
         validated = ensure_supplemental_sources_in_report(validated, selected_candidates, context=context)
         validated = remove_missing_data_disclaimers(validated)
         validated = insert_annual_observation_section(validated, context=context)
+        validated = normalize_report_section_numbering(
+            validated,
+            selected_types=self.config.selected_types,
+            standards_enabled=self.config.standards_enabled,
+        )
         clean = remove_internal_candidate_markers(validated)
         clean = normalize_formal_report_title(clean)
         clean = apply_final_report_footer(

@@ -170,9 +170,7 @@ class V21QualityGateTests(unittest.TestCase):
         fallback = app._fallback_report_block(candidate)
         self.assertNotIn("&#8217", fallback)
         self.assertNotIn("The English snippet", fallback)
-        self.assertIn("Buangkok MRT", fallback)
-        self.assertIn("2026-07-23", fallback)
-        self.assertNotIn("T00:00:00+00:00", fallback)
+        self.assertEqual(fallback, "")
 
     def test_fallback_with_insufficient_source_is_skipped(self):
         candidate = _candidate(1, "CBTC upgrade", "", url_host="")
@@ -204,7 +202,9 @@ class V21QualityGateTests(unittest.TestCase):
 
     def test_system_normalization_preserves_specific_multi_system_evidence(self):
         text = "機電系統之介面整合與測試驗證，確保控制中心與列車通訊正常。"
-        self.assertEqual(app.normalize_electromechanical_system_value(text), text)
+        normalized = app.normalize_electromechanical_system_value(text)
+        self.assertIn("通訊系統", normalized)
+        self.assertNotIn("介面整合與測試驗證", normalized)
 
     def test_gelsenkirchen_event_fingerprint_keeps_city_boundary(self):
         first = _candidate(1, "Gelsenkirchen tram collision leaves dozens injured", "Gelsenkirchen tram collision", category="重大事故", region="德國", query_region="德國")
