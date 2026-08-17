@@ -1,7 +1,9 @@
 import datetime
+import json
 import unittest
 
 from article_processor import normalize_country
+from report_prompt_service import parse_selection_response
 from article_selector import build_selector_api
 from report_postprocessor import validate_authoritative_report
 from report_workflow_service import WorkflowConfig, WorkflowDependencies, make_runtime
@@ -49,11 +51,12 @@ def _candidate(title: str, snippet: str = "") -> dict:
     }
 
 
-def _runtime() -> object:
+def _runtime(selected_types: list[str] | None = None) -> object:
+    selected_types = selected_types or [TECHNICAL]
     config = WorkflowConfig(
         today=datetime.date(2026, 8, 17),
         lookback_days=30,
-        selected_types=[TECHNICAL],
+        selected_types=selected_types,
         active_regions=["全球"],
         is_global_scope=True,
         standards_enabled=False,
@@ -68,6 +71,31 @@ def _runtime() -> object:
 
 
 class P2GCoreSystemTests(unittest.TestCase):
+    def test_core_systems_follow_the_primary_technical_object(self):
+        api = _selector()
+        fixtures = [
+            (
+                "Sydney Metro opens new train maintenance facility at Tallawong",
+                "The new depot maintenance facility supports metro train servicing.",
+                ["機廠維修設備"],
+            ),
+            (
+                "Metro train service update",
+                "The metro train service was delayed, with no vehicle technology described.",
+                [],
+            ),
+            (
+                "桃園捷運棕線機電系統統包工程決標",
+                "本案為機電系統統包工程，未列出分項設備或系統規格。",
+                [],
+            ),
+            ("CBTC deployment", "CBTC train control entered service on the metro.", ["號誌"]),
+            ("Metro orders 20 new trains", "The metro ordered 20 new trains.", ["電聯車"]),
+        ]
+        for title, snippet, expected in fixtures:
+            with self.subTest(title=title):
+                self.assertEqual(api["_core_systems_for_candidate"](_candidate(title, snippet)), expected)
+
     def test_component_terms_map_to_seven_formal_core_systems(self):
         api = _selector()
         fixtures = [
@@ -160,6 +188,41 @@ class P2GCoreSystemTests(unittest.TestCase):
         self.assertNotIn("國家/地區：", prompt)
         self.assertIn("core_systems 為空時，完全省略", prompt)
         self.assertIn("不得寫「未明確」或泛稱「都市軌道系統」", prompt)
+
+    def test_report_payload_prefers_source_display_or_domain_without_generic_fallback(self):
+        runtime = _runtime()
+        named = _candidate("Metro deploys CBTC", "CBTC was deployed on the metro.")
+        named.update({"classification": TECHNICAL, "source_display": "Railway-News", "source_domain": "railway-news.com"})
+        named_prompt = runtime.build_report_prompt([named], [], 1)
+        self.assertIn('"source_display": "Railway-News"', named_prompt)
+        self.assertNotIn('"source_display": "資料來源未明確辨識"', named_prompt)
+
+        domain_only = dict(named, source_display="", source_domain="railway-news.com")
+        domain_prompt = runtime.build_report_prompt([domain_only], [], 1)
+        self.assertIn('"source_display": "railway-news.com"', domain_prompt)
+        self.assertNotIn('"source_display": "資料來源未明確辨識"', domain_prompt)
+
+    def test_python_classification_is_authoritative_over_model_category(self):
+        policy = _candidate("Sydney Metro West service policy", "Sydney Metro published a service policy update.")
+        policy.update({"classification": "營運政策", "preliminary_type": "營運政策"})
+        procurement = _candidate("Metro signalling procurement", "The metro procured a signalling system.")
+        procurement.update({"id": 2, "candidate_id": 2, "classification": PROCUREMENT, "preliminary_type": PROCUREMENT})
+        runtime = _runtime(["營運政策", PROCUREMENT])
+        selected = parse_selection_response(
+            json.dumps({
+                "selected_ids": [
+                    {"id": 1, "category": PROCUREMENT, "include_in_report": True},
+                    {"id": 2, "category": "營運政策", "include_in_report": True},
+                ]
+            }, ensure_ascii=False),
+            [policy, procurement],
+            context=runtime._prompt_context(),
+        )
+        self.assertEqual([item["classification"] for item in selected], ["營運政策", PROCUREMENT])
+        prompt = runtime.build_report_prompt([policy], [], 1)
+        self.assertIn('"classification": "營運政策"', prompt)
+        self.assertIn("不得自行跨章節重新分類", prompt)
+        self.assertNotIn("不是最終答案", prompt)
 
     def test_authoritative_validation_accepts_omitted_core_system_field(self):
         selected = [_candidate("Metro cross-system operational analysis")]

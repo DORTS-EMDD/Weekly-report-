@@ -242,8 +242,6 @@ CORE_SYSTEM_LABELS = (
 
 CORE_SYSTEM_TERM_GROUPS: dict[str, tuple[str, ...]] = {
     "電聯車": (
-        "rolling stock", "railcar", "trainset", "trainsets", "train car", "train cars",
-        "metro train", "metro trains", "train", "trains", "light rail vehicle", "light rail vehicles",
         "vehicle equipment", "car door", "train door", "bogie", "wheelset",
         "coupler", "propulsion", "traction inverter", "traction inverters", "traction motor", "braking system",
         "brake system", "tcms", "rolling-stock", "車門", "轉向架", "輪對",
@@ -277,13 +275,29 @@ CORE_SYSTEM_TERM_GROUPS: dict[str, tuple[str, ...]] = {
     "機廠維修設備": (
         "wheel lathe", "lifting jack", "train washer", "wash plant", "maintenance equipment",
         "depot equipment", "workshop equipment", "rescue equipment", "depot electromechanical",
-        "機廠", "車床", "舉升", "洗車", "維修設備", "救援設備",
+        "maintenance facility", "maintenance depot", "train maintenance facility", "depot maintenance",
+        "depot", "workshop", "operations and maintenance centre", "operations and maintenance center",
+        "機廠", "維修廠", "維修中心", "車床", "舉升", "洗車", "維修設備", "救援設備",
     ),
     "月臺門": (
         "platform screen door", "platform screen doors", "platform door", "platform doors",
         "psd", "月臺門", "月台門",
     ),
 }
+
+ROLLING_STOCK_EVENT_TERMS = (
+    "new", "order", "orders", "ordered", "procure", "procurement", "procured",
+    "purchase", "purchased", "delivery", "delivered", "introduce", "introduced",
+    "deployment", "deployed", "upgrade", "upgraded", "modernization", "modernisation",
+    "performance", "maintenance", "overhaul", "fleet", "採購", "訂購", "交車",
+    "導入", "投入", "性能", "維修", "更新",
+)
+
+DEPOT_FACILITY_TERMS = (
+    "maintenance facility", "maintenance depot", "train maintenance facility",
+    "depot maintenance", "depot", "workshop", "operations and maintenance centre",
+    "operations and maintenance center", "機廠", "維修廠", "維修中心",
+)
 
 NON_CORE_EQUIPMENT_TERMS = (
     "elevator", "elevators", "lift", "lifts", "escalator", "escalators",
@@ -1770,13 +1784,38 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             if _contains_any_term(text, list(CORE_SYSTEM_TERM_GROUPS[label]))
         ]
         rolling_stock_specific_terms = (
-            "rolling stock", "railcar", "trainset", "trainsets", "train car", "train cars",
-            "metro train", "metro trains", "light rail vehicle", "light rail vehicles",
             "vehicle equipment", "car door", "train door", "bogie", "wheelset", "coupler",
             "propulsion", "traction inverter", "traction inverters", "traction motor",
             "braking system", "brake system", "tcms", "車門", "轉向架", "輪對", "聯結器",
-            "推進", "牽引變流器", "牽引馬達", "煞車", "制動", "車載", "電聯車", "車輛",
+            "推進", "牽引變流器", "牽引馬達", "煞車", "制動", "車載",
         )
+        has_depot_facility = _contains_any_term(text, list(DEPOT_FACILITY_TERMS))
+        has_specific_vehicle_evidence = _contains_any_term(text, list(rolling_stock_specific_terms))
+        text_lower = text.casefold()
+        has_vehicle_event = bool(
+            re.search(
+                r"\b(?:new|order(?:s|ed)?|procure(?:d|ment)?|purchase(?:d)?|deliver(?:y|ed)?|"
+                r"introduc(?:e|ed|tion)|deploy(?:ed|ment)?|upgrade(?:d)?|moderni[sz](?:e|ed|ation)|"
+                r"performance|maintenan(?:ce|t)|overhaul)\b.{0,50}\b(?:rolling stock|vehicle fleet|"
+                r"metro trains?|trains?|列車|車輛)\b",
+                text_lower,
+            )
+            or re.search(
+                r"\b(?:rolling stock|vehicle fleet|metro trains?|trains?|列車|車輛)\b.{0,50}\b(?:"
+                r"maintenan(?:ce|t)|overhaul|performance|upgrade(?:d)?|moderni[sz](?:e|ed|ation))\b",
+                text_lower,
+            )
+            or (
+                _contains_any_term(text, ["rolling stock", "vehicle fleet", "trainset", "trainsets"])
+                and _contains_any_term(text, list(ROLLING_STOCK_EVENT_TERMS))
+            )
+        )
+        if (
+            (has_specific_vehicle_evidence or has_vehicle_event)
+            and "電聯車" not in systems
+            and (not has_depot_facility or has_specific_vehicle_evidence)
+        ):
+            systems.append("電聯車")
         if (
             "號誌" in systems
             and "電聯車" in systems

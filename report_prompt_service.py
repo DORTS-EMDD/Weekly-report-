@@ -55,6 +55,44 @@ def formal_selected_type_labels(selected_types: list[str]) -> list[str]:
     return labels
 
 
+_GENERIC_SOURCE_LABELS = {
+    "資料來源未明確辨識",
+    "來源未明確",
+    "未提供來源名稱",
+    "原始候選資料未提供來源",
+}
+
+
+def _formal_source_display(
+    candidate: dict,
+    source_url: str,
+    *,
+    context: ReportPromptContext,
+) -> str:
+    source_display = str(candidate.get("source_display", "") or "").strip()
+    if source_display and source_display not in _GENERIC_SOURCE_LABELS:
+        return source_display
+    return str(
+        candidate.get("source_domain")
+        or context.domain_from_url(source_url)
+        or context.extract_domain_hint(source_url)
+        or ""
+    ).strip()
+
+
+def _authoritative_candidate_classification(
+    candidate: dict,
+    *,
+    context: ReportPromptContext,
+) -> str:
+    for key in ("classification", "primary_category", "preliminary_type"):
+        value = str(candidate.get(key, "") or "").strip()
+        if value in context.advanced_types:
+            return value
+    inferred = str(context.infer_preliminary_type(candidate) or "").strip()
+    return inferred if inferred in context.advanced_types else ""
+
+
 def format_selection_candidate(
     candidate: dict,
     *,
@@ -301,33 +339,10 @@ def parse_selection_response(
             continue
         if not truthy_report_flag(item.get("include_in_report", item.get("是否建議納入正式週報"))):
             continue
-        classification = (
-            item.get("classification")
-            or item.get("category")
-            or item.get("分類")
-            or item.get("topic_type")
-            or item.get("類型")
-            or item.get("preliminary_type")
-            or "技術新知"
-        )
-        if classification == OPERATIONAL_DYNAMICS_CATEGORY_LABEL:
-            candidate_category = (
-                candidate_map[candidate_id].get("classification")
-                or candidate_map[candidate_id].get("preliminary_type")
-                or "營運政策"
-            )
-            classification = (
-                candidate_category
-                if candidate_category in {"營運政策", "營運爭議"}
-                else "營運政策"
-            )
-        elif classification == SERVICE_OPENING_CATEGORY_KEY:
-            classification = "營運政策"
-        if classification not in context.advanced_types:
-            classification = next((category for category in context.advanced_types if category in str(item)), "技術新知")
+        candidate = dict(candidate_map[candidate_id])
+        classification = _authoritative_candidate_classification(candidate, context=context)
         if classification not in context.selected_types:
             continue
-        candidate = dict(candidate_map[candidate_id])
         candidate["classification"] = classification
         candidate["selected_reason"] = item.get("selected_reason") or item.get("入選理由") or item.get("reason") or "MaiAgent 第一階段選題入選。"
         candidate["selection_priority"] = item.get("priority", "")
@@ -356,7 +371,9 @@ def parse_selection_response(
 
     for candidate_id in fallback_ids[:context.selection_max_items]:
         candidate = dict(candidate_map[candidate_id])
-        candidate["classification"] = next((category for category in context.selected_types if category in response_text), context.selected_types[0] if context.selected_types else "技術新知")
+        candidate["classification"] = _authoritative_candidate_classification(candidate, context=context)
+        if candidate["classification"] not in context.selected_types:
+            continue
         candidate["selected_reason"] = "MaiAgent 第一階段回應未完全符合 JSON，已依回應中的候選編號納入。"
         candidate["include_in_report"] = True
         selected.append(candidate)
@@ -371,10 +388,9 @@ def parse_selection_response(
     )
     for candidate in candidates[:fallback_count]:
         backup = dict(candidate)
-        if "規範更新" in context.selected_types and context.is_standard_update_candidate(f"{backup.get('title')} {backup.get('snippet')} {backup.get('url')}", True):
-            backup["classification"] = "規範更新"
-        else:
-            backup["classification"] = context.selected_types[0] if context.selected_types else "技術新知"
+        backup["classification"] = _authoritative_candidate_classification(backup, context=context)
+        if backup["classification"] not in context.selected_types:
+            continue
         backup["selected_reason"] = "MaiAgent 第一階段回應格式無法解析；依 Python 初篩排序備援納入。"
         backup["include_in_report"] = True
         selected.append(backup)
@@ -387,9 +403,8 @@ def format_report_candidate(
     context: ReportPromptContext,
 ) -> str:
     source_url = context.effective_source_url(candidate)
-    source_display = candidate.get("source_display") or context.source_label_for_report(
-        candidate.get("source", ""), candidate.get("url", ""), candidate.get("source_href", ""), candidate.get("source_tier", "")
-    )
+    source_display = _formal_source_display(candidate, source_url, context=context)
+    classification = _authoritative_candidate_classification(candidate, context=context)
     prompt_item = {
         "candidate_id": candidate.get("candidate_id", candidate.get("id", "")),
         "title": candidate.get("title", ""),
@@ -402,7 +417,7 @@ def format_report_candidate(
         ),
         "core_systems": candidate.get("core_systems", []),
         "technical_themes": candidate.get("technical_themes", []),
-        "preliminary_type": candidate.get("classification") or candidate.get("preliminary_type", context.infer_preliminary_type(candidate)),
+        "classification": classification,
         "url": source_url,
         "snippet": context.shorten(candidate.get("snippet", ""), context.report_snippet_chars),
         "source_domain": candidate.get("source_domain") or context.domain_from_url(source_url) or context.extract_domain_hint(source_url),
@@ -538,8 +553,8 @@ def build_report_prompt(
 - 資料來源 URL 必須逐字沿用候選資料的 url；禁止改寫、縮成首頁 domain 或自行產生網址。Python 會在輸出後再次以 candidate_id 驗證並覆寫 URL。
 - 候選資料未提供可靠中文名稱時，保留原文站名、路線、車型、供應商與地名，可使用「原文＋中文通用類型」（例如 `Buangkok MRT 站`、`Bakerloo Line`）；不得依模型記憶把一個外國實體替換成另一個既有中文名稱。
 - 正式報告新聞數可因同一事件合併或明顯錯誤候選排除而小於入選數，不得因後處理或自行新增事件而大於本次入選數。
-- 候選資料中的 preliminary_type、classification、region、source_display 與 source_verb 均為程式初步判定，不是最終答案。請根據 title、snippet、date、source_domain 與 url 重新判斷新聞類型、事件所在地及來源性質。
-- 可在本次已勾選的新聞類型之間更正分類；不同且符合範圍的事件原則上保留，同一事件必須合併，明顯錯誤候選可排除，且不得新增未勾選章節。
+- 候選資料中的 classification 已由 Python 完成選題與分類，是正式章節的權威欄位；請依 classification 指定的章節撰寫，不得自行跨章節重新分類。
+- 營運政策、營運爭議與 service_opening 的 classification 均須留在「三、營運動態」；同一事件可合併不同來源，但不得因合併而改到其他章節。
 
 新聞類型判斷原則：
 - 技術新知：原始資料明確描述都市軌道機電設備或系統的新導入、擴充、升級、汰換、改善、測試驗證或正式投入營運。包括新型車輛投入營運、生物辨識或 AFC 系統應用、新票閘設備、號誌與列車控制、供電、通訊、月臺門、行控、機廠維修設備、維修監測、能源管理、系統整合、系統保證及資安等具體案例；純電梯、電扶梯或空調汰換不因設備名稱本身列入。
@@ -566,7 +581,7 @@ def build_report_prompt(
 - 資料不足時直接縮短摘要，不得於正文列舉技術規格、時程、測試內容或其他未提供項目。
 - 每則「臺北捷運局啟示」只選擇與該事件最直接相關的一至二項工程重點，不得每則同時羅列系統整合、資料治理、維修管理、資安、能源效率及風險控管。例如票閘設備著重 AFC 介面、容量與維修；電梯汰換著重設備生命週期、施工界面與無障礙服務；號誌事故著重故障隔離、備援與營運應變。
 - 「相關機電系統」只可從候選 core_systems 原樣選用：電聯車、號誌、供電、通訊、自動收費、機廠維修設備、月臺門。車門、轉向架、聯結器、CBTC、CCTV、SCADA、AI、資安、RAMS、環控、電梯、電扶梯與軌道只能在摘要或啟示中作為技術主題；core_systems 為空時省略本欄位，不得寫「未明確」或泛稱「都市軌道系統」。
-- 資料來源請依 source_domain、source_display、date 與 url 表達；連結依「原始文章 URL、Google News 文章 URL、domain」順序選用。若有完整 URL，必須保留該 URL；若只有 domain，顯示 domain；若無可用連結，僅列來源名稱且不得說明資料缺漏。不得自行編造 URL。
+- 資料來源欄請優先直接使用候選 payload 的 source_display；source_display 非空時不得改寫，也不得輸出「資料來源未明確辨識」、「來源未明確」、「未提供來源名稱」或「原始候選資料未提供來源」。source_display 為空時使用 source_domain；兩者皆空時只列候選 URL，不得杜撰媒體名稱。連結依候選 url 逐字沿用，不得縮成首頁 domain 或自行編造 URL。
 - 若事件摘要使用 supplemental_sources 的供應商、技術或數據資訊，資料來源欄必須同時列出主要來源與相應補充來源的完整連結。例如 TTC Line 2 摘要若使用 Hitachi 數位號誌或 40% 容量資訊，必須同時列出 TTC 主要來源及 Hitachi／Newswire 補充來源。
 - 不得在正式報告正文使用 MaiAgent、Python 初篩、developer debug、python_score、候選 flags、入選原因或其他模型處理語氣。
 - 請勿輸出「本期統計」、「報告產出時間」、搜尋次數、候選數量或任何系統執行資訊；這些內容將由程式後續統一產生。
