@@ -1686,7 +1686,59 @@ def remove_authoritative_candidate_markers(text: str) -> str:
     return marker_line.sub("", text)
 
 
-def _authoritative_block_field_status(report_md: str) -> list[dict]:
+_UNKNOWN_COUNTRY_VALUES = {"", "未判定", "未知", "不明", "未明"}
+_GENERIC_SOURCE_FALLBACKS = (
+    "資料來源未明確辨識",
+    "來源未明確",
+    "未提供來源名稱",
+    "原始候選資料未提供來源",
+)
+_SOURCE_ATTRIBUTION_PREFIX = re.compile(
+    r"^\s*[^。！？\n]{1,80}?(?:報導|指出|表示|稱|提到)\s*[，,:：,]\s*"
+)
+
+
+def _authoritative_block_field_values(lines: list[str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    current_field = ""
+    field_pattern = re.compile(
+        r"^\s*[•*\-]?\s*(發布/事件日期|事件日期|日期|國家(?:/地區)?|相關機電系統|事件摘要|臺北捷運局啟示|資料來源)\s*[:：]\s*(.*)$"
+    )
+    field_names = {
+        "發布/事件日期": "date",
+        "事件日期": "date",
+        "日期": "date",
+        "國家": "country",
+        "國家/地區": "country",
+        "相關機電系統": "system",
+        "事件摘要": "summary",
+        "臺北捷運局啟示": "insight",
+        "資料來源": "source",
+    }
+    for raw_line in lines:
+        line = raw_line.strip()
+        match = field_pattern.match(line)
+        if match:
+            current_field = field_names[match.group(1)]
+            values[current_field] = match.group(2).strip()
+            continue
+        if not line or line.startswith(("#", "🔹", "<!--", "&lt;!--")):
+            current_field = ""
+            continue
+        if current_field:
+            values[current_field] = f"{values[current_field]} {line}".strip()
+    return values
+
+
+def _is_unknown_country(value: object) -> bool:
+    return str(value or "").strip() in _UNKNOWN_COUNTRY_VALUES
+
+
+def _authoritative_block_field_status(
+    report_md: str,
+    *,
+    country_by_id: dict[int, str] | None = None,
+) -> list[dict]:
     marker_pattern = re.compile(
         r"^(?:<!--\s*candidate_id\s*:\s*(\d+)\s*-->|&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;)$",
         flags=re.IGNORECASE,
@@ -1707,9 +1759,15 @@ def _authoritative_block_field_status(report_md: str) -> list[dict]:
         nonlocal current_ids, current_lines
         if not current_ids:
             return
+        required_field_names = dict(required_fields)
+        if country_by_id and current_ids and all(
+            _is_unknown_country(country_by_id.get(candidate_id, ""))
+            for candidate_id in current_ids
+        ):
+            required_field_names.pop("country", None)
         missing_fields = [
             name
-            for name, matcher in required_fields.items()
+            for name, matcher in required_field_names.items()
             if not any(matcher(line) for line in current_lines)
         ]
         reasons = []
@@ -1719,6 +1777,8 @@ def _authoritative_block_field_status(report_md: str) -> list[dict]:
             reasons.append("missing_required_fields")
         blocks.append({
             "candidate_ids": list(current_ids),
+            "body": "\n".join(current_lines).strip(),
+            "field_values": _authoritative_block_field_values(current_lines),
             "missing_fields": missing_fields,
             "parser_failure_reason": ";".join(reasons),
         })
@@ -1753,6 +1813,14 @@ def validate_authoritative_report(
         int(item.get("candidate_id") or item.get("id") or 0)
         for item in selected_candidates or []
     ]
+    selected_map = {
+        int(item.get("candidate_id") or item.get("id") or 0): item
+        for item in selected_candidates or []
+    }
+    country_by_id = {
+        candidate_id: str(candidate.get("country") or "").strip()
+        for candidate_id, candidate in selected_map.items()
+    }
     model_ids = list(candidate_validation.get("found_ids", []))
     selected_category_labels = {
         OPERATIONAL_DYNAMICS_CATEGORY_LABEL
@@ -1773,7 +1841,10 @@ def validate_authoritative_report(
     )
     article_count = count_authoritative_report_items(report_md)
     category_counts = count_authoritative_report_items_by_category(report_md)
-    block_field_status = _authoritative_block_field_status(report_md)
+    block_field_status = _authoritative_block_field_status(
+        report_md,
+        country_by_id=country_by_id,
+    )
     missing_model_fields = {
         str(candidate_id): status["missing_fields"]
         for status in block_field_status
@@ -1786,6 +1857,37 @@ def validate_authoritative_report(
         if status["parser_failure_reason"]
         for candidate_id in status["candidate_ids"]
     }
+    content_quality_issues: list[dict] = []
+    for status in block_field_status:
+        fields = status.get("field_values", {})
+        summary = str(fields.get("summary", "") or "").strip()
+        source = str(fields.get("source", "") or "").strip()
+        for candidate_id in status.get("candidate_ids", []):
+            candidate = selected_map.get(candidate_id, {})
+            if str(fields.get("country", "") or "").strip() in _UNKNOWN_COUNTRY_VALUES:
+                if fields.get("country", ""):
+                    content_quality_issues.append({
+                        "candidate_id": candidate_id,
+                        "code": "unknown_country_in_formal_report",
+                        "detail": "正式報告不可輸出國家：未判定",
+                    })
+            if _SOURCE_ATTRIBUTION_PREFIX.match(summary):
+                content_quality_issues.append({
+                    "candidate_id": candidate_id,
+                    "code": "source_prefixed_summary",
+                    "detail": "事件摘要不可由來源名稱加報導、指出或表示開頭",
+                })
+            candidate_source = str(
+                candidate.get("source_display") or candidate.get("source_domain") or ""
+            ).strip()
+            if candidate_source and any(
+                phrase in source for phrase in _GENERIC_SOURCE_FALLBACKS
+            ):
+                content_quality_issues.append({
+                    "candidate_id": candidate_id,
+                    "code": "generic_source_fallback",
+                    "detail": "候選已有來源資訊時不可使用泛用來源 fallback",
+                })
     forbidden_internal_phrases = [
         phrase
         for phrase in ("模型：MaiAgent 雲端 API", "[[candidate", "候選資料指出")
@@ -1802,9 +1904,11 @@ def validate_authoritative_report(
         and not missing_sections
         and not missing_model_fields
         and not forbidden_internal_phrases
+        and not content_quality_issues
     )
     return {
         **candidate_validation,
+        "retry_required": not passed,
         "selected_candidate_ids": selected_ids,
         "model_candidate_ids": model_ids,
         "selected_candidate_id_count": len(selected_ids),
@@ -1818,6 +1922,8 @@ def validate_authoritative_report(
         "model_block_field_status": block_field_status,
         "missing_model_fields": missing_model_fields,
         "parser_failure_reasons": parser_failure_reasons,
+        "content_quality_issues": content_quality_issues,
+        "content_quality_passed": not content_quality_issues,
         "report_validation_passed": passed,
     }
 
@@ -2011,11 +2117,8 @@ def _journal_theme_summary(journal_candidates: list[dict], *, context: ReportPos
     return themes or ['都市軌道機電系統資料化、智慧化與維運管理']
 
 def build_journal_summary_conclusion(journal_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
-    themes = _unique_limited(_journal_theme_summary(journal_candidates, context=context), 4, context=context)
-    theme_text = '、'.join(themes)
-    source_names = _unique_limited([item.get('journal_name') or item.get('source') or _domain_from_url(item.get('url', '')) for item in journal_candidates or []], 4, context=context)
-    source_text = '、'.join(source_names) if source_names else '本期入選研究來源'
-    return f'本期國際學術期刊補充依系統取得之正式期刊或可信研究頁面整理，入選研究主要來自{source_text}，觀察主題集中於{theme_text}等方向。整體而言，近期都市軌道研究已由單一設備改善，逐步轉向以資料、模型與系統整合支撐營運安全、維修決策及能源效率管理。相關研究對臺北捷運局之啟示，在於新線規劃與既有系統更新時，應及早界定資料來源、欄位格式、系統介面、模型驗證、維修流程與營運安全邊界；導入 AI、數位分身或預測維護等工具時，也應避免僅著重演算法展示，而需同步建立資料品質、資安權限、異常處置與跨系統驗證機制。後續可將此類研究作為機電系統需求規劃、維修管理制度、能源效率策略及風險控管之參考來源，並以可追溯、可驗證、可維運為技術導入原則。'
+    del journal_candidates, context
+    return ''
 
 
 def remove_journal_summary_conclusion(report_md: str) -> str:
@@ -2023,7 +2126,7 @@ def remove_journal_summary_conclusion(report_md: str) -> str:
         r"(?ms)^\s*(?:#{0,6}\s*)?[【\[]?\s*學術期刊綜合結論\s*[】\]]?\s*:?.*?(?=^📊|^⏰|\Z)",
         "",
         report_md or "",
-        count=1,
+        count=0,
     ).strip()
 
 def ensure_journal_summary_conclusion(report_md: str, journal_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
@@ -2103,8 +2206,6 @@ def _is_canonical_journal_section(section: str, *, context: ReportPostprocessCon
     required_fields = ['發表日期', '期刊／來源', '研究主題', '研究摘要', '臺北捷運局啟示', '資料來源']
     item_count = 0
     current_fields: list[str] = []
-    conclusion_count = 0
-    in_conclusion = False
 
     def _field_name(line: str) -> str:
         match = re.match('^•\\s*(發表日期|期刊[/／]來源|研究主題|研究摘要|臺北捷運局啟示|資料來源)\\s*[：:].+', line.strip())
@@ -2118,15 +2219,7 @@ def _is_canonical_journal_section(section: str, *, context: ReportPostprocessCon
         if re.fullmatch('#{1,6}', line):
             return False
         if '學術期刊綜合結論' in line:
-            conclusion_count += 1
-            if conclusion_count > 1:
-                return False
-            if item_count and current_fields != required_fields:
-                return False
-            in_conclusion = True
-            continue
-        if in_conclusion:
-            continue
+            return False
         if re.match('^◆\\s*\\[學術期刊\\]\\s*\\S+', line):
             if item_count and current_fields != required_fields:
                 return False
@@ -2142,7 +2235,7 @@ def _is_canonical_journal_section(section: str, *, context: ReportPostprocessCon
         return False
     if item_count <= 0:
         return False
-    return current_fields == required_fields or in_conclusion
+    return current_fields == required_fields
 
 def normalize_journal_section_format(report_md: str, journal_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
     if not context.include_research_supplement or not journal_candidates or (not report_md):
@@ -2156,8 +2249,6 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
     before = report_md[:heading_match.start()]
     section = report_md[heading_match.start():section_end]
     after = report_md[section_end:]
-    if _is_canonical_journal_section(section, context=context):
-        return report_md
     section = re.sub('(?<=[^\\n])(?=\\d+、(?!發表日期|期刊[/／]來源|研究主題|研究摘要|臺北捷運局啟示|資料來源))', '\n', section)
     section = re.sub('(?<=[^\\n])(\\s*#{0,6}\\s*學術期刊綜合結論)', '\\n\\1', section)
     lines = section.splitlines()
@@ -2315,6 +2406,7 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
         seen_fields = seen_fields_by_item.setdefault(item_index, set())
         if field in seen_fields:
             return
+        _append_blank_if_needed()
         output.append(f'• {field}：{_repair_field_value(field, value, item_index)}')
         seen_fields.add(field)
 
@@ -2358,10 +2450,8 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
 # Extracted formal-report reconciliation and diagnostics.
 
 def count_journal_summary_conclusion_chars(report_md: str, *, context: ReportPostprocessContext) -> int:
-    match = re.search('學術期刊綜合結論[】\\]]?\\s*\\n?(.+?)(?=^📊|^⏰|\\Z)', report_md or '', flags=re.DOTALL | re.MULTILINE)
-    if not match:
-        return 0
-    return len(re.sub('\\s+', '', match.group(1)))
+    del report_md, context
+    return 0
 
 def enforce_research_section(report_md: str, journal_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
     if not context.include_research_supplement:

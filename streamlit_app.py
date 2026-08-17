@@ -76,6 +76,7 @@ from report_postprocessor import (
     strip_event_summary_source_lead_in,
     strip_internal_report_fields,
     strip_report_footer_lines,
+    validate_authoritative_report as service_validate_authoritative_report,
     apply_final_report_footer as service_apply_final_report_footer,
     final_report_statistics_line as service_final_report_statistics_line,
     merge_operational_report_sections as service_merge_operational_report_sections,
@@ -2401,9 +2402,13 @@ if generate_btn:
             stage_start = time.perf_counter()
             raw_report = call_maiagent_cloud(report_prompt)
             initial_raw_report = raw_report
-            report_id_validation_before_retry = validate_report_candidate_ids(raw_report, selected_candidates)
+            report_id_validation_before_retry = service_validate_authoritative_report(
+                raw_report,
+                selected_candidates,
+                selected_types=selected_types,
+            )
             report_retry_attempted = False
-            if not report_id_validation_before_retry.get("valid"):
+            if report_id_validation_before_retry.get("retry_required"):
                 report_retry_attempted = True
                 retry_prompt = build_report_retry_prompt(
                     report_prompt,
@@ -2412,7 +2417,11 @@ if generate_btn:
                 )
                 raw_report = call_maiagent_cloud(retry_prompt)
                 maiagent_call_count += 1
-            report_id_validation_after_retry = validate_report_candidate_ids(raw_report, selected_candidates)
+            report_id_validation_after_retry = service_validate_authoritative_report(
+                raw_report,
+                selected_candidates,
+                selected_types=selected_types,
+            )
             raw_report_candidate_ids = extract_report_candidate_ids(raw_report)
             maiagent_report_response_count = count_authoritative_report_items(raw_report)
             timings["elapsed_seconds_report"] = round(time.perf_counter() - stage_start, 2)

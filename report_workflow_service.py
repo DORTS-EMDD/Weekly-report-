@@ -74,6 +74,7 @@ from report_postprocessor import (
     normalize_journal_section_format,
     normalize_report_section_numbering,
     remove_authoritative_candidate_markers,
+    remove_journal_summary_conclusion,
     repair_generic_report_titles,
     repair_journal_dates_in_report,
     repair_report_region_lines,
@@ -606,9 +607,16 @@ class WorkflowRuntime:
         journal_candidates: list[dict] | None = None,
         id_validation_target: dict | None = None,
     ) -> dict:
-        del journal_candidates
         authoritative_report_md = raw_report if isinstance(raw_report, str) else str(raw_report or "")
         validation_target = id_validation_target if id_validation_target is not None else {}
+        if self.config.include_research_supplement:
+            authoritative_report_md = remove_journal_summary_conclusion(authoritative_report_md)
+            if journal_candidates:
+                authoritative_report_md = normalize_journal_section_format(
+                    authoritative_report_md,
+                    journal_candidates,
+                    context=self.postprocess_context(validation_target),
+                )
         validation = validate_authoritative_report(
             authoritative_report_md,
             selected_candidates,
@@ -711,9 +719,13 @@ def run_report_workflow(
     if not dependencies.call_maiagent:
         raise RuntimeError("未提供 MaiAgent callable")
     raw_report = dependencies.call_maiagent(report_prompt)
-    validation = validate_report_candidate_ids(raw_report, selected_candidates)
+    validation = validate_authoritative_report(
+        raw_report,
+        selected_candidates,
+        selected_types=config.selected_types,
+    )
     retry_attempted = False
-    if not validation.get("valid"):
+    if validation.get("retry_required"):
         retry_attempted = True
         raw_report = dependencies.call_maiagent(
             build_report_retry_prompt(report_prompt, raw_report, validation)
@@ -726,7 +738,11 @@ def run_report_workflow(
         raw_rss=raw_rss,
         raw_ddg=raw_ddg,
         report_prompt=report_prompt,
-        report_id_validation=validate_report_candidate_ids(raw_report, selected_candidates),
+        report_id_validation=validate_authoritative_report(
+            raw_report,
+            selected_candidates,
+            selected_types=config.selected_types,
+        ),
         retry_attempted=retry_attempted,
         source_statuses=source_statuses,
         ddgs_statuses=ddgs_statuses,

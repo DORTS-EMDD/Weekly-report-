@@ -11,7 +11,6 @@ from config import (
     OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
     SERVICE_OPENING_CATEGORY_KEY,
 )
-from article_processor import normalize_country
 
 
 @dataclass(frozen=True)
@@ -61,6 +60,8 @@ _GENERIC_SOURCE_LABELS = {
     "未提供來源名稱",
     "原始候選資料未提供來源",
 }
+
+_UNKNOWN_COUNTRY_VALUES = {"", "未判定", "未知", "不明", "未明"}
 
 
 def _formal_source_display(
@@ -405,24 +406,31 @@ def format_report_candidate(
     source_url = context.effective_source_url(candidate)
     source_display = _formal_source_display(candidate, source_url, context=context)
     classification = _authoritative_candidate_classification(candidate, context=context)
+    raw_country = candidate.get("country")
+    country = str(raw_country or "").strip()
+    if country in _UNKNOWN_COUNTRY_VALUES:
+        country = ""
     prompt_item = {
         "candidate_id": candidate.get("candidate_id", candidate.get("id", "")),
         "title": candidate.get("title", ""),
         "date": candidate.get("date", ""),
         "source_display": source_display,
         "source_verb": candidate.get("source_verb", context.source_verb_for_report(candidate.get("source_tier", ""), source_display)),
-        "country": candidate.get(
-            "country",
-            normalize_country(candidate.get("resolved_region") or candidate.get("region", "未判定")),
-        ),
         "core_systems": candidate.get("core_systems", []),
         "technical_themes": candidate.get("technical_themes", []),
         "classification": classification,
         "url": source_url,
         "snippet": context.shorten(candidate.get("snippet", ""), context.report_snippet_chars),
         "source_domain": candidate.get("source_domain") or context.domain_from_url(source_url) or context.extract_domain_hint(source_url),
+        "resolved_region": candidate.get("resolved_region", ""),
+        "region_resolution_method": candidate.get("region_resolution_method", ""),
+        "region_resolution_evidence": candidate.get("region_resolution_evidence", ""),
+        "operator": candidate.get("operator") or candidate.get("operator_name") or candidate.get("operator_key", ""),
+        "system_name": candidate.get("system_name") or candidate.get("system") or "",
         "supplemental_sources": candidate.get("supplemental_sources", []),
     }
+    if country:
+        prompt_item["country"] = country
     return json.dumps(prompt_item, ensure_ascii=False)
 
 
@@ -471,19 +479,31 @@ def build_report_prompt(
 ## {research_heading}
 
 1、繁體中文研究標題
+
 • 發表日期：YYYY-MM-DD
+
 • 期刊／來源：期刊完整名稱
+
 • 研究主題：研究主題
+
 • 研究摘要：完整段落
+
 • 臺北捷運局啟示：完整段落
+
 • 資料來源：完整 URL
 
 2、繁體中文研究標題
+
 • 發表日期：YYYY-MM-DD
+
 • 期刊／來源：期刊完整名稱
+
 • 研究主題：研究主題
+
 • 研究摘要：完整段落
+
 • 臺北捷運局啟示：完整段落
+
 • 資料來源：完整 URL
 
 期刊格式要求：
@@ -492,9 +512,8 @@ def build_report_prompt(
 - 統一使用「期刊／來源」，不得使用「期刊/來源」。
 - 不得重複日期、期刊名稱、研究主題或資料來源。
 - 不得在各欄位前新增流水編號，不得使用「[技術研究補充]」。
-- 各篇期刊之間保留一個空行，不得使用「---」分隔。
-- 所有期刊完成後，另起一行輸出「### 學術期刊綜合結論」，並撰寫 300～500 字完整段落。
-- 綜合結論僅能依候選研究歸納共同技術趨勢及對臺北捷運局之啟示，不得杜撰研究成果。
+- 各篇期刊之間保留清楚空行，不得使用「---」分隔。
+- 最後一篇期刊結束後直接結束本章，不得輸出「學術期刊綜合結論」或任何綜合結論文字。
 - 請勿在期刊章節後輸出本期統計、報告產出時間或系統資訊。
 
 若沒有候選，請只寫：「本期未發現符合期間條件且具明確發表日期之國際學術或技術研究資料。」
@@ -522,7 +541,7 @@ def build_report_prompt(
 > 資料涵蓋期間：{context.date_range}
 > 報導範圍：{context.report_scope_label}
 
-正式報告每則新聞請使用以下格式，不得改成表格、簡報式卡片或多層條列，不得新增「技術關鍵字」欄位，不得把「臺北捷運局啟示」拆成子欄位。候選資料中的 country 是正式國家欄位；core_systems 為空時，完全省略「相關機電系統」欄位，不得自行補上通用名稱：
+正式報告每則新聞請使用以下格式，不得改成表格、簡報式卡片或多層條列，不得新增「技術關鍵字」欄位，不得把「臺北捷運局啟示」拆成子欄位。候選資料中的 country 是正式國家欄位；若 payload 未提供 country，僅可依候選證據判斷，仍無法判斷時省略「國家」欄位；core_systems 為空時，完全省略「相關機電系統」欄位，不得自行補上通用名稱：
 🔹 [新聞類型] 繁體中文新聞標題
 
 • 發布/事件日期：YYYY-MM-DD
@@ -570,6 +589,7 @@ def build_report_prompt(
 地區與來源判斷：
 - 國家／地區以事件實際發生地為準，不得以旅客國籍、媒體所在地、搜尋語言或來源網站所在地判斷。
 - 若標題或摘要已明確出現城市、國家或營運機構，應更正程式初判。例如 Mumbai 應判為印度、St. Paul 應判為美國、Moscow 應判為俄羅斯；原始資料確實無法判定時，才寫「未判定」。
+- 若 Python payload 已提供非空 country，正式報告的「國家」欄位必須原樣沿用，不得改成城市或其他地區。若 payload 未提供 country，可僅依候選提供的城市、地名、營運機構、捷運系統名稱、來源及事件文字判斷最可能的國家；此權限僅限國家欄位，不得因此補充其他事件事實。仍無法合理判斷時，省略「國家」欄位，絕不得輸出「國家：未判定」。
 - 只有政府機關、交通主管機關、捷運營運機構及其官方網站，才可使用「公告」或「官方資料」。MSN、Yahoo、一般新聞媒體、入口網站與轉載平台一律使用「報導」，不得寫成「官方公告」。
 - source_display 或 source_verb 若與 source_domain 明顯矛盾，應以 source_domain 所代表的實際來源性質為準。
 
@@ -577,6 +597,7 @@ def build_report_prompt(
 - 每則新聞標題必須翻成繁體中文正式標題；機構、車型或系統縮寫可保留。
 - 發布／事件日期統一顯示為 YYYY-MM-DD，不得輸出 ISO 時間、時區或 `T00:00:00+00:00`。
 - 「事件摘要：」與「臺北捷運局啟示：」後方必須換行，摘要與啟示不得使用條列。
+- 事件摘要第一句必須直接進入事件主體，不得以媒體、網站或來源名稱加「報導／指出／表示」開頭；來源歸屬統一置於「資料來源」欄位。
 - 事件摘要僅根據候選資料撰寫，重點為事件本身、都市軌道場景、涉及的機電系統或營運管理意義。原始資料未提供細節時應保守表述，不得自行補述數字、供應商、金額、GoA 等級、測試項目、車輛規格、事故原因或導入時程。
 - 資料不足時直接縮短摘要，不得於正文列舉技術規格、時程、測試內容或其他未提供項目。
 - 每則「臺北捷運局啟示」只選擇與該事件最直接相關的一至二項工程重點，不得每則同時羅列系統整合、資料治理、維修管理、資安、能源效率及風險控管。例如票閘設備著重 AFC 介面、容量與維修；電梯汰換著重設備生命週期、施工界面與無障礙服務；號誌事故著重故障隔離、備援與營運應變。
@@ -585,7 +606,7 @@ def build_report_prompt(
 - 若事件摘要使用 supplemental_sources 的供應商、技術或數據資訊，資料來源欄必須同時列出主要來源與相應補充來源的完整連結。例如 TTC Line 2 摘要若使用 Hitachi 數位號誌或 40% 容量資訊，必須同時列出 TTC 主要來源及 Hitachi／Newswire 補充來源。
 - 不得在正式報告正文使用 MaiAgent、Python 初篩、developer debug、python_score、候選 flags、入選原因或其他模型處理語氣。
 - 請勿輸出「本期統計」、「報告產出時間」、搜尋次數、候選數量或任何系統執行資訊；這些內容將由程式後續統一產生。
-- 未啟用國際學術期刊時，正式報告正文結束於最後一則新聞；啟用期刊時，正文結束於「學術期刊綜合結論」。
+- 未啟用國際學術期刊時，正式報告正文結束於最後一則新聞；啟用期刊時，正文結束於最後一篇期刊，不得輸出「學術期刊綜合結論」。
 
 ## 已入選新聞資料
 {candidate_block}

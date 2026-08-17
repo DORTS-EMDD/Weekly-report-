@@ -21,14 +21,14 @@ EXPECTED_SCENARIO_SHA256 = {
         "365343dc903adff584034e1d32a976a648073afdcb4f351d2c4134500f55a36b"
     ),
     "weekly_with_journal": (
-        "6dc6b6a903b839f0923d7915b825be7f60d137b21c4860f6e397e2d8e045499c"
+        "ccf0eab8f58bd5d1d612725b77037e1a9db4a80052b4b3cfa260b53be66f63b0"
     ),
     "annual_with_journal": (
-        "e781a59f53b3f3026451bd8083faa7e7ca0184b87b7759bb714e9a2c0652ecc7"
+        "e22a9f6c083ba5c977c2ce43d09e86ccc93eca87fcb013633511f7a1527e17c0"
     ),
 }
 EXPECTED_AGGREGATE_SHA256 = (
-    "17c3bace80fbd768ec856db935d11a223973159593c1104b45b2e5b5b0bb084d"
+    "271be1b3ec1155192e70637df9e964fca2aaf133a3e77bfac1837095322e636e"
 )
 
 

@@ -236,13 +236,15 @@ def validate_report_candidate_ids(report_md: str, selected_candidates: list[dict
 
 
 def build_report_retry_prompt(original_prompt: str, previous_response: str, validation: dict) -> str:
+    quality_issues = validation.get("content_quality_issues", [])
     return f"""{original_prompt}
 
 ## 輸出完整性重試
-上一次輸出未通過 candidate_id 驗證。
+上一次輸出未通過正式報告驗證。
 - 缺少 ID：{validation.get('missing_ids', [])}
 - 未知 ID：{validation.get('unknown_ids', [])}
 - 重複 ID：{validation.get('duplicate_ids', [])}
+- 內容品質問題：{quality_issues}
 請重新輸出完整報告。每個 expected candidate_id 必須且只能出現一次，標記格式必須是 `<!-- candidate_id: N -->`，並緊接在該則正式新聞標題前。不得只補局部段落。
 
 上一次輸出僅供修正格式參考：
