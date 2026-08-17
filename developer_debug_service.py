@@ -2,6 +2,7 @@
 
 import datetime
 import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -53,6 +54,14 @@ def build_runtime_version() -> dict:
     for module_name, module_hash in module_hashes.items():
         fingerprint[f"{module_name}_hash"] = module_hash
     return fingerprint
+
+
+def build_runtime_module_fingerprint(runtime_version: dict) -> str:
+    module_hashes = runtime_version.get("module_sha1", {}) if isinstance(runtime_version, dict) else {}
+    if not isinstance(module_hashes, dict):
+        return ""
+    payload = json.dumps(module_hashes, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -228,6 +237,8 @@ def build_developer_debug_payload(
             "dedup_count": latest_stats.get("deduped_count", 0),
             "filtered_count": latest_stats.get("filtered_count", 0),
             "selected_count": latest_stats.get("ai_selected_count", 0),
+            "reconciled_accepted_count": latest_stats.get("reconciled_accepted_count", latest_stats.get("final_unique_article_count", 0)),
+            "final_rendered_report_count": latest_stats.get("final_rendered_report_count", latest_stats.get("formal_count", 0)),
             "final_report_count": latest_stats.get("formal_count", 0),
             "prompt_chars": latest_stats.get("prompt_chars", 0),
             "raw_chars": latest_stats.get("raw_chars", 0),
@@ -327,6 +338,7 @@ def build_developer_debug_payload(
             "journal_shortfall_reason": latest_stats.get("journal_shortfall_reason", debug_info.get("journal_shortfall_reason", "")),
             "journal_summary_conclusion_chars": latest_stats.get("journal_summary_conclusion_chars", debug_info.get("journal_summary_conclusion_chars", 0)),
             "journal_exclusion_stats": latest_stats.get("journal_exclusion_stats", debug_info.get("journal_exclusion_stats", {})),
+            "journal_query_source_outcomes": latest_stats.get("journal_query_source_outcomes", debug_info.get("journal_query_source_outcomes", {})),
             "selection_method": latest_stats.get("selection_method", debug_info.get("selection_method", "")),
             "demo_cache_mode": latest_stats.get("demo_cache_mode", run_config.get("demo_cache_mode", False)),
             "include_research_supplement": latest_stats.get("include_research_supplement", run_config.get("include_research_supplement", False)),

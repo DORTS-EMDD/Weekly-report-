@@ -65,7 +65,7 @@ DDGS_RESULTS = [
     },
 ]
 
-PRE_SPLIT_PAYLOAD_SHA256 = "c1d21a6e40c984b461f521eaaf953f91f323e79d2f36fd83a5503c8187e84b76"
+PRE_SPLIT_PAYLOAD_SHA256 = "f5bae91a074cfc3b375a2a6a58a672390dadab639b1b6eae35d655b85e8564eb"
 
 
 class FakeResponse:
@@ -197,6 +197,10 @@ class JournalServiceCompatibilityTest(unittest.TestCase):
             self.assertIn(reason, exclusion_reasons)
         diagnostics = next(row for row in wrapper_payload["statuses"] if row.get("query") == "journal_diagnostics")
         self.assertIn("IEEE Xplore", diagnostics["journal_elapsed_by_source"])
+        source_outcomes = diagnostics["journal_query_source_outcomes"]
+        for source_name in ("IEEE Xplore", "ScienceDirect", "MDPI", "Taylor & Francis", "Springer"):
+            self.assertIn(source_name, source_outcomes)
+            self.assertGreaterEqual(source_outcomes[source_name]["executed_query_count"], 1)
         self.assertIn("journal_timings", diagnostics)
         self.assertGreaterEqual(len(wrapper_payload["statuses"]), 8)
 

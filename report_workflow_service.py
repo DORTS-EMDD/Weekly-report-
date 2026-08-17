@@ -60,6 +60,8 @@ from report_postprocessor import (
     apply_final_report_footer,
     build_long_term_coverage_warning,
     build_journal_summary_conclusion,
+    count_report_items,
+    count_report_items_by_category,
     ensure_journal_summary_conclusion,
     ensure_supplemental_sources_in_report,
     enforce_research_section,
@@ -653,6 +655,13 @@ class WorkflowRuntime:
         ]
         validated = ensure_supplemental_sources_in_report(validated, selected_candidates, context=context)
         validated = remove_missing_data_disclaimers(validated)
+        validated, canonical_reconciliation = reconcile_report_candidate_output(
+            validated,
+            selected_candidates,
+            context=context,
+        )
+        context.id_validation_target.clear()
+        context.id_validation_target.update(canonical_reconciliation)
         validated = insert_annual_observation_section(validated, context=context)
         validated = normalize_report_section_numbering(
             validated,
@@ -668,11 +677,28 @@ class WorkflowRuntime:
             include_research_supplement=self.config.include_research_supplement,
             today=self.config.today,
         )
+        rendered_count = count_report_items(clean)
+        rendered_category_counts = count_report_items_by_category(clean)
+        context.id_validation_target["final_rendered_report_count"] = rendered_count
+        context.id_validation_target["rendered_count_by_category"] = rendered_category_counts
+        context.id_validation_target["reconciled_accepted_count"] = canonical_reconciliation.get(
+            "reconciled_accepted_count",
+            canonical_reconciliation.get("final_unique_article_count", 0),
+        )
+        final_skipped_ids = set(context.id_validation_target.get("skipped_candidate_ids", []))
+        dropped = [
+            candidate
+            for candidate in selected_candidates
+            if int(candidate.get("candidate_id") or candidate.get("id") or 0) in final_skipped_ids
+        ]
         return {
             "validated_report": validated,
             "clean_report": clean,
             "id_validation": validation_target,
             "dropped_candidates": dropped,
+            "reconciled_accepted_count": context.id_validation_target.get("reconciled_accepted_count", 0),
+            "final_rendered_report_count": rendered_count,
+            "final_count_by_category": rendered_category_counts,
         }
 
     def postprocess_report(

@@ -16,7 +16,7 @@ import streamlit_app as app
 
 # 舊 Golden 無對應歷史 fixture；新基準來自 tracked demo_debug.json 與目前正式後處理流程。
 EXPECTED_DEMO_REPORT_SHA256 = (
-    "a5a0931bd985da5d9c1f36b436d25226f018435d41ce0a7ff580e31f990df2f3"
+    "321f8d8115a794119458b0ad3590ba3f6822772830bc1d915c4493d85e0cb807"
 )
 EXPECTED_DEMO_PDF_SHA256 = (
     "65300567785691ec0cc33b94d72bc65b551025e977b8a616b66e3ea87103a830"

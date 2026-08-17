@@ -103,6 +103,7 @@ from journal_service import (
     _research_date_info as service_research_date_info,
     collect_journal_candidates as service_collect_journal_candidates,
     fetch_journal_page_metadata as service_fetch_journal_page_metadata,
+    journal_query_source_outcomes,
 )
 from ddgs_search_service import (
     DDGS_ERROR_STATUSES,
@@ -146,6 +147,8 @@ from developer_debug_service import (
     _debug_candidate_rows as service_debug_candidate_rows,
     _debug_strip_internal_fields as service_debug_strip_internal_fields,
     _json_safe as service_json_safe,
+    build_runtime_module_fingerprint,
+    build_runtime_version,
     build_developer_debug_payload as service_build_developer_debug_payload,
 )
 from ui_style_service import load_streamlit_css
@@ -300,7 +303,30 @@ def clear_old_report_state() -> None:
 
 current_app_hash = get_app_source_hash()
 previous_app_hash = st.session_state.get("_app_source_hash")
+current_runtime_version = build_runtime_version()
+current_runtime_fingerprint = build_runtime_module_fingerprint(current_runtime_version)
+previous_runtime_fingerprint = st.session_state.get("_runtime_module_fingerprint")
+if not previous_runtime_fingerprint:
+    latest_debug_payload = st.session_state.get("latest_debug_payload")
+    if not isinstance(latest_debug_payload, dict):
+        latest_debug_payload = {}
+    previous_runtime_version = (
+        st.session_state.get("_runtime_version")
+        or latest_debug_payload.get("run_info", {}).get("runtime_version", {})
+    )
+    previous_runtime_fingerprint = build_runtime_module_fingerprint(previous_runtime_version)
+runtime_changed = (
+    bool(previous_app_hash and previous_app_hash != current_app_hash)
+    or bool(previous_runtime_fingerprint and previous_runtime_fingerprint != current_runtime_fingerprint)
+)
 st.session_state["_app_source_hash"] = current_app_hash
+st.session_state["_runtime_module_fingerprint"] = current_runtime_fingerprint
+st.session_state["_runtime_version"] = current_runtime_version
+if runtime_changed:
+    clear_old_report_state()
+    st.session_state["_runtime_change_notice_pending"] = True
+if st.session_state.pop("_runtime_change_notice_pending", False):
+    st.info("偵測到新版程式，已清除上一版本報告。")
 
 # ── 日期與常數 ──────────────────────────────────────────────
 today = datetime.date.today()
@@ -2411,9 +2437,15 @@ if generate_btn:
             report_id_validation_before_clean = reconciliation_diagnostics.get(
                 "after_reconcile", {}
             )
-            validated_report_count = reconciliation_diagnostics.get(
-                "final_unique_article_count", count_report_items(validated_report)
+            reconciled_accepted_count = postprocess_result.get(
+                "reconciled_accepted_count",
+                reconciliation_diagnostics.get("reconciled_accepted_count", 0),
             )
+            rendered_report_count = postprocess_result.get(
+                "final_rendered_report_count",
+                count_report_items(clean_report),
+            )
+            validated_report_count = rendered_report_count
             selected_final_count_validation_passed = bool(
                 reconciliation_diagnostics.get("final_candidate_id_integrity_passed", False)
                 and validated_report_count == len(
@@ -2434,12 +2466,11 @@ if generate_btn:
                 )
                 for item in dropped_selected_candidates
             ]
-            formal_count = reconciliation_diagnostics.get(
-                "final_unique_article_count", count_report_items(clean_report)
-            )
+            formal_count = rendered_report_count
             postprocess_news_count_delta = formal_count - maiagent_report_response_count
-            category_counts = reconciliation_diagnostics.get(
-                "final_count_by_category", count_report_items_by_category(clean_report)
+            category_counts = postprocess_result.get(
+                "final_count_by_category",
+                count_report_items_by_category(clean_report),
             )
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
                 re.search(r"(?m)^🔹\s*\[規範更新\]", clean_report)
@@ -2449,6 +2480,8 @@ if generate_btn:
             pipeline_debug_stats = candidate_pool.get("pipeline_debug_stats", {})
             pipeline_counts = pipeline_debug_stats.setdefault("pipeline_counts", {})
             pipeline_counts["selected"] = len(selected_candidates)
+            pipeline_counts["reconciled_accepted"] = reconciled_accepted_count
+            pipeline_counts["rendered"] = rendered_report_count
             pipeline_debug_stats["selected_count"] = len(selected_candidates)
             operational_topic_selected_count = sum(
                 1
@@ -2505,7 +2538,9 @@ if generate_btn:
                 "formal_count": formal_count,
                 "maiagent_report_response_count": maiagent_report_response_count,
                 "postprocess_news_count_delta": postprocess_news_count_delta,
-                "postprocess_news_count_invariant_passed": formal_count == len(selected_candidates),
+                "postprocess_news_count_invariant_passed": formal_count == reconciled_accepted_count,
+                "reconciled_accepted_count": reconciled_accepted_count,
+                "final_rendered_report_count": rendered_report_count,
                 "selected_final_count_invariant_passed": selected_final_count_validation_passed,
                 "report_retry_attempted": report_retry_attempted,
                 "report_id_validation_before_retry": report_id_validation_before_retry,
@@ -2520,8 +2555,9 @@ if generate_btn:
                 "fallback_block_count": reconciliation_diagnostics.get("fallback_block_count", 0),
                 "fallback_reason_counts": reconciliation_diagnostics.get("fallback_reason_counts", {}),
                 "merged_event_groups": reconciliation_diagnostics.get("merged_event_groups", []),
-                "final_unique_article_count": reconciliation_diagnostics.get("final_unique_article_count", formal_count),
-                "final_count_by_category": reconciliation_diagnostics.get("final_count_by_category", category_counts),
+                "final_unique_article_count": rendered_report_count,
+                "final_count_by_category": category_counts,
+                "rendered_count_by_category": category_counts,
                 "final_count_by_section": reconciliation_diagnostics.get("final_count_by_section", {}),
                 "postprocess_warnings": reconciliation_diagnostics.get("postprocess_warnings", []),
                 "prompt_chars": prompt_chars,
@@ -2625,6 +2661,7 @@ if generate_btn:
                 "journal_target_count": get_journal_target_count(research_supplement_lookback_days)[0] if include_research_supplement else 0,
                 "journal_selected_count": len(journal_candidates),
                 "journal_exclusion_stats": _journal_exclusion_stats(journal_excluded_candidates),
+                "journal_query_source_outcomes": journal_query_source_outcomes(journal_statuses),
                 "journal_shortfall_reason": _journal_shortfall_reason(len(journal_candidates), get_journal_target_count(research_supplement_lookback_days)[0], journal_excluded_candidates) if include_research_supplement else "",
                 "journal_summary_conclusion_chars": count_journal_summary_conclusion_chars(clean_report),
                 "selection_method": "python_score_rules",
@@ -2661,6 +2698,7 @@ if generate_btn:
                 "journal_excluded_candidates": journal_excluded_candidates,
                 "journal_selected_candidates": journal_candidates,
                 "journal_exclusion_stats": _journal_exclusion_stats(journal_excluded_candidates),
+                "journal_query_source_outcomes": journal_query_source_outcomes(journal_statuses),
                 "journal_source_statuses": journal_statuses,
                 "journal_target_count": get_journal_target_count(research_supplement_lookback_days)[0] if include_research_supplement else 0,
                 "journal_selected_count": len(journal_candidates),

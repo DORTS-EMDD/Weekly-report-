@@ -373,6 +373,52 @@ def _journal_exclusion_stats(excluded: list[dict]) -> dict:
     return stats
 
 
+def journal_query_source_outcomes(statuses: list[dict]) -> dict[str, dict]:
+    outcomes: dict[str, dict] = {}
+    domain_hints = {
+        "IEEE Xplore": "ieeexplore.ieee.org",
+        "ScienceDirect": "sciencedirect.com",
+        "MDPI": "mdpi.com",
+        "Taylor & Francis": "tandfonline.com",
+        "Springer": "link.springer.com",
+    }
+    for row in statuses or []:
+        source_name = str(row.get("source_family") or "").strip()
+        if not source_name:
+            query = str(row.get("query") or "")
+            source_name = "source_pages" if row.get("timing_stage") == "source_page_fetch" else (
+                "precision_queries" if query in JOURNAL_PRECISION_QUERIES else (
+                    "exploratory_queries" if query in JOURNAL_EXPLORATORY_QUERIES else "other_queries"
+                )
+            )
+        outcome = outcomes.setdefault(
+            source_name,
+            {
+                "query_count": 0,
+                "executed_query_count": 0,
+                "accepted_count": 0,
+                "nonzero_result_query_count": 0,
+                "failed_query_count": 0,
+                "domains": [],
+                "statuses": [],
+            },
+        )
+        outcome["query_count"] += 1
+        outcome["executed_query_count"] += 1
+        accepted_count = int(row.get("count", 0) or 0)
+        outcome["accepted_count"] += accepted_count
+        status = str(row.get("status") or "")
+        if accepted_count or status == "成功":
+            outcome["nonzero_result_query_count"] += 1
+        if status.startswith("失敗") or "失敗" in status:
+            outcome["failed_query_count"] += 1
+        domain = _domain_from_url(str(row.get("url") or "")) or domain_hints.get(source_name, "")
+        if domain and domain not in outcome["domains"]:
+            outcome["domains"].append(domain)
+        outcome["statuses"].append(status or "未提供狀態")
+    return outcomes
+
+
 def _journal_shortfall_reason(selected_count: int, target_min: int, excluded: list[dict]) -> str:
     if selected_count >= target_min:
         return "已達學術期刊目標篇數下限。"
@@ -539,7 +585,7 @@ def collect_journal_candidates(
         except Exception as exc:
             elapsed = time.perf_counter() - query_started
             journal_timings["ddgs_search"] += elapsed
-            statuses.append({"query": query_text, "status": f"失敗：{exc}", "count": 0, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
+            statuses.append({"query": query_text, "source_family": "precision_queries" if idx <= len(JOURNAL_PRECISION_QUERIES) else "exploratory_queries", "status": f"失敗：{exc}", "count": 0, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
             continue
 
         accepted = 0
@@ -550,7 +596,7 @@ def collect_journal_candidates(
                 accepted += 1
         elapsed = time.perf_counter() - query_started
         journal_timings["ddgs_search"] += elapsed
-        statuses.append({"query": query_text, "status": "成功" if accepted else "無符合研究", "count": accepted, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
+        statuses.append({"query": query_text, "source_family": "precision_queries" if idx <= len(JOURNAL_PRECISION_QUERIES) else "exploratory_queries", "status": "成功" if accepted else "無符合研究", "count": accepted, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
 
     for source_name, query in JOURNAL_SOURCE_QUERY_SPECS:
         for _ in range(max(0, int(JOURNAL_SOURCE_QUERY_BUDGET))):
@@ -646,6 +692,7 @@ def collect_journal_candidates(
         "journal_selected_count_by_domain": domain_selected_counts,
         "journal_elapsed_by_source": elapsed_by_source,
         "journal_timings": journal_timings,
+        "journal_query_source_outcomes": journal_query_source_outcomes(statuses),
         "timing_stage": "summary",
     })
     for item in selected:

@@ -375,6 +375,47 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
             "未明確",
         )
 
+    def test_electromechanical_mapping_requires_physical_evidence(self):
+        self.assertEqual(
+            app.normalize_electromechanical_system_value(
+                "",
+                "voestalpine new urban track: tram and light rail embedded track system",
+            ),
+            "軌道系統",
+        )
+        self.assertEqual(
+            app.normalize_electromechanical_system_value(
+                "",
+                "TTC Long Branch Loop tram track renewal",
+            ),
+            "軌道系統",
+        )
+        signalling = app.normalize_electromechanical_system_value(
+            "",
+            "Washington Metro Red Line train control room flooding and signalling problems",
+        )
+        self.assertEqual(signalling, "號誌系統")
+        self.assertEqual(
+            app.normalize_electromechanical_system_value("train and tram operations"),
+            "未明確",
+        )
+        self.assertIn(
+            "車輛系統",
+            app.normalize_electromechanical_system_value("Brno KT8 battery-powered vehicle"),
+        )
+
+    def test_electromechanical_procurement_scope_without_detail_stays_explicitly_unknown(self):
+        candidate = _candidate(
+            24,
+            "桃園捷運棕線機電系統統包工程決標",
+            "本案公告完成決標，原始資料未列出各分項設備或系統規格。",
+            category="機電標案",
+        )
+        fallback = app._fallback_report_block(candidate)
+        self.assertIn("桃園捷運棕線機電系統統包工程決標", fallback)
+        self.assertIn("• 相關機電系統：未明確", fallback)
+        self.assertNotRegex(fallback, r"號誌系統|供電系統|通訊系統|自動收費系統")
+
     def test_source_line_uses_canonical_markdown_link(self):
         source = normalize_source_line(
             "• 資料來源：來源名稱：https://example.com/source，2026-08-01"

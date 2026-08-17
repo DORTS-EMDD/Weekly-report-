@@ -1013,11 +1013,12 @@ CANONICAL_ELECTROMECHANICAL_SYSTEMS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("通訊系統", ("communication", "telecom", "radio", "wireless communication", "通訊", "無線電", "光纖")),
     ("供電系統", ("traction power", "power supply", "substation", "scada", "traction", "供電", "牽引供電", "變電站", "電力系統")),
     ("自動收費系統", ("automatic fare collection", "fare gate", "ticketing", "afc", "自動收費", "票務", "閘門")),
-    ("車輛系統", ("rolling stock", "trainset", "metro train", "light rail vehicle", "vehicle", "train", "電聯車", "列車", "車輛", "電車", "低地板車")),
+    ("車輛系統", ("rolling stock", "rolling-stock", "trainset", "train vehicle", "vehicle equipment", "vehicle system", "vehicle fleet", "fleet", "battery vehicle", "battery-powered vehicle", "battery-powered", "vehicle replacement", "rolling stock replacement", "metro train vehicle", "light rail vehicle", "電聯車設備", "列車系統", "車輛設備", "車輛更新", "低地板車")),
     ("月台門系統", ("platform screen door", "platform door", "psd", "月台門", "月臺門")),
     ("機廠設備", ("depot electromechanical", "depot e&m", "depot mep", "機廠機電", "機廠設備", "機廠")),
     ("通風空調系統", ("ventilation", "hvac", "air conditioning", "smoke control", "通風", "空調", "環控")),
-    ("軌道／轉轍設備", ("track circuit", "track equipment", "switch machine", "turnout", "軌道設備", "轉轍", "道岔")),
+    ("軌道系統", ("embedded track", "tram track", "rail track", "track renewal", "track system", "track equipment", "rail infrastructure", "軌道系統", "軌道更新", "鋼軌")),
+    ("軌道／轉轍設備", ("track circuit", "switch machine", "turnout", "轉轍", "道岔")),
 )
 
 
@@ -1047,9 +1048,10 @@ def normalize_electromechanical_system_value(value: str, context: str = "") -> s
         "cbtc", "train control", "通信", "通訊", "供電", "afc", "scada", "hvac",
         "車輛", "列車", "機廠", "軌道", "轉轍", "道岔",
     )
+    raw_is_generic = raw_value.casefold() in {item.casefold() for item in generic_values}
     raw_has_non_physical = _contains_any_term(raw_value, list(non_physical_terms))
     raw_has_explicit_system = _contains_any_term(raw_value, list(explicit_system_terms))
-    raw_evidence = "" if raw_has_non_physical and not raw_has_explicit_system else raw_value
+    raw_evidence = "" if raw_is_generic or (raw_has_non_physical and not raw_has_explicit_system) else raw_value
     context_evidence = (context or "").replace(raw_value, "")
     evidence = " ".join(part for part in (raw_evidence, context_evidence) if part).strip()
     systems = [
@@ -2731,6 +2733,15 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
             sections.append(f'本期未發現符合條件的{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}資料。')
     research_section = _extract_research_section_for_reconcile(report_md, context=context) if context.include_research_supplement else ''
     if research_section:
+        has_journal_entries = bool(
+            re.search(r"(?m)^\s*(?:◆\s*\[學術期刊\]|\d+[\.、]\s*\S+)", research_section)
+        )
+        if has_journal_entries:
+            research_section = re.sub(
+                r"(?m)^\s*本期未發現符合條件[^\n]*\n?",
+                "",
+                research_section,
+            ).strip()
         sections.extend(['', research_section])
     reconciled = re.sub('\\n{3,}', '\n\n', '\n'.join(sections)).strip()
     deduplicated_ids = set(deduplicated_event_ids)
@@ -2757,6 +2768,13 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         if count > 1
     )
     category_counts = count_report_items_by_category(reconciled)
+    canonical_blocks = [
+        {
+            "candidate_ids": list(record["candidate_ids"]),
+            "category": record["category"],
+        }
+        for record in records
+    ]
     diagnostics = {
         'before_reconcile': initial_validation,
         'fallback_candidate_ids': sorted(set(fallback_ids)),
@@ -2771,6 +2789,8 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         'deduplicated_event_candidate_ids': sorted(set(deduplicated_event_ids)),
         'merged_event_groups': [list(record['candidate_ids']) for record in records if record['model'] and len(record['candidate_ids']) > 1],
         'final_unique_article_count': len(records),
+        'reconciled_accepted_count': len(records),
+        'canonical_blocks': canonical_blocks,
         'final_count_by_category': category_counts,
         'final_count_by_section': {
             heading: sum(1 for record in records if record['category'] in categories)
@@ -2781,9 +2801,15 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         'final_candidate_ids': final_candidate_ids,
         'expected_final_candidate_ids': expected_final_ids,
         'final_candidate_id_duplicates': final_candidate_id_duplicates,
-        'final_candidate_id_integrity_passed': (
-            Counter(final_candidate_ids) == Counter(expected_final_ids)
-            and not skipped_ids
+        'accepted_candidate_ids': sorted(
+            candidate_id
+            for candidate_id in expected_final_ids
+            if candidate_id not in set(skipped_ids)
+        ),
+        'final_candidate_id_integrity_passed': Counter(final_candidate_ids) == Counter(
+            candidate_id
+            for candidate_id in expected_final_ids
+            if candidate_id not in set(skipped_ids)
         ),
     }
     return (reconciled, diagnostics)

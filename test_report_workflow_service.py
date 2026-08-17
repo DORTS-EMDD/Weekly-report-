@@ -201,6 +201,8 @@ class ReportWorkflowServiceTests(unittest.TestCase):
             streamlit = app.ensure_supplemental_sources_in_report(streamlit, [candidate])
             streamlit = app.remove_missing_data_disclaimers(streamlit)
             streamlit = app.insert_annual_observation_section(streamlit)
+            streamlit, _ = app.reconcile_report_candidate_output(streamlit, [candidate])
+            streamlit = app.normalize_report_section_numbering(streamlit)
             streamlit = app.remove_internal_candidate_markers(streamlit)
             streamlit = app.normalize_formal_report_title(streamlit)
             streamlit = app.apply_final_report_footer(streamlit, [])
@@ -208,6 +210,46 @@ class ReportWorkflowServiceTests(unittest.TestCase):
             app.LAST_REPORT_ID_VALIDATION.clear()
             app.LAST_REPORT_ID_VALIDATION.update(original_validation)
         self.assertEqual(streamlit, shared)
+
+    def test_final_counts_use_canonical_blocks_and_exclude_skipped_candidates(self):
+        config = _fixture_config()
+        runtime = workflow_service.make_runtime(
+            config,
+            workflow_service.WorkflowDependencies(prefetch_enabled=False),
+        )
+        accepted = _candidate(15)
+        skipped = _candidate(16)
+        skipped["title"] = "美國 Blue Line 輕軌延伸計畫"
+        skipped["snippet"] = "Blue Line extension project information."
+        raw_report = "\n".join([
+            "<!-- candidate_id: 15 -->",
+            "🔹 [技術新知] 都市軌道 CBTC 移動閉塞控制部署",
+            "• 發布/事件日期：2026-08-10",
+            "• 國家/地區：美國",
+            "• 相關機電系統：號誌系統",
+            "• 事件摘要：都市軌道系統導入移動閉塞控制並完成測試。",
+            "• 臺北捷運局啟示：可作為列車控制驗證與系統介面管理參考。",
+            "• 資料來源：[Fixture Source](https://example.com/fixture/15)",
+            "",
+            "<!-- candidate_id: 16 -->",
+            "🔹 [技術新知] 美國 Blue Line 輕軌延伸計畫",
+        ])
+
+        result = runtime.postprocess_report_with_diagnostics(
+            raw_report,
+            [accepted, skipped],
+        )
+        diagnostics = result["id_validation"]
+        rendered = result["clean_report"]
+
+        self.assertEqual(diagnostics["skipped_candidate_ids"], [16])
+        self.assertNotIn("Blue Line", rendered)
+        self.assertEqual(result["reconciled_accepted_count"], 1)
+        self.assertEqual(result["final_rendered_report_count"], app.count_report_items(rendered))
+        self.assertEqual(result["final_rendered_report_count"], 1)
+        self.assertEqual(diagnostics["final_candidate_ids"], [15])
+        self.assertTrue(diagnostics["final_candidate_id_integrity_passed"])
+        self.assertNotIn("本期未發現符合條件之技術新知", rendered)
 
     def test_main_import_is_safe_and_does_not_run_workflow(self):
         with mock.patch("report_workflow_service.run_report_workflow") as run_workflow:

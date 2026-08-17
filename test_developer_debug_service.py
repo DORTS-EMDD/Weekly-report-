@@ -25,17 +25,17 @@ import streamlit_app as app
 
 
 EXPECTED_SCENARIO_SHA256 = {
-    "fast_mode": "ae92f3e0ff15a7609a3ea4c78e3eae9984a76fd2c8fe8b23592aecbe34d70f33",
-    "full_weekly": "162f8285d33774e21a3f90b58b74999d578e12ff53c49a54e67221ea74572928",
-    "no_debug_info": "8e263789d9ff1a966ca967f0494bf8457ad5567e5ac295ac8a06a31c4d4ecd29",
-    "missing_report_stats": "72b741b3c4ae62c295a47d858a211c16df3dad35438435f9596191e7a6e83b4d",
-    "current_config_fallback": "0574a8ae68e1d6e86aebbf69805c1022ee82855652fa2a6a0bd28208766ce232",
+    "fast_mode": "9e827aa1ba0648abaef838ff3a529e7605eba007c16e0f132e9e2e7cec2119b8",
+    "full_weekly": "631f62f92f84d4e5ab0cc7aa2766a8adca354c934a0a141a6a224510479b3186",
+    "no_debug_info": "0450abf6901c3165f3f63cfe6a0aca433c87f014f0acd548cb8dcdcc072d77df",
+    "missing_report_stats": "4ad38916204b04e9195b6c86ca676376cd7b3dfa0515118f84a3f4f4cc15ffe7",
+    "current_config_fallback": "5f6cdec1eb81e2a04a82fe8530686db159d627028ed1b90e684093231d32bc00",
     "json_safe_types": "5cf8865f0d742f7a4911fb086b889607650d1e869334fdd7ea7de420b17160f5",
-    "internal_fields": "8cabfe101ee625f8c41d492805fbe77afd58cd6b5263c50ca930cd756bbf478b",
-    "empty_candidates": "b9849233814834280e4695457eb7098c197ef5cc35dab889490cf8ef495d74dc",
-    "full_candidates": "df53b4f79910cae31b0882acc411dd3540828eb38741af551d9746aa7e437a5c",
+    "internal_fields": "3de952e3b3fe27d99be09ce4e401e4a7fba3eb42a27968c7ad07b8d0e159fb46",
+    "empty_candidates": "7e1108974ef2a9846138586efb1015440daf60e8c3690d947e7a06535724d362",
+    "full_candidates": "19609f28024e39e61d1132a8484cddd47f0dcb3695a0902cae6eff53f495f571",
 }
-EXPECTED_AGGREGATE_SHA256 = "c12f21b3362c6d50620f2e0c4269b507703f029441dee6627beb73a0d2e917ce"
+EXPECTED_AGGREGATE_SHA256 = "dfb2db6e2ca194819574c047d97a387795a3bf19f1ccdbbca2190e9463cea12e"
 
 
 class FixedDateTime(real_datetime.datetime):
@@ -578,6 +578,18 @@ class DeveloperDebugServiceRegressionTests(unittest.TestCase):
         self.assertTrue(all(len(value) == 40 for value in module_hashes.values()))
         for module_name, module_hash in module_hashes.items():
             self.assertEqual(runtime_version[f"{module_name}_hash"], module_hash)
+
+    def test_runtime_module_fingerprint_detects_core_module_changes(self):
+        original = {"module_sha1": {"streamlit_app": "a", "article_processor": "b"}}
+        changed_core = {"module_sha1": {"streamlit_app": "a", "article_processor": "c"}}
+        self.assertEqual(
+            developer_debug_service.build_runtime_module_fingerprint(original),
+            developer_debug_service.build_runtime_module_fingerprint(original),
+        )
+        self.assertNotEqual(
+            developer_debug_service.build_runtime_module_fingerprint(original),
+            developer_debug_service.build_runtime_module_fingerprint(changed_core),
+        )
 
 
 if __name__ == "__main__":
