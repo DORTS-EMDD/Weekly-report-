@@ -360,8 +360,7 @@ class WorkflowRuntime:
             status_callback=self.dependencies.status_callback,
         )
         include_forward_technology = (
-            self.config.lookback_int >= 365
-            and "技術新知" in self.config.selected_types
+            "技術新知" in self.config.selected_types
         )
         queries, news_indices = build_search_queries(
             context=ddgs_context,

@@ -668,6 +668,44 @@ FORWARD_GATE_BENEFIT_TERMS = [
     "improving fire resistance", "improve thermal performance", "improving thermal performance",
 ]
 
+FORWARD_TRACK_B_EMERGING_TERMS = [
+    "artificial intelligence", "machine learning", "computer vision", "video analytics", "automated inspection",
+    "predictive maintenance", "condition monitoring", "anomaly detection", "fault prediction",
+    "digital twin", "cybersecurity", "cyber security", "control network", "virtual coupling",
+    "system assurance", "rams", "verification and validation", "advanced signalling",
+    "new material", "novel material", "lightweight", "composite", "fire-resistant", "fire resistant",
+    "high-performance material", "new coating", "low-friction", "low friction",
+    "energy optimization", "energy optimisation", "energy efficiency", "regenerative energy",
+    "regenerative braking", "energy storage", "heat recovery", "thermal energy network",
+    "platform cooling", "thermal management", "new sensing method", "new manufacturing method",
+    "new process", "emerging technology", "advanced technology",
+]
+
+FORWARD_TRACK_B_APPLICATION_EVIDENCE_TERMS = [
+    "pilot", "piloted", "pilots", "trial", "trials", "test", "tests", "tested", "testing", "field test", "field-test", "field-tests",
+    "demonstration", "demonstrated", "prototype", "deployed", "deployment", "installed",
+    "implemented", "implements", "deploys", "uses", "use", "in operation", "operational use", "operational", "research deployment",
+    "study", "studies", "studying", "research", "evaluation", "evaluated", "validation", "validated", "verification",
+    "maintenance", "inspection", "monitoring", "fault detection", "in service", "in-service",
+]
+
+FORWARD_TRACK_B_RAIL_TECHNICAL_OBJECT_TERMS = [
+    "rolling stock", "rail vehicle", "rail vehicles", "metro train", "subway train", "vehicle body",
+    "bogie", "traction", "track", "rail component", "signalling", "signaling", "control network",
+    "train control", "station equipment", "platform", "depot", "maintenance", "inspection",
+    "subway platform", "metro system", "rail system", "urban rail system",
+]
+
+FORWARD_TRACK_B_CIVIL_MATERIAL_TERMS = [
+    "building", "buildings", "construction", "civil works", "civil engineering", "concrete",
+    "bridge", "road", "roads", "tunnel construction", "architectural material",
+]
+
+FORWARD_TRACK_B_GENERIC_AI_MARKETING_TERMS = [
+    "ai strategy", "ai investment", "ai market", "ai solution", "ai platform", "smart city",
+    "conference", "marketing", "announced a partnership", "investment in ai",
+]
+
 FORWARD_WATCHLIST_OPERATION_TERMS = [
     "deploy", "deployed", "deploys", "implemented", "installed", "testing", "tested",
     "trial", "trials", "pilot", "pilots", "operational use", "in operation",
@@ -742,6 +780,11 @@ REPORT_SELECTION_DEBUG_DEFAULT = {
     "excluded_by_hard_quality_count": 0,
     "excluded_by_same_event_count": 0,
     "excluded_by_count_cap_count": 0,
+    "track_a_gate_pass_count": 0,
+    "track_b_gate_pass_count": 0,
+    "track_a_selected_count": 0,
+    "track_b_selected_count": 0,
+    "track_b_exclusion_reason_counts": {},
 }
 
 URBAN_RAIL_MODE_TERMS.extend(["metros"])
@@ -1841,6 +1884,79 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
 
 
+    def _is_generic_material_research(candidate: dict) -> bool:
+        text = _candidate_selection_text(candidate)
+        has_material = _contains_any_term(
+            text,
+            [
+                "material", "materials", "composite", "lightweight", "coating",
+                "fire-resistant", "fire resistant", "high-performance material",
+            ],
+        )
+        has_research = _contains_any_term(
+            text,
+            ["research", "researchers", "study", "laboratory", "lab", "material science"],
+        )
+        has_civil_context = _contains_any_term(text, FORWARD_TRACK_B_CIVIL_MATERIAL_TERMS)
+        has_rail_object = _contains_any_term(text, FORWARD_TRACK_B_RAIL_TECHNICAL_OBJECT_TERMS)
+        return has_material and has_research and has_civil_context and not has_rail_object
+
+
+    def _is_generic_ai_marketing(candidate: dict) -> bool:
+        text = _candidate_selection_text(candidate)
+        return (
+            _contains_any_term(text, ["ai", "machine learning", "artificial intelligence"])
+            and _contains_any_term(text, FORWARD_TRACK_B_GENERIC_AI_MARKETING_TERMS)
+            and not _contains_any_term(
+                text,
+                [
+                    "pilot", "trial", "tested", "test", "deployed", "deployment", "installed",
+                    "implemented", "monitoring", "inspection", "predictive maintenance",
+                    "condition monitoring", "anomaly detection", "control network",
+                ],
+            )
+        )
+
+
+    def _compute_cross_system_emerging_technology_gate(candidate: dict) -> dict:
+        text = _candidate_selection_text(candidate)
+        signals = {
+            "urban_rail": _candidate_urban_rail_gate(candidate),
+            "emerging_technology": _contains_any_term(text, FORWARD_TRACK_B_EMERGING_TERMS),
+            "application_or_evidence": _contains_any_term(text, FORWARD_TRACK_B_APPLICATION_EVIDENCE_TERMS),
+            "project_only_clear": not _is_project_only_technical_candidate(candidate),
+            "base_quality": bool(
+                _candidate_date_obj(candidate.get("date", ""))
+                and _has_source_reference(candidate)
+                and candidate.get("source_quality") in {"A", "B"}
+                and candidate.get("source_tier") != "D_proxy_low_value"
+                and not _information_quality_issue(candidate)
+            ),
+            "generic_ai_marketing_clear": not _is_generic_ai_marketing(candidate),
+            "generic_material_research_clear": not _is_generic_material_research(candidate),
+        }
+        failures = []
+        failure_reasons = (
+            ("urban_rail", "missing_urban_rail_context"),
+            ("emerging_technology", "missing_emerging_technology_signal"),
+            ("application_or_evidence", "missing_application_evidence"),
+            ("project_only_clear", "project_only_candidate"),
+            ("base_quality", "source_date_or_content_quality_insufficient"),
+            ("generic_ai_marketing_clear", "generic_ai_marketing"),
+            ("generic_material_research_clear", "generic_material_research"),
+        )
+        for key, reason in failure_reasons:
+            if not signals[key]:
+                failures.append(reason)
+        passed = not failures
+        return {
+            "cross_system_emerging_technology_gate": passed,
+            "track_b_gate_pass": passed,
+            "track_b_gate_signals": signals,
+            "track_b_failure_reasons": failures,
+        }
+
+
     def _is_non_core_equipment_only(candidate: dict) -> bool:
         text = _candidate_selection_text(candidate)
         return bool(
@@ -1887,6 +2003,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
     def _compute_forward_technology_gate(candidate: dict) -> dict:
         text = _candidate_selection_text(candidate)
         is_forward_family = candidate.get("search_family") == "forward_technology"
+        track_b_payload = _compute_cross_system_emerging_technology_gate(candidate)
         signals = {
             "urban_rail": _candidate_urban_rail_gate(candidate),
             "application_object": _contains_any_term(text, FORWARD_GATE_APPLICATION_OBJECT_TERMS),
@@ -1900,26 +2017,42 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 and candidate.get("source_tier") != "D_proxy_low_value"
                 and not _information_quality_issue(candidate)
             ),
-            "project_only_clear": not _is_project_only_technical_candidate(candidate),
+                "project_only_clear": not _is_project_only_technical_candidate(candidate),
         }
+        track_a_gate_pass = bool(
+            _passes_technical_triad(candidate)
+            and signals["application_object"]
+            and signals["novelty"]
+            and signals["validation"]
+            and signals["benefit"]
+        )
+        track_b_gate_pass = bool(track_b_payload.get("track_b_gate_pass"))
+        signals["track_a_gate_pass"] = track_a_gate_pass
+        signals["track_b_gate_pass"] = track_b_gate_pass
         failures = []
         if not is_forward_family:
             failures.append("search_family 不是 forward_technology")
-        for key, reason in (
-            ("urban_rail", "缺少強都市軌道關聯"),
-            ("application_object", "缺少明確捷運應用對象"),
-            ("novelty", "缺少新方法/新技術訊號"),
-            ("validation", "缺少實際試驗/部署/驗證訊號"),
-            ("benefit", "缺少明確改善效果"),
-            ("base_quality", "來源、日期或基本內容品質不足"),
-            ("project_only_clear", "命中 project-only gate"),
-        ):
-            if not signals[key]:
-                failures.append(reason)
+        if not signals["base_quality"]:
+            failures.append("來源、日期或基本內容品質不足")
+        if not signals["project_only_clear"]:
+            failures.append("命中 project-only gate")
+        if not track_a_gate_pass and not track_b_gate_pass:
+            for key, reason in (
+                ("urban_rail", "缺少強都市軌道關聯"),
+                ("application_object", "缺少明確捷運應用對象"),
+                ("novelty", "缺少新方法/新技術訊號"),
+                ("validation", "缺少實際試驗/部署/驗證訊號"),
+                ("benefit", "缺少明確改善效果"),
+            ):
+                if not signals[key]:
+                    failures.append(reason)
+            failures.extend(track_b_payload.get("track_b_failure_reasons", []))
         return {
-            "passes_forward_technology_gate": is_forward_family and not failures,
+            "passes_forward_technology_gate": is_forward_family and not failures and (track_a_gate_pass or track_b_gate_pass),
             "forward_gate_signals": signals,
             "forward_gate_failure_reasons": failures,
+            "track_a_gate_pass": track_a_gate_pass,
+            **track_b_payload,
         }
 
 
@@ -3559,6 +3692,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "passes_forward_technology_gate",
             "forward_gate_signals",
             "forward_gate_failure_reasons",
+            "track_a_gate_pass",
+            "track_b_gate_pass",
+            "cross_system_emerging_technology_gate",
+            "track_b_gate_signals",
+            "track_b_failure_reasons",
             "forward_status",
             "radar_watchlist_pass",
             "radar_watchlist_signals",
@@ -4656,6 +4794,20 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         max_items = max(len(model_candidates or []), min_items)
         grouped: dict[str, list[dict]] = {category: [] for category in selected_types}
         eligible_A_count = 0
+        forward_candidates = [
+            item for item in model_candidates or []
+            if item.get("search_family") == "forward_technology"
+        ]
+        LAST_PYTHON_SELECTION_DEBUG["track_a_gate_pass_count"] = sum(
+            1 for item in forward_candidates if item.get("track_a_gate_pass") is True
+        )
+        LAST_PYTHON_SELECTION_DEBUG["track_b_gate_pass_count"] = sum(
+            1 for item in forward_candidates if item.get("track_b_gate_pass") is True
+        )
+        for item in forward_candidates:
+            for reason in item.get("track_b_failure_reasons", []) or []:
+                counts = LAST_PYTHON_SELECTION_DEBUG["track_b_exclusion_reason_counts"]
+                counts[reason] = counts.get(reason, 0) + 1
         for raw_candidate in model_candidates or []:
             candidate = dict(raw_candidate)
             classification = _selection_classification(candidate)
@@ -4702,6 +4854,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             if item.get("classification") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
         )
         LAST_PYTHON_SELECTION_DEBUG["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("borderline_added_count", 0)
+        LAST_PYTHON_SELECTION_DEBUG["track_a_selected_count"] = sum(
+            1 for item in selected if item.get("track_a_gate_pass") is True
+        )
+        LAST_PYTHON_SELECTION_DEBUG["track_b_selected_count"] = sum(
+            1 for item in selected if item.get("track_b_gate_pass") is True
+        )
         annual_pool = [candidate for candidates in grouped.values() for candidate in candidates]
         selected = rebalance_selected_candidates(selected, annual_pool)
         same_event_count = sum(
@@ -4748,6 +4906,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_core_systems_for_candidate": _core_systems_for_candidate,
         "_technical_themes_for_candidate": _technical_themes_for_candidate,
         "_has_cross_system_technical_application": _has_cross_system_technical_application,
+        "_is_generic_material_research": _is_generic_material_research,
+        "_is_generic_ai_marketing": _is_generic_ai_marketing,
+        "_compute_cross_system_emerging_technology_gate": _compute_cross_system_emerging_technology_gate,
         "_is_non_core_equipment_only": _is_non_core_equipment_only,
         "_candidate_analysis_fingerprint": _candidate_analysis_fingerprint,
         "_candidate_analysis_cache": _candidate_analysis_cache,

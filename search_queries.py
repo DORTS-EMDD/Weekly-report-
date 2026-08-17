@@ -180,13 +180,13 @@ DOMESTIC_ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS = [
 
 FORWARD_TECHNOLOGY_QUERY_SPECS = [
     {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail light rail tram novel material prototype tested reduce vehicle weight energy consumption"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail track rail new coating pilot trial reduce friction wear extend service life"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail novel sensor method field test track inspection reduce inspection time"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail new method predictive maintenance pilot improve reliability reduce maintenance"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail traction power innovative approach demonstration reduce energy consumption improve efficiency"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail new fire resistant insulation material prototype tested improve safety reduce noise emissions"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail newly developed manufacturing process prototype tested extend component service life reduce maintenance"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail emerging technology first application deployed improve reliability efficiency field test"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail track new coating pilot trial reduce friction wear extend service life"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail AI machine learning computer vision sensor pilot automated inspection reduce inspection time"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail predictive maintenance condition monitoring pilot improve reliability reduce maintenance"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail traction energy optimization regenerative energy storage demonstration reduce energy consumption improve efficiency"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail new fire resistant composite insulation material prototype tested improve safety reduce emissions"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail digital twin cybersecurity anomaly detection control network pilot improve reliability"},
+    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail advanced signalling virtual coupling RAMS verification validation field test improve capacity"},
 ]
 
 ANNUAL_TECHNOLOGY_BREAKTHROUGH_QUERY_SPECS = [

@@ -800,9 +800,7 @@ def build_search_queries() -> tuple[list[str], set[int]]:
     query_metadata: dict[str, dict] = {}
     result = service_build_search_queries(
         context=_ddgs_search_context(query_metadata=query_metadata),
-        include_forward_technology=(
-            lookback_int >= 365 and "技術新知" in selected_types
-        ),
+        include_forward_technology="技術新知" in selected_types,
     )
     LAST_DDGS_QUERY_METADATA = query_metadata
     return result
@@ -932,6 +930,15 @@ def build_pipeline_debug_stats(
         if (item.get("category_gates") or {}).get("forward_technology")
         or item.get("passes_forward_technology_gate") is True
     )
+    forward_evaluated_candidates = [
+        item
+        for item in (filtered_candidates or []) + (excluded_candidates or [])
+        if item.get("search_family") == "forward_technology"
+    ]
+    track_b_exclusion_reason_counts: dict[str, int] = {}
+    for item in forward_evaluated_candidates:
+        for reason in item.get("track_b_failure_reasons", []) or []:
+            track_b_exclusion_reason_counts[reason] = track_b_exclusion_reason_counts.get(reason, 0) + 1
     return {
         "pipeline_counts": {
             "raw": len(raw_candidates or []),
@@ -1010,6 +1017,15 @@ def build_pipeline_debug_stats(
         "forward_technology_raw_count": len(forward_raw_candidates),
         "forward_technology_gate_pass_count": forward_gate_pass_count,
         "forward_technology_selected_count": 0,
+        "track_a_gate_pass_count": sum(
+            1 for item in forward_evaluated_candidates if item.get("track_a_gate_pass") is True
+        ),
+        "track_b_gate_pass_count": sum(
+            1 for item in forward_evaluated_candidates if item.get("track_b_gate_pass") is True
+        ),
+        "track_a_selected_count": 0,
+        "track_b_selected_count": 0,
+        "track_b_exclusion_reason_counts": track_b_exclusion_reason_counts,
         "forward_technology_material_candidate_count": sum(
             1 for item in forward_raw_candidates
             if item.get("innovation_level") in {"A", "B"}
@@ -2517,6 +2533,12 @@ if generate_btn:
                 or item.get("validation_evidence")
                 or item.get("benefit_evidence")
             )
+            pipeline_debug_stats["track_a_selected_count"] = sum(
+                1 for item in forward_selected_candidates if item.get("track_a_gate_pass") is True
+            )
+            pipeline_debug_stats["track_b_selected_count"] = sum(
+                1 for item in forward_selected_candidates if item.get("track_b_gate_pass") is True
+            )
             pipeline_debug_stats["strict_selected_count"] = LAST_PYTHON_SELECTION_DEBUG.get("strict_selected_count", 0)
             pipeline_debug_stats["B_added_count"] = LAST_PYTHON_SELECTION_DEBUG.get("B_added_count", 0)
             incident_coverage = build_final_incident_coverage_debug(
@@ -2653,6 +2675,11 @@ if generate_btn:
                 "forward_technology_selected_count": pipeline_debug_stats.get("forward_technology_selected_count", 0),
                 "forward_technology_material_candidate_count": pipeline_debug_stats.get("forward_technology_material_candidate_count", 0),
                 "forward_technology_material_selected_count": pipeline_debug_stats.get("forward_technology_material_selected_count", 0),
+                "track_a_gate_pass_count": pipeline_debug_stats.get("track_a_gate_pass_count", 0),
+                "track_b_gate_pass_count": pipeline_debug_stats.get("track_b_gate_pass_count", 0),
+                "track_a_selected_count": pipeline_debug_stats.get("track_a_selected_count", 0),
+                "track_b_selected_count": pipeline_debug_stats.get("track_b_selected_count", 0),
+                "track_b_exclusion_reason_counts": pipeline_debug_stats.get("track_b_exclusion_reason_counts", {}),
                 "candidate_card_limit": candidate_pool.get("candidate_card_limit", len(candidate_pool["candidate_cards"])),
                 "candidate_card_count": len(candidate_pool["candidate_cards"]),
                 "elapsed_seconds_total": timings["elapsed_seconds_total"],

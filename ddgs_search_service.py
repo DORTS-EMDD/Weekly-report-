@@ -420,8 +420,12 @@ def build_search_queries(
                     date_bucket=bucket,
                 )
         else:
+            forward_reserve = min(len(forward_specs), 8)
+            core_query_limit = max(0, query_limit - forward_reserve)
             for family in content_families:
                 for spec in _active_query_specs(family):
+                    if len(queries) >= core_query_limit:
+                        break
                     _add(
                         spec.get("query", ""),
                         family=spec.get("family", family),
