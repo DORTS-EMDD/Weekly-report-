@@ -34,6 +34,7 @@ from article_processor import (
     _shorten,
     _source_tier_rank,
     _strip_source_name_noise,
+    normalize_country,
 )
 
 LOW_VALUE_POLICY_TERMS = [
@@ -227,6 +228,90 @@ ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS: dict[str, list[str]] = {
         "maintenance services", "rolling stock maintenance", "vehicle maintenance contract",
         "維修服務", "車輛維修服務",
     ],
+}
+
+CORE_SYSTEM_LABELS = (
+    "電聯車",
+    "號誌",
+    "供電",
+    "通訊",
+    "自動收費",
+    "機廠維修設備",
+    "月臺門",
+)
+
+CORE_SYSTEM_TERM_GROUPS: dict[str, tuple[str, ...]] = {
+    "電聯車": (
+        "rolling stock", "railcar", "trainset", "trainsets", "train car", "train cars",
+        "metro train", "metro trains", "train", "trains", "light rail vehicle", "light rail vehicles",
+        "vehicle equipment", "car door", "train door", "bogie", "wheelset",
+        "coupler", "propulsion", "traction inverter", "traction inverters", "traction motor", "braking system",
+        "brake system", "tcms", "rolling-stock", "車門", "轉向架", "輪對",
+        "聯結器", "推進", "牽引變流器", "牽引馬達", "煞車", "制動", "tcms",
+        "車載", "電聯車", "車輛",
+    ),
+    "號誌": (
+        "cbtc", "atp", "ato", "ats", "signalling", "signaling", "signal system",
+        "interlocking", "train control", "train supervision", "wayside signal",
+        "axle counter", "axle counters", "號誌", "信號", "聯鎖", "列車控制",
+        "列控", "行車監控", "自動列車監控", "軸計數器",
+    ),
+    "供電": (
+        "traction power", "traction power supply", "power supply", "traction substation",
+        "substation", "third rail", "third-rail", "overhead catenary", "power rail",
+        "ups", "供電", "牽引供電", "牽引變電站", "變電站", "第三軌", "電力系統",
+        "不斷電系統",
+    ),
+    "通訊": (
+        "cctv", "wireless radio", "radio system", "fiber optic", "fibre optic",
+        "fiber communication", "fibre communication", "pids", "passenger information display",
+        "telecommunications", "telecommunication system", "communications system",
+        "communication network", "telephone system", "通訊", "CCTV", "無線電", "光纖",
+        "旅客資訊顯示", "電話",
+    ),
+    "自動收費": (
+        "automatic fare collection", "afc", "fare gate", "ticket gate", "ticketing system",
+        "ticket vending machine", "contactless payment", "票閘", "售票機", "自動收費",
+        "票務", "感應支付",
+    ),
+    "機廠維修設備": (
+        "wheel lathe", "lifting jack", "train washer", "wash plant", "maintenance equipment",
+        "depot equipment", "workshop equipment", "rescue equipment", "depot electromechanical",
+        "機廠", "車床", "舉升", "洗車", "維修設備", "救援設備",
+    ),
+    "月臺門": (
+        "platform screen door", "platform screen doors", "platform door", "platform doors",
+        "psd", "月臺門", "月台門",
+    ),
+}
+
+NON_CORE_EQUIPMENT_TERMS = (
+    "elevator", "elevators", "lift", "lifts", "escalator", "escalators",
+    "air conditioning", "hvac", "ventilation", "smoke control", "environmental control",
+    "電梯", "升降機", "電扶梯", "空調", "通風", "環控", "環境控制",
+)
+
+CROSS_SYSTEM_TECHNICAL_APPLICATION_TERMS = (
+    "ai image analysis", "image analysis", "video analytics", "predictive maintenance",
+    "condition monitoring", "fault prediction", "fault detection", "digital twin",
+    "data governance", "cybersecurity", "system assurance", "rams", "sil",
+    "verification and validation", "system verification", "interoperability",
+    "system integration", "energy efficiency", "smart dispatch", "passenger analysis",
+    "maintenance decision support", "automated inspection", "operational analysis",
+    "thermal energy network", "heat recovery", "platform cooling", "thermal management",
+    "platform temperature", "cooler subway platforms",
+    "智慧維修", "狀態監測", "預測性維護", "故障預測", "故障偵測", "數位分身",
+    "資料治理", "資安", "系統保證", "互通性", "系統整合", "能源效率", "智慧調度",
+    "旅客分析", "維修決策支援", "自動巡檢", "營運分析",
+)
+
+TECHNICAL_THEME_TERM_GROUPS: dict[str, tuple[str, ...]] = {
+    "人工智慧與影像分析": ("ai", "machine learning", "image analysis", "video analytics", "影像分析", "人工智慧"),
+    "智慧維修與狀態監測": ("predictive maintenance", "condition monitoring", "fault prediction", "fault detection", "smart maintenance", "預測性維護", "狀態監測", "故障偵測", "智慧維修"),
+    "數位分身與資料治理": ("digital twin", "data governance", "數位分身", "資料治理"),
+    "資安與系統保證": ("cybersecurity", "system assurance", "rams", "sil", "資安", "系統保證"),
+    "系統整合與互通": ("system integration", "interoperability", "interface management", "系統整合", "互通性", "介面管理"),
+    "能源效率與環控": ("energy efficiency", "energy saving", "thermal management", "platform cooling", "能源效率", "節能", "熱管理", "月臺降溫"),
 }
 
 ELECTROMECHANICAL_PROCUREMENT_CIVIL_TERMS = [
@@ -1677,6 +1762,55 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return text
 
 
+    def _core_systems_for_candidate(candidate: dict) -> list[str]:
+        text = _candidate_selection_text(candidate)
+        systems = [
+            label
+            for label in CORE_SYSTEM_LABELS
+            if _contains_any_term(text, list(CORE_SYSTEM_TERM_GROUPS[label]))
+        ]
+        rolling_stock_specific_terms = (
+            "rolling stock", "railcar", "trainset", "trainsets", "train car", "train cars",
+            "metro train", "metro trains", "light rail vehicle", "light rail vehicles",
+            "vehicle equipment", "car door", "train door", "bogie", "wheelset", "coupler",
+            "propulsion", "traction inverter", "traction inverters", "traction motor",
+            "braking system", "brake system", "tcms", "車門", "轉向架", "輪對", "聯結器",
+            "推進", "牽引變流器", "牽引馬達", "煞車", "制動", "車載", "電聯車", "車輛",
+        )
+        if (
+            "號誌" in systems
+            and "電聯車" in systems
+            and not _contains_any_term(text, list(rolling_stock_specific_terms))
+        ):
+            systems.remove("電聯車")
+        return systems
+
+
+    def _technical_themes_for_candidate(candidate: dict) -> list[str]:
+        text = _candidate_selection_text(candidate)
+        return [
+            label
+            for label, terms in TECHNICAL_THEME_TERM_GROUPS.items()
+            if _contains_any_term(text, list(terms))
+        ]
+
+
+    def _has_cross_system_technical_application(candidate: dict) -> bool:
+        return _contains_any_term(
+            _candidate_selection_text(candidate),
+            list(CROSS_SYSTEM_TECHNICAL_APPLICATION_TERMS),
+        )
+
+
+    def _is_non_core_equipment_only(candidate: dict) -> bool:
+        text = _candidate_selection_text(candidate)
+        return bool(
+            _contains_any_term(text, list(NON_CORE_EQUIPMENT_TERMS))
+            and not _core_systems_for_candidate(candidate)
+            and not _has_cross_system_technical_application(candidate)
+        )
+
+
     def _candidate_analysis_fingerprint(candidate: dict) -> tuple:
         return (
             candidate.get("title", ""),
@@ -1888,6 +2022,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if _is_accessibility_only_technical_candidate(candidate):
             return False
         text = _candidate_selection_text(candidate)
+        core_systems = _core_systems_for_candidate(candidate)
+        cross_system_application = _has_cross_system_technical_application(candidate)
+        if not core_systems and not cross_system_application:
+            return False
         has_known_system = _contains_any_term(
             text,
             CORE_METRO_TECHNICAL_TERMS
@@ -1913,6 +2051,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
     def _compute_technical_action_gate(candidate: dict) -> bool:
         text = _candidate_selection_text(candidate)
         title = candidate.get("title", "")
+        if _has_cross_system_technical_application(candidate):
+            return True
         if set(_canonical_tags_from_text(text)).intersection({"enter service", "modernization", "upgrade", "deployment"}):
             return True
         if _contains_any_term(text, TECHNICAL_IMPLEMENTATION_TERMS + TITLE_TECHNICAL_ACTION_TERMS):
@@ -1951,6 +2091,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if _is_airport_people_mover_only_text(text, candidate.get("source", "")):
             return False
         if _is_accessibility_only_technical_candidate(candidate):
+            return False
+        if _is_non_core_equipment_only(candidate):
             return False
         if _is_project_only_technical_candidate(candidate):
             return False
@@ -1991,6 +2133,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             title_snippet,
             ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS,
         )
+        core_systems = _core_systems_for_candidate(candidate)
+        cross_system_application = _has_cross_system_technical_application(candidate)
         station_context = _contains_any_term(
             title_snippet,
             ELECTROMECHANICAL_PROCUREMENT_STATION_CONTEXT_TERMS
@@ -2079,6 +2223,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             failures.append(scope_failure)
         if not systems:
             failures.append("electromechanical_system_missing")
+        if systems and not core_systems and not cross_system_application:
+            failures.append("non_core_equipment_only")
         if not actions:
             failures.append("procurement_action_missing")
         if civil_hits and not separate_package:
@@ -3297,6 +3443,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         enriched["source_domain_normalized"] = enriched.get("source_domain_normalized") or _normalize_source_domain(enriched.get("source_domain", ""))
         region_started = time.perf_counter()
         enriched["resolved_region"] = _canonical_candidate_region(enriched)
+        enriched["country"] = normalize_country(enriched["resolved_region"])
+        enriched["core_systems"] = _core_systems_for_candidate(enriched)
+        enriched["technical_themes"] = _technical_themes_for_candidate(enriched)
         _profile_timing_add(profile_timings, "region_resolution", time.perf_counter() - region_started)
         fingerprint_started = time.perf_counter()
         enriched["event_fingerprint"] = build_event_fingerprint(enriched)
@@ -3325,6 +3474,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "source_type": candidate.get("source_type", ""),
             "source_verb": candidate.get("source_verb", ""),
             "region": candidate.get("region", "未判定"),
+            "country": candidate.get(
+                "country",
+                normalize_country(candidate.get("resolved_region") or candidate.get("region", "未判定")),
+            ),
+            "core_systems": candidate.get("core_systems", _core_systems_for_candidate(candidate)),
+            "technical_themes": candidate.get("technical_themes", _technical_themes_for_candidate(candidate)),
             "page_type": candidate.get("page_type", ""),
             "page_type_reason": candidate.get("page_type_reason", ""),
             "date_validation": candidate.get("date_validation", ""),
@@ -4551,6 +4706,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "build_top_excluded_valuable_candidates": build_top_excluded_valuable_candidates,
         "_canonical_tags_from_text": _canonical_tags_from_text,
         "_candidate_selection_text": _candidate_selection_text,
+        "_core_systems_for_candidate": _core_systems_for_candidate,
+        "_technical_themes_for_candidate": _technical_themes_for_candidate,
+        "_has_cross_system_technical_application": _has_cross_system_technical_application,
+        "_is_non_core_equipment_only": _is_non_core_equipment_only,
         "_candidate_analysis_fingerprint": _candidate_analysis_fingerprint,
         "_candidate_analysis_cache": _candidate_analysis_cache,
         "_cached_candidate_bool": _cached_candidate_bool,

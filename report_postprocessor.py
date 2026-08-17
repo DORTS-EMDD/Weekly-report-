@@ -1695,7 +1695,6 @@ def _authoritative_block_field_status(report_md: str) -> list[dict]:
         "title": lambda line: bool(_authoritative_title_line(line)),
         "date": lambda line: bool(re.match(r"^\s*[•*-]?\s*(?:發布/事件日期|事件日期|日期)\s*[:：]", line)),
         "country": lambda line: bool(re.match(r"^\s*[•*-]?\s*國家(?:/地區)?\s*[:：]", line)),
-        "system": lambda line: bool(re.match(r"^\s*[•*-]?\s*相關機電系統\s*[:：]", line)),
         "summary": lambda line: bool(re.match(r"^\s*[•*-]?\s*事件摘要\s*[:：]", line)),
         "insight": lambda line: bool(re.match(r"^\s*[•*-]?\s*臺北捷運局啟示\s*[:：]", line)),
         "source": lambda line: bool(re.match(r"^\s*[•*-]?\s*資料來源\s*[:：]", line)),

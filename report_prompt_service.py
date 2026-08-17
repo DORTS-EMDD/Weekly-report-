@@ -11,6 +11,7 @@ from config import (
     OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
     SERVICE_OPENING_CATEGORY_KEY,
 )
+from article_processor import normalize_country
 
 
 @dataclass(frozen=True)
@@ -395,7 +396,12 @@ def format_report_candidate(
         "date": candidate.get("date", ""),
         "source_display": source_display,
         "source_verb": candidate.get("source_verb", context.source_verb_for_report(candidate.get("source_tier", ""), source_display)),
-        "region": candidate.get("region", "未判定"),
+        "country": candidate.get(
+            "country",
+            normalize_country(candidate.get("resolved_region") or candidate.get("region", "未判定")),
+        ),
+        "core_systems": candidate.get("core_systems", []),
+        "technical_themes": candidate.get("technical_themes", []),
         "preliminary_type": candidate.get("classification") or candidate.get("preliminary_type", context.infer_preliminary_type(candidate)),
         "url": source_url,
         "snippet": context.shorten(candidate.get("snippet", ""), context.report_snippet_chars),
@@ -501,14 +507,14 @@ def build_report_prompt(
 > 資料涵蓋期間：{context.date_range}
 > 報導範圍：{context.report_scope_label}
 
-正式報告每則新聞請使用以下固定格式，不得改成表格、簡報式卡片或多層條列，不得自行增減欄位，不得新增「技術關鍵字」欄位，不得把「臺北捷運局啟示」拆成子欄位：
+正式報告每則新聞請使用以下格式，不得改成表格、簡報式卡片或多層條列，不得新增「技術關鍵字」欄位，不得把「臺北捷運局啟示」拆成子欄位。候選資料中的 country 是正式國家欄位；core_systems 為空時，完全省略「相關機電系統」欄位，不得自行補上通用名稱：
 🔹 [新聞類型] 繁體中文新聞標題
 
 • 發布/事件日期：YYYY-MM-DD
 
-• 國家/地區：
+• 國家：
 
-• 相關機電系統：
+• 相關機電系統：（僅在 core_systems 非空時輸出七大主系統名稱）
 
 • 事件摘要：
 完整段落
@@ -536,8 +542,9 @@ def build_report_prompt(
 - 可在本次已勾選的新聞類型之間更正分類；不同且符合範圍的事件原則上保留，同一事件必須合併，明顯錯誤候選可排除，且不得新增未勾選章節。
 
 新聞類型判斷原則：
-- 技術新知：原始資料明確描述都市軌道機電設備或系統的新導入、擴充、升級、汰換、改善、測試驗證或正式投入營運。包括新型車輛投入營運、生物辨識或 AFC 系統應用、新票閘設備、電梯或電扶梯汰換、號誌與列車控制、供電、通訊、月臺門、行控、機廠設備、維修監測、能源管理、系統整合、系統保證及資安等具體案例。
+- 技術新知：原始資料明確描述都市軌道機電設備或系統的新導入、擴充、升級、汰換、改善、測試驗證或正式投入營運。包括新型車輛投入營運、生物辨識或 AFC 系統應用、新票閘設備、號誌與列車控制、供電、通訊、月臺門、行控、機廠維修設備、維修監測、能源管理、系統整合、系統保證及資安等具體案例；純電梯、電扶梯或空調汰換不因設備名稱本身列入。
 - 技術新知不限於採購、合約或正式上線事件；候選若明確說明都市軌道機電技術原理、工程挑戰或系統應用，即使屬專業技術文章仍應保留。Frauscher 軸計數器與電車號誌工程文章即屬此類，不得只因缺少單一專案事件而刪除。
+- AI、機器學習、影像分析、預測維護、狀態監測、數位分身、資料治理、資安、RAMS、SIL、驗證、系統整合、互通性、智慧調度或維修決策支援等跨系統技術，只要候選資料同時具備明確都市軌道場景與實際技術應用即可保留；不得因 core_systems 為空就刪除，也不得把跨系統主題臆造為七大主系統。
 - 重大事故：已實際發生，且涉及傷亡、出軌、碰撞、火災、重大設備損壞、停駛、重大營運中斷，或具有明確系統安全檢討價值的事件。
 - 事故後的安全改善、設施改善、監管檢討、治理或政策回應，若不是本期新發生事故，應歸入營運動態，不得僅因提到 accident、fatal、safety 或 incident 改列重大事故。
 - 營運政策：票價、服務調整、營運諮詢、預定封閉、例行維修、一般工程安排、旅客服務及治理措施。若新聞同時具有明確設備導入、系統升級或技術驗證內容，應優先歸為技術新知。
@@ -558,7 +565,7 @@ def build_report_prompt(
 - 事件摘要僅根據候選資料撰寫，重點為事件本身、都市軌道場景、涉及的機電系統或營運管理意義。原始資料未提供細節時應保守表述，不得自行補述數字、供應商、金額、GoA 等級、測試項目、車輛規格、事故原因或導入時程。
 - 資料不足時直接縮短摘要，不得於正文列舉技術規格、時程、測試內容或其他未提供項目。
 - 每則「臺北捷運局啟示」只選擇與該事件最直接相關的一至二項工程重點，不得每則同時羅列系統整合、資料治理、維修管理、資安、能源效率及風險控管。例如票閘設備著重 AFC 介面、容量與維修；電梯汰換著重設備生命週期、施工界面與無障礙服務；號誌事故著重故障隔離、備援與營運應變。
-- 「相關機電系統」應保留候選內容可支持的具體且合理用語；不得把「車站無障礙設施、車站機電」降級為「車站、車站機電」，也不得自行擴寫成「電梯、車站電梯」等重複詞。
+- 「相關機電系統」只可從候選 core_systems 原樣選用：電聯車、號誌、供電、通訊、自動收費、機廠維修設備、月臺門。車門、轉向架、聯結器、CBTC、CCTV、SCADA、AI、資安、RAMS、環控、電梯、電扶梯與軌道只能在摘要或啟示中作為技術主題；core_systems 為空時省略本欄位，不得寫「未明確」或泛稱「都市軌道系統」。
 - 資料來源請依 source_domain、source_display、date 與 url 表達；連結依「原始文章 URL、Google News 文章 URL、domain」順序選用。若有完整 URL，必須保留該 URL；若只有 domain，顯示 domain；若無可用連結，僅列來源名稱且不得說明資料缺漏。不得自行編造 URL。
 - 若事件摘要使用 supplemental_sources 的供應商、技術或數據資訊，資料來源欄必須同時列出主要來源與相應補充來源的完整連結。例如 TTC Line 2 摘要若使用 Hitachi 數位號誌或 40% 容量資訊，必須同時列出 TTC 主要來源及 Hitachi／Newswire 補充來源。
 - 不得在正式報告正文使用 MaiAgent、Python 初篩、developer debug、python_score、候選 flags、入選原因或其他模型處理語氣。

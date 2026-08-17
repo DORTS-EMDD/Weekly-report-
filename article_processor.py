@@ -408,7 +408,78 @@ def _canonical_candidate_region(candidate: dict) -> str:
         and method not in {"query_region_fallback", "query_text_fallback"}
         and region != query_region
     )
+    candidate["country"] = normalize_country(region)
     return region
+
+
+_COUNTRY_BY_REGION = {
+    "臺北": "臺灣",
+    "台北": "臺灣",
+    "新北": "臺灣",
+    "桃園": "臺灣",
+    "臺中": "臺灣",
+    "台中": "臺灣",
+    "高雄": "臺灣",
+    "臺灣": "臺灣",
+    "台灣": "臺灣",
+    "東京": "日本",
+    "大阪": "日本",
+    "日本": "日本",
+    "首爾": "韓國",
+    "韓國": "韓國",
+    "新加坡": "新加坡",
+    "香港": "香港",
+    "倫敦": "英國",
+    "London": "英國",
+    "Manchester": "英國",
+    "Manchester Piccadilly": "英國",
+    "英國": "英國",
+    "巴黎": "法國",
+    "法國": "法國",
+    "Berlin": "德國",
+    "Munich": "德國",
+    "柏林": "德國",
+    "慕尼黑": "德國",
+    "德國": "德國",
+    "New York": "美國",
+    "Washington": "美國",
+    "Los Angeles": "美國",
+    "紐約": "美國",
+    "華盛頓": "美國",
+    "美國": "美國",
+    "Toronto": "加拿大",
+    "Vancouver": "加拿大",
+    "多倫多": "加拿大",
+    "溫哥華": "加拿大",
+    "加拿大": "加拿大",
+    "Sydney": "澳洲",
+    "Melbourne": "澳洲",
+    "雪梨": "澳洲",
+    "墨爾本": "澳洲",
+    "澳洲": "澳洲",
+    "Chennai": "印度",
+    "印度": "印度",
+    "Moscow": "俄羅斯",
+    "俄羅斯": "俄羅斯",
+}
+
+
+def normalize_country(region: str) -> str:
+    """Convert an event city or region into the formal country label."""
+    value = re.sub(r"\s+", " ", str(region or "")).strip()
+    if not value:
+        return "未判定"
+    exact = _COUNTRY_BY_REGION.get(value)
+    if exact:
+        return exact
+    folded = value.casefold()
+    for alias, country in sorted(_COUNTRY_BY_REGION.items(), key=lambda item: len(item[0]), reverse=True):
+        if alias.casefold() in folded:
+            return country
+    guessed_region = guess_region_from_text(value)
+    if guessed_region != "未判定":
+        return _COUNTRY_BY_REGION.get(guessed_region, guessed_region)
+    return value
 
 
 _REGION_ALIASES = {
