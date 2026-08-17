@@ -1627,6 +1627,201 @@ def count_report_items_by_category(report_md: str) -> dict[str, int]:
                 break
     return counts
 
+
+_AUTHORITATIVE_CATEGORY_LABELS = (
+    "技術新知",
+    "重大事故",
+    "營運政策",
+    "營運爭議",
+    "營運動態",
+    "service_opening",
+    "規範更新",
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+)
+
+
+def _authoritative_title_line(line: str) -> tuple[str, str] | None:
+    stripped = (line or "").strip()
+    bracket = re.match(r"^🔹\s*\[([^\]]+)\]\s*(\S.*)$", stripped)
+    if bracket:
+        return _canonical_report_category_label(bracket.group(1)), bracket.group(2).strip()
+    pipe = re.match(r"^🔹\s*([^｜|]+?)\s*[｜|]\s*(\S.*)$", stripped)
+    if pipe and pipe.group(1).strip() in _AUTHORITATIVE_CATEGORY_LABELS:
+        return _canonical_report_category_label(pipe.group(1)), pipe.group(2).strip()
+    bare = re.match(
+        rf"^🔹\s*({'|'.join(re.escape(label) for label in _AUTHORITATIVE_CATEGORY_LABELS)})\s+(\S.*)$",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if bare:
+        return _canonical_report_category_label(bare.group(1)), bare.group(2).strip()
+    return None
+
+
+def count_authoritative_report_items(report_md: str) -> int:
+    return sum(1 for line in (report_md or "").splitlines() if _authoritative_title_line(line))
+
+
+def count_authoritative_report_items_by_category(report_md: str) -> dict[str, int]:
+    counts = {category: 0 for category in REPORT_CATEGORY_TYPES}
+    for line in (report_md or "").splitlines():
+        parsed = _authoritative_title_line(line)
+        if not parsed:
+            continue
+        category = parsed[0]
+        if category in {"營運政策", "營運爭議", "營運動態", SERVICE_OPENING_CATEGORY_KEY}:
+            category = OPERATIONAL_DYNAMICS_CATEGORY_LABEL
+        if category in counts:
+            counts[category] += 1
+    return counts
+
+
+def remove_authoritative_candidate_markers(text: str) -> str:
+    """Remove only invisible candidate markers for public rendering."""
+    if not text:
+        return ""
+    marker_line = re.compile(
+        r"(?mi)^[ \t]*(?:<!--\s*candidate_id\s*:\s*\d+\s*-->|&lt;!--\s*candidate\\?_id\s*:\s*\d+\s*--&gt;)[ \t]*(?:\r?\n|$)"
+    )
+    return marker_line.sub("", text)
+
+
+def _authoritative_block_field_status(report_md: str) -> list[dict]:
+    marker_pattern = re.compile(
+        r"^(?:<!--\s*candidate_id\s*:\s*(\d+)\s*-->|&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;)$",
+        flags=re.IGNORECASE,
+    )
+    required_fields = {
+        "title": lambda line: bool(_authoritative_title_line(line)),
+        "date": lambda line: bool(re.match(r"^\s*[•*-]?\s*(?:發布/事件日期|事件日期|日期)\s*[:：]", line)),
+        "country": lambda line: bool(re.match(r"^\s*[•*-]?\s*國家(?:/地區)?\s*[:：]", line)),
+        "system": lambda line: bool(re.match(r"^\s*[•*-]?\s*相關機電系統\s*[:：]", line)),
+        "summary": lambda line: bool(re.match(r"^\s*[•*-]?\s*事件摘要\s*[:：]", line)),
+        "insight": lambda line: bool(re.match(r"^\s*[•*-]?\s*臺北捷運局啟示\s*[:：]", line)),
+        "source": lambda line: bool(re.match(r"^\s*[•*-]?\s*資料來源\s*[:：]", line)),
+    }
+    blocks: list[dict] = []
+    current_ids: list[int] = []
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_ids, current_lines
+        if not current_ids:
+            return
+        missing_fields = [
+            name
+            for name, matcher in required_fields.items()
+            if not any(matcher(line) for line in current_lines)
+        ]
+        reasons = []
+        if "title" in missing_fields:
+            reasons.append("missing_authoritative_title")
+        if missing_fields:
+            reasons.append("missing_required_fields")
+        blocks.append({
+            "candidate_ids": list(current_ids),
+            "missing_fields": missing_fields,
+            "parser_failure_reason": ";".join(reasons),
+        })
+        current_ids = []
+        current_lines = []
+
+    for raw_line in (report_md or "").splitlines():
+        stripped = raw_line.strip()
+        marker = marker_pattern.fullmatch(stripped)
+        if marker:
+            if current_ids and current_lines:
+                flush()
+            current_ids.append(int(marker.group(1) or marker.group(2)))
+            continue
+        if current_ids and stripped.startswith("#") and current_lines:
+            flush()
+        if current_ids:
+            current_lines.append(raw_line)
+    flush()
+    return blocks
+
+
+def validate_authoritative_report(
+    report_md: str,
+    selected_candidates: list[dict],
+    *,
+    selected_types: list[str] | None = None,
+) -> dict:
+    """Validate MaiAgent output without changing its report content."""
+    candidate_validation = validate_report_candidate_ids(report_md, selected_candidates)
+    selected_ids = [
+        int(item.get("candidate_id") or item.get("id") or 0)
+        for item in selected_candidates or []
+    ]
+    model_ids = list(candidate_validation.get("found_ids", []))
+    selected_category_labels = {
+        OPERATIONAL_DYNAMICS_CATEGORY_LABEL
+        if (item.get("classification") or item.get("preliminary_type"))
+        in {"營運政策", "營運爭議", "營運動態", SERVICE_OPENING_CATEGORY_KEY}
+        else item.get("classification") or item.get("preliminary_type")
+        for item in selected_candidates or []
+    }
+    headings = "\n".join(
+        line.strip()
+        for line in (report_md or "").splitlines()
+        if re.match(r"^\s*#{1,6}\s*.*", line)
+    )
+    missing_sections = sorted(
+        category
+        for category in selected_category_labels
+        if category and category not in headings
+    )
+    article_count = count_authoritative_report_items(report_md)
+    category_counts = count_authoritative_report_items_by_category(report_md)
+    block_field_status = _authoritative_block_field_status(report_md)
+    missing_model_fields = {
+        str(candidate_id): status["missing_fields"]
+        for status in block_field_status
+        if status["missing_fields"]
+        for candidate_id in status["candidate_ids"]
+    }
+    parser_failure_reasons = {
+        str(candidate_id): status["parser_failure_reason"]
+        for status in block_field_status
+        if status["parser_failure_reason"]
+        for candidate_id in status["candidate_ids"]
+    }
+    forbidden_internal_phrases = [
+        phrase
+        for phrase in ("模型：MaiAgent 雲端 API", "[[candidate", "候選資料指出")
+        if phrase in (report_md or "")
+    ]
+    selected_to_model_coverage = (
+        len(set(selected_ids).intersection(model_ids)) / len(selected_ids)
+        if selected_ids
+        else 1.0
+    )
+    passed = bool(
+        candidate_validation.get("valid")
+        and article_count > 0
+        and not missing_sections
+        and not missing_model_fields
+        and not forbidden_internal_phrases
+    )
+    return {
+        **candidate_validation,
+        "selected_candidate_ids": selected_ids,
+        "model_candidate_ids": model_ids,
+        "selected_candidate_id_count": len(selected_ids),
+        "model_candidate_id_count": len(model_ids),
+        "selected_to_model_id_coverage": round(selected_to_model_coverage, 4),
+        "report_article_count": article_count,
+        "report_category_counts": category_counts,
+        "missing_required_sections": missing_sections,
+        "required_sections_present": not missing_sections,
+        "forbidden_internal_phrases": forbidden_internal_phrases,
+        "model_block_field_status": block_field_status,
+        "missing_model_fields": missing_model_fields,
+        "parser_failure_reasons": parser_failure_reasons,
+        "report_validation_passed": passed,
+    }
+
 # Extracted formal-report reconciliation and diagnostics.
 
 def _parse_report_article_blocks(report_md: str) -> list[dict]:
@@ -2857,8 +3052,8 @@ def restore_missing_selected_report_items(report_md: str, selected_candidates: l
 
 def build_final_incident_coverage_debug(selected_candidates: list[dict], maiagent_report_response: str, final_report_md: str, *, global_scope: bool, report_days: int, incident_enabled: bool, context: ReportPostprocessContext) -> dict:
     python_count = sum((1 for item in selected_candidates or [] if (item.get('classification') or item.get('preliminary_type')) == '重大事故'))
-    maiagent_count = count_report_items_by_category(maiagent_report_response).get('重大事故', 0)
-    final_count = count_report_items_by_category(final_report_md).get('重大事故', 0)
+    maiagent_count = count_authoritative_report_items_by_category(maiagent_report_response).get('重大事故', 0)
+    final_count = count_authoritative_report_items_by_category(final_report_md).get('重大事故', 0)
     dropped_after_maiagent = max(0, python_count - final_count)
     warning = bool(global_scope and int(report_days or 0) in {90, 365} and incident_enabled and (final_count == 0))
     reason = ''

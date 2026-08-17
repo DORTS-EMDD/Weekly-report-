@@ -53,6 +53,8 @@ from report_postprocessor import (
     chinese_fallback_title,
     clean_internal_report_language,
     compact_report_urls,
+    count_authoritative_report_items,
+    count_authoritative_report_items_by_category,
     count_report_items,
     count_report_items_by_category,
     normalize_electromechanical_system_line,
@@ -64,6 +66,7 @@ from report_postprocessor import (
     normalize_report_title_line,
     normalize_source_line,
     reduce_repeated_source_subjects,
+    remove_authoritative_candidate_markers,
     remove_legacy_report_fields,
     remove_missing_data_disclaimers,
     short_url_label,
@@ -2411,7 +2414,7 @@ if generate_btn:
                 maiagent_call_count += 1
             report_id_validation_after_retry = validate_report_candidate_ids(raw_report, selected_candidates)
             raw_report_candidate_ids = extract_report_candidate_ids(raw_report)
-            maiagent_report_response_count = count_report_items(raw_report)
+            maiagent_report_response_count = count_authoritative_report_items(raw_report)
             timings["elapsed_seconds_report"] = round(time.perf_counter() - stage_start, 2)
             maiagent_call_count += 1
             progress_bar.progress(0.88)
@@ -2447,10 +2450,7 @@ if generate_btn:
             )
             validated_report_count = rendered_report_count
             selected_final_count_validation_passed = bool(
-                reconciliation_diagnostics.get("final_candidate_id_integrity_passed", False)
-                and validated_report_count == len(
-                    reconciliation_diagnostics.get("final_candidate_ids", [])
-                )
+                reconciliation_diagnostics.get("report_validation_passed", False)
             )
 
             long_term_coverage = build_final_report_coverage_warning(clean_report, lookback_int, today)
@@ -2470,7 +2470,7 @@ if generate_btn:
             postprocess_news_count_delta = formal_count - maiagent_report_response_count
             category_counts = postprocess_result.get(
                 "final_count_by_category",
-                count_report_items_by_category(clean_report),
+                count_authoritative_report_items_by_category(clean_report),
             )
             has_standard_updates = category_counts.get("規範更新", 0) > 0 or bool(
                 re.search(r"(?m)^🔹\s*\[規範更新\]", clean_report)
@@ -2547,6 +2547,45 @@ if generate_btn:
                 "report_id_validation_after_retry": report_id_validation_after_retry,
                 "report_id_validation_before_clean": report_id_validation_before_clean,
                 "raw_report_candidate_ids": raw_report_candidate_ids,
+                "selected_candidate_ids": reconciliation_diagnostics.get(
+                    "selected_candidate_ids", []
+                ),
+                "model_candidate_ids": reconciliation_diagnostics.get(
+                    "model_candidate_ids", []
+                ),
+                "missing_candidate_ids": reconciliation_diagnostics.get(
+                    "missing_ids", []
+                ),
+                "unknown_candidate_ids": reconciliation_diagnostics.get(
+                    "unknown_ids", []
+                ),
+                "duplicate_candidate_ids": reconciliation_diagnostics.get(
+                    "duplicate_ids", []
+                ),
+                "missing_model_fields": reconciliation_diagnostics.get(
+                    "missing_model_fields", {}
+                ),
+                "parser_failure_reasons": reconciliation_diagnostics.get(
+                    "parser_failure_reasons", {}
+                ),
+                "selected_candidate_id_count": reconciliation_diagnostics.get(
+                    "selected_candidate_id_count", len(selected_candidates)
+                ),
+                "model_candidate_id_count": reconciliation_diagnostics.get(
+                    "model_candidate_id_count", len(raw_report_candidate_ids)
+                ),
+                "selected_to_model_id_coverage": reconciliation_diagnostics.get(
+                    "selected_to_model_id_coverage", 0.0
+                ),
+                "selected_to_final_id_coverage": reconciliation_diagnostics.get(
+                    "selected_to_final_id_coverage", 0.0
+                ),
+                "report_validation_passed": reconciliation_diagnostics.get(
+                    "report_validation_passed", False
+                ),
+                "postprocess_mode": reconciliation_diagnostics.get(
+                    "postprocess_mode", ""
+                ),
                 "validated_report_count": validated_report_count,
                 "clean_report_marker_count": len(extract_report_candidate_ids(clean_report)),
                 "report_id_reconciliation": LAST_REPORT_ID_VALIDATION,

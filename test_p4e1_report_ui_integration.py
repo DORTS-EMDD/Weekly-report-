@@ -40,15 +40,15 @@ def _raw_report(candidates: list[dict]) -> str:
     for heading, group in (
         ("## 一、技術新知", [candidates[0]]),
         ("## 二、重大事故", [candidates[1]]),
-        ("## 三、營運政策", [candidates[2], candidates[4]]),
-        ("## 四、營運爭議", [candidates[3]]),
+        ("## 三、營運動態", [candidates[2], candidates[3], candidates[4]]),
         ("## 四、機電標案", [candidates[5]]),
     ):
         blocks.append(heading)
         for candidate in group:
+            report_category = "營運動態" if heading == "## 三、營運動態" else candidate["classification"]
             blocks.extend([
                 f"<!-- candidate_id: {candidate['id']} -->",
-                f"🔹 [{candidate['classification']}] {candidate['title']}",
+                f"🔹 [{report_category}] {candidate['title']}",
                 "• 發布/事件日期：2026-08-12",
                 "• 國家/地區：日本",
                 "• 相關機電系統：都市軌道系統",
@@ -228,8 +228,6 @@ class P4E1ScopeAndReportTests(unittest.TestCase):
 
         self.assertEqual(report.count("## 三、營運動態"), 1)
         self.assertEqual(report.count("## 四、機電標案"), 1)
-        self.assertNotIn("## 三、營運政策", report)
-        self.assertNotIn("## 四、營運爭議", report)
         self.assertIn("機電標案", report)
         for candidate in candidates:
             self.assertIn(candidate["url"], report)

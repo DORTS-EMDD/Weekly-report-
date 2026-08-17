@@ -60,6 +60,8 @@ from report_postprocessor import (
     apply_final_report_footer,
     build_long_term_coverage_warning,
     build_journal_summary_conclusion,
+    count_authoritative_report_items,
+    count_authoritative_report_items_by_category,
     count_report_items,
     count_report_items_by_category,
     ensure_journal_summary_conclusion,
@@ -71,6 +73,7 @@ from report_postprocessor import (
     normalize_formal_report_title,
     normalize_journal_section_format,
     normalize_report_section_numbering,
+    remove_authoritative_candidate_markers,
     repair_generic_report_titles,
     repair_journal_dates_in_report,
     repair_report_region_lines,
@@ -79,6 +82,7 @@ from report_postprocessor import (
     restore_missing_selected_report_items,
     remove_missing_data_disclaimers,
     sanitize_report_text,
+    validate_authoritative_report,
 )
 from report_prompt_service import (
     ReportPromptContext,
@@ -602,103 +606,52 @@ class WorkflowRuntime:
         journal_candidates: list[dict] | None = None,
         id_validation_target: dict | None = None,
     ) -> dict:
-        journal_candidates = journal_candidates or []
+        del journal_candidates
+        authoritative_report_md = raw_report if isinstance(raw_report, str) else str(raw_report or "")
         validation_target = id_validation_target if id_validation_target is not None else {}
-        context = self.postprocess_context(validation_target)
-        validated = sanitize_report_text(
-            raw_report,
-            selected_types=self.config.selected_types,
-            standards_enabled=self.config.standards_enabled,
-            include_research_supplement=self.config.include_research_supplement,
-            research_section_heading=context.research_section_heading,
-        )
-        validated = enforce_research_section(validated, journal_candidates, context=context)
-        validated = ensure_journal_summary_conclusion(validated, journal_candidates, context=context)
-        validated = normalize_final_report_md(validated)
-        validated = repair_journal_dates_in_report(validated, journal_candidates, context=context)
-        validated = normalize_journal_section_format(validated, journal_candidates, context=context)
-        validated, dropped = restore_missing_selected_report_items(
-            validated,
+        validation = validate_authoritative_report(
+            authoritative_report_md,
             selected_candidates,
-            context=context,
-        )
-        validated = repair_report_region_lines(validated, selected_candidates, context=context)
-        validated = repair_generic_report_titles(validated, selected_candidates, context=context)
-        validated = merge_operational_report_sections(
-            validated,
             selected_types=self.config.selected_types,
-            standards_enabled=self.config.standards_enabled,
         )
-        validated = normalize_report_section_numbering(
-            validated,
-            selected_types=self.config.selected_types,
-            standards_enabled=self.config.standards_enabled,
-        )
-        final_reconciliation = dict(context.id_validation_target)
-        final_validation = validate_report_candidate_ids(validated, selected_candidates)
-        if not final_validation.get("valid") or has_candidate_section_mismatch(
-            validated,
-            selected_candidates,
-        ):
-            validated, final_reconciliation = reconcile_report_candidate_output(
-                validated,
-                selected_candidates,
-                context=context,
-            )
-        context.id_validation_target.clear()
-        context.id_validation_target.update(final_reconciliation)
-        final_skipped_ids = set(final_reconciliation.get("skipped_candidate_ids", []))
-        dropped = [
-            candidate
-            for candidate in selected_candidates
-            if int(candidate.get("candidate_id") or candidate.get("id") or 0) in final_skipped_ids
-        ]
-        validated = ensure_supplemental_sources_in_report(validated, selected_candidates, context=context)
-        validated = remove_missing_data_disclaimers(validated)
-        validated, canonical_reconciliation = reconcile_report_candidate_output(
-            validated,
-            selected_candidates,
-            context=context,
-        )
-        context.id_validation_target.clear()
-        context.id_validation_target.update(canonical_reconciliation)
-        validated = insert_annual_observation_section(validated, context=context)
-        validated = normalize_report_section_numbering(
-            validated,
-            selected_types=self.config.selected_types,
-            standards_enabled=self.config.standards_enabled,
-        )
-        clean = remove_internal_candidate_markers(validated)
-        clean = normalize_formal_report_title(clean)
-        clean = apply_final_report_footer(
-            clean,
-            journal_candidates,
-            selected_types=self.config.selected_types,
-            include_research_supplement=self.config.include_research_supplement,
-            today=self.config.today,
-        )
-        rendered_count = count_report_items(clean)
-        rendered_category_counts = count_report_items_by_category(clean)
-        context.id_validation_target["final_rendered_report_count"] = rendered_count
-        context.id_validation_target["rendered_count_by_category"] = rendered_category_counts
-        context.id_validation_target["reconciled_accepted_count"] = canonical_reconciliation.get(
-            "reconciled_accepted_count",
-            canonical_reconciliation.get("final_unique_article_count", 0),
-        )
-        final_skipped_ids = set(context.id_validation_target.get("skipped_candidate_ids", []))
-        dropped = [
-            candidate
-            for candidate in selected_candidates
-            if int(candidate.get("candidate_id") or candidate.get("id") or 0) in final_skipped_ids
-        ]
+        model_ids = list(validation.get("model_candidate_ids", []))
+        selected_ids = list(validation.get("selected_candidate_ids", []))
+        article_count = int(validation.get("report_article_count", 0) or 0)
+        category_counts = dict(validation.get("report_category_counts", {}))
+        validation.update({
+            "postprocess_mode": "authoritative_passthrough",
+            "final_candidate_ids": model_ids,
+            "expected_final_candidate_ids": selected_ids,
+            "final_candidate_id_count": len(set(model_ids)),
+            "final_candidate_id_integrity_passed": bool(validation.get("valid")),
+            "selected_to_final_id_coverage": validation.get("selected_to_model_id_coverage", 1.0),
+            "final_unique_article_count": article_count,
+            "reconciled_accepted_count": article_count,
+            "final_rendered_report_count": article_count,
+            "final_count_by_category": category_counts,
+            "rendered_count_by_category": category_counts,
+            "fallback_candidate_ids": [],
+            "fallback_block_count": 0,
+            "fallback_reason_counts": {},
+            "skipped_candidate_ids": [],
+            "intentional_exclusion_ids": [],
+            "model_report_block_count": article_count,
+            "preserved_model_block_count": article_count,
+            "postprocess_warnings": [],
+            "after_reconcile": dict(validation),
+        })
+        validation_target.clear()
+        validation_target.update(validation)
+        clean = remove_authoritative_candidate_markers(authoritative_report_md)
+        dropped = []
         return {
-            "validated_report": validated,
+            "validated_report": authoritative_report_md,
             "clean_report": clean,
             "id_validation": validation_target,
             "dropped_candidates": dropped,
-            "reconciled_accepted_count": context.id_validation_target.get("reconciled_accepted_count", 0),
-            "final_rendered_report_count": rendered_count,
-            "final_count_by_category": rendered_category_counts,
+            "reconciled_accepted_count": article_count,
+            "final_rendered_report_count": article_count,
+            "final_count_by_category": category_counts,
         }
 
     def postprocess_report(

@@ -187,25 +187,7 @@ class ReportWorkflowServiceTests(unittest.TestCase):
                 config,
                 workflow_service.WorkflowDependencies(prefetch_enabled=False),
             ).postprocess_report(raw_report, [candidate])[0]
-            streamlit = app.sanitize_report_text(raw_report)
-            streamlit = app.enforce_research_section(streamlit, [])
-            streamlit = app.ensure_journal_summary_conclusion(streamlit, [])
-            streamlit = app.normalize_final_report_md(streamlit)
-            streamlit = app.repair_journal_dates_in_report(streamlit, [])
-            streamlit = app.normalize_journal_section_format(streamlit, [])
-            streamlit, _ = app.restore_missing_selected_report_items(streamlit, [candidate])
-            streamlit = app.repair_report_region_lines(streamlit, [candidate])
-            streamlit = app.repair_generic_report_titles(streamlit, [candidate])
-            streamlit = app.merge_operational_report_sections(streamlit)
-            streamlit = app.normalize_report_section_numbering(streamlit)
-            streamlit = app.ensure_supplemental_sources_in_report(streamlit, [candidate])
-            streamlit = app.remove_missing_data_disclaimers(streamlit)
-            streamlit = app.insert_annual_observation_section(streamlit)
-            streamlit, _ = app.reconcile_report_candidate_output(streamlit, [candidate])
-            streamlit = app.normalize_report_section_numbering(streamlit)
-            streamlit = app.remove_internal_candidate_markers(streamlit)
-            streamlit = app.normalize_formal_report_title(streamlit)
-            streamlit = app.apply_final_report_footer(streamlit, [])
+            streamlit = app.remove_authoritative_candidate_markers(raw_report)
         finally:
             app.LAST_REPORT_ID_VALIDATION.clear()
             app.LAST_REPORT_ID_VALIDATION.update(original_validation)
@@ -242,14 +224,15 @@ class ReportWorkflowServiceTests(unittest.TestCase):
         diagnostics = result["id_validation"]
         rendered = result["clean_report"]
 
-        self.assertEqual(diagnostics["skipped_candidate_ids"], [16])
-        self.assertNotIn("Blue Line", rendered)
-        self.assertEqual(result["reconciled_accepted_count"], 1)
+        self.assertEqual(diagnostics["skipped_candidate_ids"], [])
+        self.assertIn("Blue Line", rendered)
+        self.assertEqual(result["reconciled_accepted_count"], 2)
         self.assertEqual(result["final_rendered_report_count"], app.count_report_items(rendered))
-        self.assertEqual(result["final_rendered_report_count"], 1)
-        self.assertEqual(diagnostics["final_candidate_ids"], [15])
+        self.assertEqual(result["final_rendered_report_count"], 2)
+        self.assertEqual(diagnostics["final_candidate_ids"], [15, 16])
         self.assertTrue(diagnostics["final_candidate_id_integrity_passed"])
-        self.assertNotIn("本期未發現符合條件之技術新知", rendered)
+        self.assertEqual(diagnostics["fallback_block_count"], 0)
+        self.assertFalse(diagnostics["report_validation_passed"])
 
     def test_main_import_is_safe_and_does_not_run_workflow(self):
         with mock.patch("report_workflow_service.run_report_workflow") as run_workflow:
