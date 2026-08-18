@@ -78,6 +78,8 @@ ACCIDENT_SIGNAL_TERMS = [
     "出軌", "脫軌", "追撞", "火災", "冒煙", "停駛", "供電異常", "號誌異常",
     "通訊異常", "月臺門", "車門異常", "死亡", "受傷", "撞擊", "營運中斷",
     "月臺屏障", "設備損壞",
+    "脱線", "脱軌", "衝突", "火災", "運休", "運転見合わせ", "障害",
+    "탈선", "충돌", "화재", "운행중단", "운행 중단", "장애", "부상",
 ]
 
 SAFETY_INCIDENT_DETAIL_TERMS = [
@@ -86,6 +88,7 @@ SAFETY_INCIDENT_DETAIL_TERMS = [
     "damage", "platform barrier", "entgleist", "Verletzte", "Unfall",
     "Zusammenstoß", "死亡", "受傷", "撞擊", "出軌", "脫軌", "營運中斷",
     "停駛", "月臺屏障", "設備損壞",
+    "脱線", "運休", "運転見合わせ", "障害", "탈선", "충돌", "화재", "운행중단", "장애",
 ]
 
 LOW_VALUE_OFFICIAL_NOTICE_TERMS = [
@@ -140,6 +143,7 @@ URBAN_RAIL_INCIDENT_CONTEXT_TERMS = [
     "urban rail", "funicular", "station", "platform", "train", "track", "railcar",
     "metro train", "subway train", "捷運", "地鐵", "都市軌道", "輕軌",
     "車站", "月臺", "月台", "列車", "軌道", "軌道車輛",
+    "駅", "地下鉄", "전철", "지하철", "도시철도",
 ]
 
 GENERAL_RAIL_EXCLUDE_TERMS = [
@@ -166,28 +170,33 @@ ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS: dict[str, list[str]] = {
     "signalling": [
         "signalling", "signaling", "signal system", "cbtc", "train control",
         "ats", "atp", "ato", "號誌", "信號系統", "行車控制", "列車控制", "列控",
+        "信号", "信号システム", "신호", "신호 시스템",
     ],
     "traction_power": [
         "traction power", "traction power supply", "power supply", "substation",
         "scada", "electrical system", "供電", "牽引供電", "變電站", "電力系統",
+        "電力供給", "変電所", "전력 공급", "변전소",
     ],
     "telecommunications": [
         "telecommunications", "telecommunication system", "communication system",
         "communications system", "telecom", "radio system", "fibre communication",
         "fiber communication", "通訊", "通訊系統", "無線電系統", "光纖通訊",
+        "通信", "通信システム", "통신", "통신 시스템",
     ],
     "afc": [
         "afc", "automatic fare collection", "fare collection system", "ticketing system",
         "自動收費", "自動收費系統", "票務系統",
+        "運賃収受", "料金収受", "요금 징수",
     ],
     "platform_screen_doors": [
         "platform screen door", "platform screen doors", "platform door", "platform doors",
         "psd", "月臺門", "月台門",
+        "ホームドア", "스크린도어",
     ],
     "rolling_stock": [
         "rolling stock", "trainset", "trainsets", "metro train", "metro trains",
         "light rail vehicle", "light rail vehicles", "lrv", "train", "trains",
-        "車輛", "軌道車輛", "電聯車", "列車",
+        "車輛", "軌道車輛", "電聯車", "列車", "車両", "電車", "전동차",
     ],
     "depot_electromechanical": [
         "depot electromechanical system", "depot electromechanical systems",
@@ -216,10 +225,13 @@ ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS: dict[str, list[str]] = {
         "contract award", "contract awarded", "awarded contract", "awards contract",
         "awarded", "appoints", "appointed", "selected supplier", "supplier selected",
         "wins contract", "won contract", "決標", "得標", "授予合約", "發包",
+        "award", "awards", "bid awarded", "supplier selected", "selected supplier", "contractor selected",
+        "낙찰", "계약", "입찰", "발주", "落札", "契約", "入札", "発注",
     ],
     "procurement": [
         "procurement", "procure", "procures", "purchase order", "framework contract",
-        "contract signing", "signed contract", "採購", "簽約", "系統標", "標案",
+        "contract", "contracts", "contract signing", "signed contract", "採購", "簽約", "系統標", "標案",
+        "조달", "계약 체결", "調達", "契約締結",
     ],
     "order": [
         "places order", "placed order", "orders", "ordered", "order for", "訂購", "下訂",
@@ -229,6 +241,14 @@ ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS: dict[str, list[str]] = {
         "維修服務", "車輛維修服務",
     ],
 }
+
+ELECTROMECHANICAL_GENERIC_SCOPE_TERMS = [
+    "e&m package", "e & m package", "electromechanical package",
+    "electromechanical systems package", "electromechanical systems",
+    "integrated e&m", "integrated electromechanical", "mep package",
+    "systems package", "systems contract", "機電標", "機電系統標",
+    "機電系統", "機電設備", "기전 시스템", "전기기계 시스템",
+]
 
 CORE_SYSTEM_LABELS = (
     "電聯車",
@@ -253,6 +273,7 @@ CORE_SYSTEM_TERM_GROUPS: dict[str, tuple[str, ...]] = {
         "interlocking", "train control", "train supervision", "wayside signal",
         "axle counter", "axle counters", "號誌", "信號", "聯鎖", "列車控制",
         "列控", "行車監控", "自動列車監控", "軸計數器",
+        "信号", "信号システム", "신호", "신호 시스템",
     ),
     "供電": (
         "traction power", "traction power supply", "power supply", "traction substation",
@@ -485,6 +506,8 @@ EQUIPMENT_FAILURE_TERMS = [
     "號誌故障", "號誌異常", "信號故障", "信號異常", "供電故障", "供電異常",
     "通訊故障", "通訊異常", "月臺門故障", "月台門故障", "車門故障",
     "轉轍器故障", "道岔故障", "票務系統故障", "自動收費故障", "設備故障",
+    "信号障害", "信号故障", "電力障害", "通信障害", "ホームドア故障",
+    "장애", "신호 장애", "신호 고장", "전력 장애", "통신 장애", "스크린도어 고장",
 ]
 
 TECHNICAL_OPERATION_IMPACT_TERMS = [
@@ -493,6 +516,8 @@ TECHNICAL_OPERATION_IMPACT_TERMS = [
     "line shutdown", "station shutdown", "operations suspended", "營運中斷",
     "停駛", "大幅延誤", "嚴重延誤", "降級運轉", "人工操作", "局部停運",
     "路線停運", "車站關閉", "營運暫停",
+    "運転見合わせ", "運休", "運行停止", "運行中断", "운행중단", "운행 중단",
+    "운행 정지", "서비스 중단", "대규모 지연", "수동 운전", "수동운전",
 ]
 
 ENGINEERING_MILESTONE_ONLY_TERMS = [
@@ -921,6 +946,8 @@ MAJOR_ACCIDENT_DIRECT_TERMS = [
     "safety investigation", "investigation launched", "死亡", "重傷", "多人受傷",
     "多人重傷", "出軌", "脫軌", "列車碰撞", "列車相撞", "重大火災", "大量疏散",
     "正式調查", "事故調查", "安全調查",
+    "脱線", "脱軌", "列車衝突", "列車相撞", "火災", "避難", "運転見合わせ",
+    "탈선", "충돌", "화재", "대피", "조사", "운행중단",
 ]
 
 POST_INCIDENT_POLICY_TERMS = [
@@ -1000,6 +1027,8 @@ DISPUTE_SIGNAL_TERMS = [
     "罷工", "工業行動", "工會爭議", "勞資爭議", "訴訟", "司法命令",
     "合約爭議", "採購爭議", "招標爭議", "預算爭議", "成本超支",
     "工程延誤", "組織性抗議", "服務中斷", "仲裁",
+    "protest", "protests", "demonstration", "demonstrations", "industrial protest",
+    "시위", "파업", "운행중단", "운행 중단", "抗議", "ストライキ", "抗議活動",
 ]
 
 DISPUTE_ACTOR_TERMS = [
@@ -1008,6 +1037,7 @@ DISPUTE_ACTOR_TERMS = [
     "protesters", "advocacy group", "工會", "勞工", "員工", "承包商", "供應商",
     "採購機關", "政府", "營運機構", "法院", "監管機關", "稽核機關", "議會",
     "抗議團體", "權益團體",
+    "demonstrator", "demonstrators", "시위대", "노조", "労働組合", "抗議者",
 ]
 
 DISPUTE_IMPACT_TERMS = [
@@ -1015,6 +1045,7 @@ DISPUTE_IMPACT_TERMS = [
     "contract", "procurement", "project", "construction", "schedule", "governance",
     "服務", "延誤", "延宕", "中斷", "停駛", "成本", "預算", "合約", "採購",
     "專案", "工程", "工期", "治理",
+    "commuter congestion", "congestion", "승객 혼잡", "혼잡", "混雑", "運行影響",
 ]
 
 DISPUTE_SECONDARY_IMPACT_TERMS = [
@@ -1047,6 +1078,11 @@ HIGH_VALUE_POLICY_GATE_TERMS = STRICT_HIGH_VALUE_POLICY_TEXT_TERMS + [
     "新線通車", "新系統通車", "服務重整", "重大服務調整", "車隊汰換計畫",
     "車隊更新計畫", "路線重整", "系統升級", "號誌升級", "軌道升級", "票價改革",
     "票價調整", "營運時間", "服務調整", "路線延伸", "運能提升", "預算核准", "政府核准",
+    "electricity tariff", "electricity tariff reform", "energy tariff", "electricity price",
+    "operating electricity cost", "operating subsidy", "public service subsidy",
+    "電價改革", "電力費率", "營運電費", "營運補貼", "公共服務補貼",
+    "전기요금", "전력 요금", "운영 비용", "운영 보조금", "전철 운영",
+    "電気料金", "電力料金", "運営費", "鉄道運営",
 ]
 
 CANONICAL_TAG_PATTERNS: list[tuple[str, list[str]]] = [
@@ -2574,6 +2610,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             title_snippet,
             ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS,
         )
+        generic_electromechanical_scope = _contains_any_term(
+            title_snippet,
+            ELECTROMECHANICAL_GENERIC_SCOPE_TERMS,
+        )
         core_systems = _core_systems_for_candidate(candidate)
         cross_system_application = _has_cross_system_technical_application(candidate)
         station_context = _contains_any_term(
@@ -2662,10 +2702,15 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             failures.append("urban_rail_missing")
         if not scope_valid:
             failures.append(scope_failure)
-        if not systems:
-            failures.append("electromechanical_system_missing")
-        if systems and not core_systems and not cross_system_application:
+        if (
+            systems
+            and not core_systems
+            and not cross_system_application
+            and not generic_electromechanical_scope
+        ):
             failures.append("non_core_equipment_only")
+        if not systems and not generic_electromechanical_scope:
+            failures.append("electromechanical_system_missing")
         if not actions:
             failures.append("procurement_action_missing")
         if civil_hits and not separate_package:
@@ -2700,6 +2745,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             signals.append("separate_electromechanical_package")
         if detailed_design:
             signals.append("detailed_design_or_system_integration")
+        if generic_electromechanical_scope:
+            signals.append("generic_electromechanical_scope")
 
         payload = {
             "procurement_gate_pass": not failures,
@@ -2711,6 +2758,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "procurement_planning_signals": planning_hits,
             "procurement_scope": scope,
             "procurement_domestic_system": domestic_info.get("domestic_system", ""),
+            "procurement_generic_electromechanical_scope": generic_electromechanical_scope,
         }
         analysis_cache["electromechanical_procurement_gate_payload"] = dict(payload)
         return payload
@@ -3109,11 +3157,52 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         procurement_gate_payload = _compute_electromechanical_procurement_gate(candidate)
         service_opening_payload = _compute_service_opening_gate(candidate)
         technical_operation_incident_payload = _compute_technical_operation_incident(candidate)
+        major_accident_pass = _passes_major_accident_gate(candidate)
+        major_accident_signals: list[str] = []
+        major_accident_failure_reasons: list[str] = []
+        if _candidate_urban_rail_gate(candidate):
+            major_accident_signals.append("urban_rail")
+        else:
+            major_accident_failure_reasons.append("urban_rail_missing")
+        if _contains_any_term(
+            text,
+            ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS + EQUIPMENT_FAILURE_TERMS,
+        ):
+            major_accident_signals.append("accident_or_failure_signal")
+        else:
+            major_accident_failure_reasons.append("accident_signal_missing")
+        if any(_has_major_accident_evidence(fragment) for fragment in _candidate_event_fragments(candidate)):
+            major_accident_signals.append("severity_or_safety_consequence")
+        else:
+            major_accident_failure_reasons.append("severity_missing")
+        if _contains_any_term(text, NON_ACCIDENT_CONTEXT_TERMS):
+            major_accident_failure_reasons.append("non_accident_context")
+        policy_signal = _contains_any_term(
+            text,
+            HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS,
+        )
+        policy_signals = {
+            "urban_rail": _candidate_urban_rail_gate(candidate),
+            "source_and_date": _has_valid_operational_metadata(candidate),
+            "policy_signal": policy_signal,
+        }
+        policy_failure_reasons = [key for key, enabled in policy_signals.items() if not enabled]
+        if _passes_major_accident_gate(candidate):
+            policy_failure_reasons.append("major_accident_priority")
+        if _is_dispute_dominant(candidate):
+            policy_failure_reasons.append("operational_dispute_priority")
+        dispute_signals = {
+            "urban_rail": _candidate_urban_rail_gate(candidate),
+            "dispute_signal": _contains_any_term(text, DISPUTE_SIGNAL_TERMS),
+            "actor": _contains_any_term(text, DISPUTE_ACTOR_TERMS),
+            "operational_impact": _contains_any_term(text, DISPUTE_IMPACT_TERMS),
+        }
+        dispute_failure_reasons = [key for key, enabled in dispute_signals.items() if not enabled]
         procurement_category_selected = (
             ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in selected_types
         )
         gates = {
-            "major_accident": _passes_major_accident_gate(candidate),
+            "major_accident": major_accident_pass,
             "technology": _passes_technical_triad(candidate) or passes_forward_gate,
             "operational_dispute": _passes_operational_dispute_gate(candidate),
             "operational_policy": _passes_high_value_policy_gate(candidate) or bool(
@@ -3255,6 +3344,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             **service_opening_payload,
             **technical_operation_incident_payload,
             **procurement_gate_payload,
+            "major_accident_signals": list(dict.fromkeys(major_accident_signals)),
+            "major_accident_failure_reasons": list(dict.fromkeys(major_accident_failure_reasons)),
+            "policy_gate_positive_signals": [key for key, enabled in policy_signals.items() if enabled],
+            "policy_gate_failure_reasons": list(dict.fromkeys(policy_failure_reasons)),
+            "dispute_gate_positive_signals": [key for key, enabled in dispute_signals.items() if enabled],
+            "dispute_gate_failure_reasons": list(dict.fromkeys(dispute_failure_reasons)),
         }
         if is_forward_family:
             result.update(forward_gate_payload)
@@ -3995,6 +4090,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "canonical_tags": candidate.get("canonical_tags", []),
             "category_gates": candidate.get("category_gates", {}),
             "category_gate_reasons": candidate.get("category_gate_reasons", {}),
+            "category_gate_before_enrichment": candidate.get("category_gate_before_enrichment", {}),
+            "category_gate_after_enrichment": candidate.get("category_gate_after_enrichment", {}),
+            "category_changed_after_enrichment": candidate.get("category_changed_after_enrichment", False),
+            "category_change_reason": candidate.get("category_change_reason", ""),
             "primary_category": candidate.get("primary_category", ""),
             "alternative_category_flags": candidate.get("alternative_category_flags", []),
             "accident_severity_score": candidate.get("accident_severity_score", 0),
@@ -4057,6 +4156,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "service_opening_signals",
             "service_opening_failure_reasons",
             "future_opening_signal",
+            "major_accident_signals",
+            "major_accident_failure_reasons",
+            "policy_gate_positive_signals",
+            "policy_gate_failure_reasons",
+            "dispute_gate_positive_signals",
+            "dispute_gate_failure_reasons",
+            "procurement_generic_electromechanical_scope",
             "technical_operation_incident",
             "technical_operation_incident_signals",
             "technical_operation_incident_failure_reasons",

@@ -1,6 +1,7 @@
 """Shared non-UI report workflow for Streamlit and automation."""
 
 import datetime
+from copy import deepcopy
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -85,6 +86,43 @@ from report_postprocessor import (
     sanitize_report_text,
     validate_authoritative_report,
 )
+
+
+def _category_gate_snapshot(gate_payload: dict) -> dict:
+    return {
+        "category_gates": deepcopy(gate_payload.get("category_gates", {})),
+        "category_gate_reasons": deepcopy(gate_payload.get("category_gate_reasons", {})),
+        "primary_category": gate_payload.get("primary_category", ""),
+        "operational_subtype": gate_payload.get("operational_subtype", ""),
+        "technical_operation_incident": bool(gate_payload.get("technical_operation_incident")),
+        "procurement_gate_pass": bool(gate_payload.get("procurement_gate_pass")),
+        "service_opening_gate_pass": bool(gate_payload.get("service_opening_gate_pass")),
+    }
+
+
+def _category_gate_change_reason(before: dict, after: dict) -> str:
+    before_gates = before.get("category_gates", {}) or {}
+    after_gates = after.get("category_gates", {}) or {}
+    changed_gates = [
+        key for key in sorted(set(before_gates) | set(after_gates))
+        if bool(before_gates.get(key)) != bool(after_gates.get(key))
+    ]
+    if changed_gates:
+        reason = "category_gates_changed:" + ",".join(changed_gates)
+        if before.get("primary_category") != after.get("primary_category"):
+            reason += (
+                "; primary_category: "
+                f"{before.get('primary_category', '未判定')} -> {after.get('primary_category', '未判定')}"
+            )
+        return reason
+    if before.get("primary_category") != after.get("primary_category"):
+        return (
+            "primary_category: "
+            f"{before.get('primary_category', '未判定')} -> {after.get('primary_category', '未判定')}"
+        )
+    if before.get("category_gate_reasons") != after.get("category_gate_reasons"):
+        return "category_gate_reasons_changed"
+    return "no_category_gate_change"
 from report_prompt_service import (
     ReportPromptContext,
     build_report_prompt as service_build_report_prompt,
@@ -397,7 +435,13 @@ class WorkflowRuntime:
             candidate["page_type"], candidate["page_type_reason"] = selector[
                 "_compute_candidate_page_type"
             ](candidate)
-            candidate.update(selector["evaluate_category_gates"](candidate))
+            initial_gate_payload = selector["evaluate_category_gates"](candidate)
+            candidate.update(initial_gate_payload)
+            initial_gate_snapshot = _category_gate_snapshot(initial_gate_payload)
+            candidate["category_gate_before_enrichment"] = initial_gate_snapshot
+            candidate["category_gate_after_enrichment"] = deepcopy(initial_gate_snapshot)
+            candidate["category_changed_after_enrichment"] = False
+            candidate["category_change_reason"] = "not_enriched"
             reason = selector["hard_low_value_candidate_reason"](candidate)
             if reason:
                 excluded_candidates.append(
@@ -440,6 +484,19 @@ class WorkflowRuntime:
         preliminary_started = time.perf_counter()
         for candidate in deduped_candidates:
             if candidate.get("prefetch_status") == "success":
+                before_enrichment = candidate.get("category_gate_before_enrichment") or _category_gate_snapshot(
+                    candidate
+                )
+                refreshed_gate_payload = selector["evaluate_category_gates"](candidate)
+                after_enrichment = _category_gate_snapshot(refreshed_gate_payload)
+                candidate.update(refreshed_gate_payload)
+                candidate["category_gate_before_enrichment"] = deepcopy(before_enrichment)
+                candidate["category_gate_after_enrichment"] = deepcopy(after_enrichment)
+                candidate["category_changed_after_enrichment"] = before_enrichment != after_enrichment
+                candidate["category_change_reason"] = _category_gate_change_reason(
+                    before_enrichment,
+                    after_enrichment,
+                )
                 refreshed = selector["annotate_candidate_for_scheme_d"](
                     candidate,
                     profile_timings=timings,

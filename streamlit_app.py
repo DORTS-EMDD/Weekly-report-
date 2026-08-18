@@ -933,6 +933,47 @@ def build_pipeline_debug_stats(
         method = item.get("region_resolution_method") or "未記錄"
         region_resolution_method_counts[method] = region_resolution_method_counts.get(method, 0) + 1
     raw_candidate_count_by_family = _count_by(raw_candidates, "search_family")
+    gate_evaluated_candidates = list(deduped_candidates or [])
+    if not gate_evaluated_candidates:
+        gate_evaluated_candidates = list(filtered_candidates or []) + list(excluded_candidates or [])
+
+    def _count_signal_values(values, counts: dict[str, int]) -> None:
+        if isinstance(values, dict):
+            values = [key for key, enabled in values.items() if enabled]
+        for value in values or []:
+            counts[str(value)] = counts.get(str(value), 0) + 1
+
+    category_gate_failure_counts = {
+        "major_accident": {},
+        "technical_operation_incident": {},
+        "policy": {},
+        "dispute": {},
+        "procurement": {},
+        "service_opening": {},
+    }
+    category_gate_signal_counts = {
+        "major_accident": {},
+        "technical_operation_incident": {},
+        "policy": {},
+        "dispute": {},
+        "procurement": {},
+        "service_opening": {},
+    }
+    gate_debug_fields = {
+        "major_accident": ("major_accident_signals", "major_accident_failure_reasons"),
+        "technical_operation_incident": (
+            "technical_operation_incident_signals",
+            "technical_operation_incident_failure_reasons",
+        ),
+        "policy": ("policy_gate_positive_signals", "policy_gate_failure_reasons"),
+        "dispute": ("dispute_gate_positive_signals", "dispute_gate_failure_reasons"),
+        "procurement": ("procurement_signals", "procurement_failure_reasons"),
+        "service_opening": ("service_opening_signals", "service_opening_failure_reasons"),
+    }
+    for item in gate_evaluated_candidates:
+        for category, (signal_key, failure_key) in gate_debug_fields.items():
+            _count_signal_values(item.get(signal_key), category_gate_signal_counts[category])
+            _count_signal_values(item.get(failure_key), category_gate_failure_counts[category])
     search_summary = LAST_DDGS_SEARCH_SUMMARY or {}
     forward_raw_candidates = [
         item for item in raw_candidates or []
@@ -1077,7 +1118,20 @@ def build_pipeline_debug_stats(
         "planned_query_count_by_family": search_summary.get("planned_query_count_by_family", {}),
         "executed_query_count_by_family": search_summary.get("executed_query_count_by_family", {}),
         "raw_candidate_count_by_family": raw_candidate_count_by_family,
+        "raw_count_by_category_family": raw_candidate_count_by_family,
         "gate_pass_count_by_category": category_gate_pass_counts,
+        "gate_fail_reason_counts_by_category": category_gate_failure_counts,
+        "major_accident_positive_signal_counts": category_gate_signal_counts["major_accident"],
+        "technical_operation_incident_positive_signal_counts": category_gate_signal_counts["technical_operation_incident"],
+        "technical_operation_incident_failure_reason_counts": category_gate_failure_counts["technical_operation_incident"],
+        "policy_gate_positive_signal_counts": category_gate_signal_counts["policy"],
+        "policy_gate_failure_reason_counts": category_gate_failure_counts["policy"],
+        "dispute_gate_positive_signal_counts": category_gate_signal_counts["dispute"],
+        "dispute_gate_failure_reason_counts": category_gate_failure_counts["dispute"],
+        "procurement_gate_positive_signal_counts": category_gate_signal_counts["procurement"],
+        "procurement_gate_failure_reason_counts": category_gate_failure_counts["procurement"],
+        "service_opening_positive_signal_counts": category_gate_signal_counts["service_opening"],
+        "service_opening_failure_reason_counts": category_gate_failure_counts["service_opening"],
         "forward_technology_query_count": search_summary.get("forward_technology_query_count", 0),
         "forward_technology_fallback_query_count": search_summary.get("forward_technology_fallback_query_count", 0),
         "forward_technology_primary_raw_count": search_summary.get("forward_technology_primary_raw_count", 0),

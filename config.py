@@ -47,6 +47,9 @@ SERVICE_OPENING_ACTUAL_TERMS = [
     "inaugurated and opened to passengers",
     "正式通車", "正式啟用", "正式營運", "正式投入營運", "正式載客",
     "開始載客", "開始營運", "通車啟用", "投入載客服務",
+    "service launched", "launched passenger service", "began operation", "began operations",
+    "entered operation", "entered service operation", "運行開始", "営業運転開始",
+    "운행 개시", "영업 운전 개시", "正式運行開始",
 ]
 
 SERVICE_OPENING_FUTURE_TERMS = [
@@ -55,6 +58,8 @@ SERVICE_OPENING_FUTURE_TERMS = [
     "opening planned for", "due to open",
     "預計通車", "預定通車", "預計啟用", "將通車", "將啟用",
     "預計營運", "目標通車", "預計於", "預定於",
+    "will begin operation", "plans to begin operation", "scheduled to begin service",
+    "開業予定", "運行開始予定", "운행 예정", "개통 예정",
 ]
 
 SERVICE_OPENING_PLANNING_TERMS = [
@@ -64,12 +69,14 @@ SERVICE_OPENING_PLANNING_TERMS = [
     "civil works", "contract award", "tender", "design stage",
     "可行性研究", "綜合規劃", "路網規劃", "路線規劃", "核定",
     "獲准", "動工", "開工", "施工", "工程進度", "招標", "決標", "發包",
+    "開業計画", "路線計画", "建設開始", "개통 계획", "건설 공사",
 ]
 
 SERVICE_OPENING_TESTING_TERMS = [
     "testing begins", "trial runs", "test operation", "dynamic testing",
     "commissioning test", "train testing", "trial operation",
     "試車", "動態測試", "系統測試", "試運轉", "測試營運",
+    "試運転", "試験運行", "試運行", "시운전", "시험 운행", "시험운행",
 ]
 
 BACKEND_CATEGORY_TYPES = [
@@ -353,10 +360,10 @@ CIVIC_METRO_NAME_ONLY_TERMS = [
 ]
 
 METRO_RAIL_CONTEXT_TERMS = [
-    "rail", "train", "station", "line", "fare", "fleet", "signalling", "signaling",
+    "rail", "train", "trains", "station", "stations", "line", "lines", "fare", "fleet", "signalling", "signaling",
     "rolling stock", "subway", "transit system", "platform", "depot",
     "metro operator", "metro rail", "metro network", "metro line", "metro station",
-    "ticketing", "fare gate", "track", "tram", "light rail",
+    "ticketing", "fare gate", "track", "tram", "light rail", "train service", "metro service",
 ]
 
 SOURCE_NAME_NOISE_TERMS = [
