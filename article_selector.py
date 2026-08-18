@@ -4517,6 +4517,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
     def _candidate_specific_event_location(candidate: dict) -> str:
         text = _candidate_selection_text(candidate).casefold()
         priority_locations = [
+            ("tokyo", ["tokyo subway", "hanzomon", "東京メトロ", "半藏門"]),
             ("austin", ["austin transit partnership", "austin light rail", "austin"]),
             ("berlin-adlershof", ["adlershof"]),
             ("basel", ["basel", "巴塞爾"]),
@@ -4597,7 +4598,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         candidate_geo = candidate_fp.get("geo_key", "")
         selected_geo = selected_fp.get("geo_key", "")
         if candidate_geo and selected_geo and candidate_geo != selected_geo:
-            return False
+            if candidate_geo.split("/", 1)[0] != selected_geo.split("/", 1)[0]:
+                return False
         candidate_lines = _dedupe_route_line_tokens(candidate)
         selected_lines = _dedupe_route_line_tokens(selected_item)
         is_accident = "重大事故" in {
@@ -4607,13 +4609,27 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if is_accident and _injury_bands_conflict(candidate, selected_item):
             return False
         date_close = _event_date_close(candidate, selected_item, days=1 if is_accident else 3)
+        geo_compatible = bool(
+            candidate_geo
+            and selected_geo
+            and (
+                candidate_geo == selected_geo
+                or candidate_geo.split("/", 1)[0] == selected_geo.split("/", 1)[0]
+            )
+        )
+        shared_specific_location = bool(
+            _candidate_specific_event_location(candidate)
+            and _candidate_specific_event_location(candidate)
+            == _candidate_specific_event_location(selected_item)
+        )
         same_operational_event = (
             not is_accident
             and date_close
             and bool(candidate_operator and selected_operator and candidate_operator == selected_operator)
-            and bool(candidate_geo and selected_geo and candidate_geo == selected_geo)
+            and geo_compatible
             and (
                 bool(candidate_lines and selected_lines and not candidate_lines.isdisjoint(selected_lines))
+                or shared_specific_location
                 or difflib.SequenceMatcher(
                     None,
                     _event_similarity_text(candidate),
@@ -4907,20 +4923,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             selected_item.clear()
             selected_item.update(candidate)
             selected_item.update(selection_state)
-        primary_record = _supplemental_source_record(primary)
-        primary_key = (
-            str(primary_record.get("url", "") or ""),
-            str(primary_record.get("title", "") or ""),
-        )
         selected_item["supporting_sources"] = unique_sources
-        selected_item["supplemental_sources"] = [
-            source_row
-            for source_row in unique_sources
-            if (
-                str(source_row.get("url", "") or ""),
-                str(source_row.get("title", "") or ""),
-            ) != primary_key
-        ][:1]
+        selected_item["supplemental_sources"] = []
         selected_item["event_source_merge_count"] = len(unique_sources)
         return incoming_is_preferred
 

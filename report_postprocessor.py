@@ -26,6 +26,7 @@ from config import (
     ADVANCED_TYPES,
     EMPTY_TEXT_BY_TYPE,
     ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+    FORMAL_REPORT_CATEGORY_MAP,
     OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
     REPORT_CATEGORY_TYPES,
     SECTION_NUMBER_BY_TYPE,
@@ -1380,6 +1381,16 @@ def _canonical_report_category_label(value: str) -> str:
     return (value or "").strip() or "技術新知"
 
 
+def _formal_category_for_candidate(candidate: dict) -> str:
+    internal_category = str(
+        candidate.get("classification")
+        or candidate.get("primary_category")
+        or candidate.get("preliminary_type")
+        or ""
+    ).strip()
+    return FORMAL_REPORT_CATEGORY_MAP.get(internal_category, internal_category)
+
+
 def normalize_report_title_line(line: str) -> str:
     match = re.match(r"^\s*🔹\s*\[([^\]]+)\]\s*(.*?)\s*$", line or "")
     if match:
@@ -1822,7 +1833,7 @@ def _authoritative_block_field_status(
         stripped = raw_line.strip()
         marker = marker_pattern.fullmatch(stripped)
         if marker:
-            if current_ids and current_lines:
+            if current_ids and any(line.strip() for line in current_lines):
                 flush()
             current_ids.append(int(marker.group(1) or marker.group(2)))
             continue
@@ -1883,6 +1894,43 @@ def validate_authoritative_report(
         country_by_id=country_by_id,
         system_optional_by_id=system_optional_by_id,
     )
+    parsed_blocks = _parse_report_article_blocks(report_md)
+    multi_candidate_model_blocks = [
+        list(block.get("candidate_ids", ()))
+        for block in parsed_blocks
+        if len(block.get("candidate_ids", ())) > 1
+    ]
+    category_mismatches: list[dict] = []
+    for block in parsed_blocks:
+        category_match = re.search(
+            r"(?m)^\s*🔹\s*\[([^\]]+)\]",
+            block.get("body", ""),
+        )
+        if not category_match:
+            continue
+        actual_category = _canonical_report_category_label(category_match.group(1))
+        for candidate_id in block.get("candidate_ids", ()):
+            candidate = selected_map.get(candidate_id) or {}
+            expected_category = _formal_category_for_candidate(candidate)
+            expected_heading = {
+                "技術新知": "一、技術新知",
+                "重大事故": "二、重大事故",
+                OPERATIONAL_DYNAMICS_CATEGORY_LABEL: f"三、{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}",
+                ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL: f"四、{ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL}",
+                "規範更新": "規範更新",
+            }.get(expected_category, "")
+            section_heading = str(block.get("section_heading") or "").strip()
+            if expected_category and (
+                actual_category != expected_category
+                or (expected_heading and section_heading and expected_heading not in section_heading)
+            ):
+                category_mismatches.append({
+                    "candidate_id": candidate_id,
+                    "expected_category": expected_category,
+                    "actual_category": actual_category,
+                    "section_heading": section_heading,
+                    "reason": "model_category_does_not_match_authoritative_candidate_category",
+                })
     missing_model_fields = {
         str(candidate_id): status["missing_fields"]
         for status in block_field_status
@@ -1936,11 +1984,19 @@ def validate_authoritative_report(
         if selected_ids
         else 1.0
     )
+    selected_event_count = len(set(selected_ids))
+    final_unique_article_count = article_count
+    event_level_integrity_passed = bool(
+        selected_event_count == len(parsed_blocks) == final_unique_article_count
+        and not multi_candidate_model_blocks
+    )
     passed = bool(
         candidate_validation.get("valid")
         and article_count > 0
         and not missing_sections
         and not missing_model_fields
+        and not multi_candidate_model_blocks
+        and not category_mismatches
         and not forbidden_internal_phrases
         and not content_quality_issues
     )
@@ -1958,6 +2014,13 @@ def validate_authoritative_report(
         "required_sections_present": not missing_sections,
         "forbidden_internal_phrases": forbidden_internal_phrases,
         "model_block_field_status": block_field_status,
+        "model_article_block_count": len(parsed_blocks),
+        "multi_candidate_model_blocks": multi_candidate_model_blocks,
+        "category_mismatches": category_mismatches,
+        "category_consistency_passed": not category_mismatches,
+        "selected_event_count": selected_event_count,
+        "final_unique_article_count": final_unique_article_count,
+        "event_level_integrity_passed": event_level_integrity_passed,
         "missing_model_fields": missing_model_fields,
         "parser_failure_reasons": parser_failure_reasons,
         "content_quality_issues": content_quality_issues,
@@ -1972,23 +2035,33 @@ def _parse_report_article_blocks(report_md: str) -> list[dict]:
     blocks: list[dict] = []
     current_ids: list[int] = []
     current_lines: list[str] = []
+    current_section_heading = ""
 
     def _flush() -> None:
         nonlocal current_ids, current_lines
         if current_ids:
-            blocks.append({"candidate_ids": tuple(current_ids), "body": "\n".join(current_lines).strip()})
+            blocks.append({
+                "candidate_ids": tuple(current_ids),
+                "body": "\n".join(current_lines).strip(),
+                "section_heading": current_section_heading,
+            })
         current_ids = []
         current_lines = []
 
     for raw_line in (report_md or "").splitlines():
         stripped = raw_line.strip()
+        if re.match(r"^#{1,6}\s*", stripped):
+            if current_ids:
+                _flush()
+            current_section_heading = re.sub(r"^#{1,6}\s*", "", stripped).strip()
+            continue
         marker_match = marker_pattern.fullmatch(stripped)
         if marker_match:
-            if current_ids and current_lines:
+            if current_ids and any(line.strip() for line in current_lines):
                 _flush()
             current_ids.append(int(marker_match.group(1) or marker_match.group(2)))
             continue
-        if current_ids and stripped.startswith(("## ", "### ", "📊", "⏰")) and not current_lines:
+        if current_ids and stripped.startswith(("📊", "⏰")):
             _flush()
             continue
         if current_ids:
@@ -2563,6 +2636,8 @@ def _report_block_matches_supplemental_candidate(block: str, candidate: dict, *,
     return bool(operator_markers and any((marker in block_folded for marker in operator_markers))) and (not route_markers or any((marker in block_folded for marker in route_markers)))
 
 def ensure_supplemental_sources_in_report(report_md: str, selected_candidates: list[dict], *, context: ReportPostprocessContext) -> str:
+    del selected_candidates, context
+    return report_md
     candidates = [candidate for candidate in selected_candidates or [] if candidate.get('supplemental_sources')]
     if not report_md or not candidates:
         return report_md
@@ -2841,7 +2916,7 @@ def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext
     if _fallback_reason(candidate, context=context):
         return ''
     candidate_id = int(candidate.get('candidate_id') or candidate.get('id') or 0)
-    category = candidate.get('classification') or candidate.get('preliminary_type') or context.infer_preliminary_type(candidate)
+    category = _formal_category_for_candidate(candidate) or context.infer_preliminary_type(candidate)
     title = _fallback_title_from_candidate(candidate)
     if not title:
         return ''
@@ -2890,12 +2965,34 @@ def _force_candidate_fields_in_block(block: str, candidate: dict | list[dict], *
     normalized = normalize_final_report_md(unescape(block or ''))
     if not re.search('(?m)^🔹\\s*\\[[^\\]]+\\]', normalized):
         return ''
-    category = candidates[0].get('classification') or candidates[0].get('preliminary_type') or context.infer_preliminary_type(candidates[0])
+    category = _formal_category_for_candidate(candidates[0]) or context.infer_preliminary_type(candidates[0])
     normalized = re.sub(r'(?mi)^\s*(?:<!--\s*candidate_id.*?-->|&lt;!--.*?--&gt;)\s*$', '', normalized).strip()
     normalized = re.sub('(?m)^(🔹\\s*)\\[[^\\]]+\\]', f'\\1[{category}]', normalized, count=1)
-    source_lines = [_candidate_source_line(item, context=context) for item in candidates if _effective_source_url(item)]
-    source_line = '；'.join(line.replace('• 資料來源：', '') for line in source_lines)
-    source_line = f'• 資料來源：{source_line}' if source_line else ''
+    source_line = _candidate_source_line(candidates[0], context=context) if _effective_source_url(candidates[0]) else ''
+    if source_line:
+        normalized_lines: list[str] = []
+        source_seen = False
+        skip_source_continuation = False
+        for line in normalized.splitlines():
+            stripped = line.strip()
+            field = _match_report_field_line(stripped)
+            if field and field[0] == '資料來源':
+                if not source_seen:
+                    normalized_lines.append(source_line)
+                    source_seen = True
+                skip_source_continuation = True
+                continue
+            if skip_source_continuation:
+                if not stripped:
+                    continue
+                if _match_report_field_line(stripped) or stripped.startswith(("🔹", "##", "###", "---", "________________________________________")):
+                    skip_source_continuation = False
+                else:
+                    continue
+            normalized_lines.append(line)
+        normalized = '\n'.join(normalized_lines).strip()
+        if not source_seen:
+            normalized = normalized.rstrip() + f'\n\n{source_line}'
     existing_source_match = re.search('(?m)^•\\s*資料來源\\s*[：:]\\s*(.*)$', normalized)
     if source_line:
         if not existing_source_match:
@@ -2994,7 +3091,7 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         seen_event_identities.update(event_identities)
         records.append({
             'candidate_ids': candidate_ids,
-            'category': (candidates[0] or {}).get('classification') or (candidates[0] or {}).get('preliminary_type') or context.infer_preliminary_type(candidates[0] or {}),
+            'category': _formal_category_for_candidate(candidates[0] or {}) or context.infer_preliminary_type(candidates[0] or {}),
             'text': text,
             'model': model,
         })
@@ -3055,7 +3152,12 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
     category_groups = [
         ('一、技術新知', {'技術新知'}),
         ('二、重大事故', {'重大事故'}),
-        (f'三、{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}', {'營運政策', '營運爭議', SERVICE_OPENING_CATEGORY_KEY}),
+        (f'三、{OPERATIONAL_DYNAMICS_CATEGORY_LABEL}', {
+            '營運政策',
+            '營運爭議',
+            OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
+            SERVICE_OPENING_CATEGORY_KEY,
+        }),
         (f'四、{ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL}', {ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL}),
     ]
     if context.standards_enabled or '規範更新' in context.selected_types:
@@ -3137,6 +3239,23 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
         'fallback_block_count': sum(1 for record in records if not record['model']),
         'fallback_reason_counts': fallback_reason_counts,
         'parser_failures': parser_failures,
+        'model_article_block_count': len(parsed_blocks),
+        'multi_candidate_model_blocks': [
+            list(parsed.get('candidate_ids', ()))
+            for parsed in parsed_blocks
+            if len(parsed.get('candidate_ids', ())) > 1
+        ],
+        'category_mismatches': [
+            {
+                'candidate_id': candidate_id,
+                'expected_category': _formal_category_for_candidate(selected_map.get(candidate_id) or {}),
+                'actual_category': _formal_category_for_candidate({'classification': record['category']}),
+            }
+            for record in records
+            for candidate_id in record['candidate_ids']
+            if _formal_category_for_candidate(selected_map.get(candidate_id) or {})
+            != _formal_category_for_candidate({'classification': record['category']})
+        ],
         'deduplicated_event_candidate_ids': sorted(set(deduplicated_event_ids)),
         'merged_event_groups': [list(record['candidate_ids']) for record in records if record['model'] and len(record['candidate_ids']) > 1],
         'final_unique_article_count': len(records),
@@ -3161,6 +3280,14 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
             candidate_id
             for candidate_id in expected_final_ids
             if candidate_id not in set(skipped_ids)
+        ),
+        'selected_event_count': len(selected_candidates),
+        'event_level_integrity_passed': (
+            len({
+                _candidate_event_identity(candidate)
+                for candidate in selected_candidates
+            }) == len(selected_candidates)
+            and not any(len(parsed.get('candidate_ids', ())) > 1 for parsed in parsed_blocks)
         ),
     }
     return (reconciled, diagnostics)

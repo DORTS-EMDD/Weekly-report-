@@ -295,7 +295,7 @@ class P2KRecallQualityTests(unittest.TestCase):
         validation = report_postprocessor.validate_authoritative_report(report, [candidate], selected_types=["技術新知"])
         self.assertTrue(validation["report_validation_passed"])
 
-    def test_existing_model_source_is_not_replaced_by_candidate_source(self):
+    def test_existing_model_source_is_normalized_to_primary_candidate_source(self):
         candidate = _candidate(16, "Metro signalling upgrade", "CBTC upgrade improves reliability.", core_systems=["號誌"])
         report = "\n".join([
             "<!-- candidate_id: 16 -->",
@@ -308,8 +308,8 @@ class P2KRecallQualityTests(unittest.TestCase):
             "• 資料來源：[Railway-News](https://railway-news.com/fixture/16)",
         ])
         output, _ = app.reconcile_report_candidate_output(report, [candidate])
-        self.assertIn("Railway-News", output)
-        self.assertNotIn("Fixture Rail News", output)
+        self.assertIn("Fixture Rail News", output)
+        self.assertNotIn("Railway-News", output)
 
     def test_core_system_empty_fallback_omits_formal_system_field(self):
         candidate = _candidate(17, "Metro cross-system maintenance", "Metro maintenance evidence supports cross-system analysis.", core_systems=[])

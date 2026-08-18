@@ -220,7 +220,8 @@ class P2GCoreSystemTests(unittest.TestCase):
         )
         self.assertEqual([item["classification"] for item in selected], ["營運政策", PROCUREMENT])
         prompt = runtime.build_report_prompt([policy], [], 1)
-        self.assertIn('"classification": "營運政策"', prompt)
+        self.assertIn('"classification": "營運動態"', prompt)
+        self.assertIn('"formal_category": "營運動態"', prompt)
         self.assertIn("不得自行跨章節重新分類", prompt)
         self.assertNotIn("不是最終答案", prompt)
 

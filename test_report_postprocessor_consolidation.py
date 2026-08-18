@@ -18,17 +18,17 @@ import streamlit_app as app
 
 EXPECTED_SCENARIO_SHA256 = {
     "weekly_without_journal": (
-        "365343dc903adff584034e1d32a976a648073afdcb4f351d2c4134500f55a36b"
+        "9c354ea8a1c6496f88a8bdc0bd9b90303585451cc925aa04d37f115facf892e8"
     ),
     "weekly_with_journal": (
-        "ccf0eab8f58bd5d1d612725b77037e1a9db4a80052b4b3cfa260b53be66f63b0"
+        "f71c451104816b820321528222934d05b8c477c95e8dcd28982f84f00e27fb7c"
     ),
     "annual_with_journal": (
-        "e22a9f6c083ba5c977c2ce43d09e86ccc93eca87fcb013633511f7a1527e17c0"
+        "c2363a55239d464f1c2be096f3fc1f9ab43342cac92bc3ec5960ce4875eb4e39"
     ),
 }
 EXPECTED_AGGREGATE_SHA256 = (
-    "271be1b3ec1155192e70637df9e964fca2aaf133a3e77bfac1837095322e636e"
+    "6cb6b70302590692f7b58ac7c9e349753cb73e76f9c431e0c15e3df592a575ee"
 )
 
 
@@ -357,7 +357,7 @@ class ConsolidatedReportPostprocessorGoldenTests(unittest.TestCase):
         self.assertEqual(
             annual["id_reconciliation"]["fallback_candidate_ids"], []
         )
-        self.assertIn(
+        self.assertNotIn(
             "Hitachi Rail",
             annual["steps"]["supplemental_sources"],
         )

@@ -153,7 +153,7 @@ class V21QualityGateTests(unittest.TestCase):
         self.assertEqual(dropped, [])
         self.assertEqual(app.count_report_items(output), 1)
         self.assertIn("railway-news.com", output)
-        self.assertIn("railuk.com", output)
+        self.assertNotIn("railuk.com", output)
         self.assertEqual(app.LAST_REPORT_ID_VALIDATION["preserved_model_block_count"], 1)
         self.assertEqual(app.LAST_REPORT_ID_VALIDATION["merged_event_groups"], [[2, 3]])
         self.assertEqual(app.LAST_REPORT_ID_VALIDATION["fallback_block_count"], 0)

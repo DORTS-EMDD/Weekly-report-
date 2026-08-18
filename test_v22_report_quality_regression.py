@@ -152,7 +152,8 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
         output, diagnostics = self._reconcile(report, [candidate], ["營運政策"])
 
         self.assertIn("<!-- candidate_id: 10 -->", output)
-        self.assertIn("🔹 [營運政策]", output)
+        self.assertIn("🔹 [營運動態]", output)
+        self.assertNotIn("🔹 [營運政策]", output)
         self.assertEqual(diagnostics["accepted_model_candidate_ids"], [10])
         self.assertEqual(diagnostics["skipped_candidate_ids"], [])
         self.assertEqual(diagnostics["fallback_block_count"], 0)

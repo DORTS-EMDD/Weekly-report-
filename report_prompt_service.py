@@ -8,6 +8,7 @@ from typing import Callable
 
 from config import (
     ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+    FORMAL_REPORT_CATEGORY_MAP,
     OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
     SERVICE_OPENING_CATEGORY_KEY,
 )
@@ -92,6 +93,10 @@ def _authoritative_candidate_classification(
             return value
     inferred = str(context.infer_preliminary_type(candidate) or "").strip()
     return inferred if inferred in context.advanced_types else ""
+
+
+def _formal_report_category(value: str) -> str:
+    return FORMAL_REPORT_CATEGORY_MAP.get(value, value)
 
 
 def format_selection_candidate(
@@ -406,6 +411,7 @@ def format_report_candidate(
     source_url = context.effective_source_url(candidate)
     source_display = _formal_source_display(candidate, source_url, context=context)
     classification = _authoritative_candidate_classification(candidate, context=context)
+    formal_category = _formal_report_category(classification)
     raw_country = candidate.get("country")
     country = str(raw_country or "").strip()
     if country in _UNKNOWN_COUNTRY_VALUES:
@@ -415,10 +421,15 @@ def format_report_candidate(
         "title": candidate.get("title", ""),
         "date": candidate.get("date", ""),
         "source_display": source_display,
+        "report_source": {
+            "source_display": source_display,
+            "url": source_url,
+        },
         "source_verb": candidate.get("source_verb", context.source_verb_for_report(candidate.get("source_tier", ""), source_display)),
         "core_systems": candidate.get("core_systems", []),
         "technical_themes": candidate.get("technical_themes", []),
-        "classification": classification,
+        "classification": formal_category,
+        "formal_category": formal_category,
         "url": source_url,
         "snippet": context.shorten(candidate.get("snippet", ""), context.report_snippet_chars),
         "source_domain": candidate.get("source_domain") or context.domain_from_url(source_url) or context.extract_domain_hint(source_url),
@@ -427,7 +438,6 @@ def format_report_candidate(
         "region_resolution_evidence": candidate.get("region_resolution_evidence", ""),
         "operator": candidate.get("operator") or candidate.get("operator_name") or candidate.get("operator_key", ""),
         "system_name": candidate.get("system_name") or candidate.get("system") or "",
-        "supplemental_sources": candidate.get("supplemental_sources", []),
     }
     if country:
         prompt_item["country"] = country

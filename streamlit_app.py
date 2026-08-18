@@ -2682,6 +2682,16 @@ if generate_btn:
             )
             pipeline_debug_stats["model_article_block_count"] = maiagent_report_response_count
             pipeline_debug_stats["final_unique_article_count"] = rendered_report_count
+            pipeline_debug_stats["multi_candidate_model_blocks"] = reconciliation_diagnostics.get(
+                "multi_candidate_model_blocks", []
+            )
+            pipeline_debug_stats["category_mismatches"] = reconciliation_diagnostics.get(
+                "category_mismatches", []
+            )
+            pipeline_debug_stats["event_level_integrity_passed"] = bool(
+                reconciliation_diagnostics.get("event_level_integrity_passed", False)
+                and len(selected_candidates) == maiagent_report_response_count == rendered_report_count
+            )
             final_candidate_id_values = reconciliation_diagnostics.get("final_candidate_ids", [])
             final_candidate_id_set = {
                 int(value)
@@ -2833,6 +2843,15 @@ if generate_btn:
                 "selected_event_count": len(selected_candidates),
                 "model_article_block_count": maiagent_report_response_count,
                 "event_consolidation_stats": candidate_pool.get("event_consolidation_stats", {}),
+                "multi_candidate_model_blocks": reconciliation_diagnostics.get(
+                    "multi_candidate_model_blocks", []
+                ),
+                "category_mismatches": reconciliation_diagnostics.get(
+                    "category_mismatches", []
+                ),
+                "event_level_integrity_passed": pipeline_debug_stats.get(
+                    "event_level_integrity_passed", False
+                ),
                 "selected_to_model_id_coverage": reconciliation_diagnostics.get(
                     "selected_to_model_id_coverage", 0.0
                 ),
