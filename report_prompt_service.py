@@ -12,6 +12,7 @@ from config import (
     OPERATIONAL_DYNAMICS_CATEGORY_LABEL,
     SERVICE_OPENING_CATEGORY_KEY,
 )
+from article_processor import _extract_complete_url
 
 
 @dataclass(frozen=True)
@@ -408,7 +409,8 @@ def format_report_candidate(
     *,
     context: ReportPromptContext,
 ) -> str:
-    source_url = context.effective_source_url(candidate)
+    raw_source_url = str(context.effective_source_url(candidate) or "").strip()
+    source_url = _extract_complete_url(raw_source_url) or raw_source_url
     source_display = _formal_source_display(candidate, source_url, context=context)
     classification = _authoritative_candidate_classification(candidate, context=context)
     formal_category = _formal_report_category(classification)
@@ -420,7 +422,6 @@ def format_report_candidate(
         "candidate_id": candidate.get("candidate_id", candidate.get("id", "")),
         "title": candidate.get("title", ""),
         "date": candidate.get("date", ""),
-        "source_display": source_display,
         "report_source": {
             "source_display": source_display,
             "url": source_url,
@@ -430,7 +431,6 @@ def format_report_candidate(
         "technical_themes": candidate.get("technical_themes", []),
         "classification": formal_category,
         "formal_category": formal_category,
-        "url": source_url,
         "snippet": context.shorten(candidate.get("snippet", ""), context.report_snippet_chars),
         "source_domain": candidate.get("source_domain") or context.domain_from_url(source_url) or context.extract_domain_hint(source_url),
         "resolved_region": candidate.get("resolved_region", ""),

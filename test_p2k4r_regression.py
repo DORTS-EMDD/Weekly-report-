@@ -1,8 +1,11 @@
 import json
+import datetime
 import unittest
+from unittest import mock
 
 from article_selector import build_selector_api
 from report_postprocessor import validate_authoritative_report
+import report_workflow_service as workflow_service
 import streamlit_app as app
 
 
@@ -59,6 +62,141 @@ def _complete_block(candidate_id: int, title: str, category: str, url: str) -> s
 
 
 class P2K4RRegressionTests(unittest.TestCase):
+    def test_production_chain_consolidates_selected_events_before_prompt(self):
+        config = workflow_service.WorkflowConfig(
+            today=datetime.date(2026, 8, 18),
+            lookback_days=7,
+            selected_types=["技術新知", "重大事故", "營運政策"],
+            active_regions=[],
+            is_global_scope=True,
+            standards_enabled=False,
+            include_research_supplement=False,
+            fast_mode_enabled=False,
+            date_range="2026年08月12日 至 2026年08月18日",
+            report_title="fixture",
+            report_scope_label="全球",
+            report_period_label="週報",
+        )
+        runtime = workflow_service.make_runtime(
+            config,
+            workflow_service.WorkflowDependencies(prefetch_enabled=False),
+        )
+        hanzomon_operational = _candidate(
+            2,
+            "Tokyo Metro Hanzomon asbestos inspection",
+            "Tokyo Metro inspected asbestos material and suspended service as a precaution.",
+            source_tier="A_official",
+            source_display="Tokyo Metro",
+        )
+        hanzomon_operational.update({
+            "classification": "營運政策",
+            "primary_category": "營運政策",
+        })
+        hanzomon_accident = _candidate(
+            4,
+            "Hanzomon Line closed after asbestos discovery",
+            "Tokyo Metro closed the Hanzomon Line after an asbestos discovery.",
+            source_tier="C_media",
+            source_display="Rail News",
+        )
+        hanzomon_accident.update({
+            "classification": "重大事故",
+            "primary_category": "重大事故",
+        })
+        gold_coast = _candidate(
+            8,
+            "Gold Coast light rail signalling and communications upgrade",
+            "Gold Coast light rail deployed signalling and communications upgrades.",
+            region="澳洲",
+            source_display="Gold Coast Light Rail",
+        )
+        gold_coast.update({
+            "classification": "技術新知",
+            "primary_category": "技術新知",
+        })
+        model_candidates = [hanzomon_operational, hanzomon_accident, gold_coast]
+        runtime.selector_api["select_candidates_by_python"] = lambda items: list(items)
+
+        selected = runtime.select_candidates(model_candidates)
+
+        self.assertEqual(len(selected), 2)
+        self.assertEqual(runtime.last_selection_event_consolidation_stats["duplicate_count"], 1)
+        self.assertEqual(selected[0]["candidate_id"], 1)
+        self.assertEqual(selected[0]["classification"], "營運政策")
+        self.assertEqual(selected[0]["consolidated_candidate_ids"], [2, 4])
+        self.assertEqual(len(selected[0]["supporting_sources"]), 2)
+
+        prompt = runtime.build_report_prompt(selected, [], 1)
+        payloads = [
+            json.loads(line)
+            for line in prompt.splitlines()
+            if line.startswith('{"candidate_id"')
+        ]
+        self.assertEqual([payload["candidate_id"] for payload in payloads], [1, 2])
+        self.assertEqual(payloads[0]["classification"], "營運動態")
+        self.assertEqual(payloads[0]["report_source"]["source_display"], "Tokyo Metro")
+        self.assertNotIn("supporting_sources", payloads[0])
+        self.assertNotIn("supplemental_sources", payloads[0])
+        self.assertNotIn("source_display", payloads[0])
+        self.assertNotIn("url", payloads[0])
+
+    def test_failed_retry_aborts_workflow_before_render_or_delivery(self):
+        config = workflow_service.WorkflowConfig(
+            today=datetime.date(2026, 8, 18),
+            lookback_days=7,
+            selected_types=["技術新知"],
+            active_regions=[],
+            is_global_scope=True,
+            standards_enabled=False,
+            include_research_supplement=False,
+            fast_mode_enabled=False,
+            date_range="2026年08月12日 至 2026年08月18日",
+            report_title="fixture",
+            report_scope_label="全球",
+            report_period_label="週報",
+        )
+        candidate = _candidate(
+            1,
+            "Gold Coast light rail signalling upgrade",
+            "Gold Coast light rail deployed signalling and communications upgrades.",
+            region="澳洲",
+        )
+        fake_runtime = mock.Mock()
+        fake_runtime.search.return_value = ("", "", [], [], 1)
+        fake_runtime.prepare_candidate_pool.return_value = {
+            "model_candidates": [candidate],
+        }
+        fake_runtime.select_candidates.return_value = [candidate]
+        fake_runtime.build_report_prompt.return_value = "fixture prompt"
+        dependencies = workflow_service.WorkflowDependencies(
+            call_maiagent=mock.Mock(side_effect=["first response", "retry response"]),
+            prefetch_enabled=False,
+        )
+        failed_validation = {
+            "retry_required": True,
+            "report_validation_passed": False,
+            "missing_ids": [],
+            "unknown_ids": [],
+            "duplicate_ids": [1],
+            "multi_candidate_model_blocks": [[1, 1]],
+        }
+
+        with mock.patch.object(workflow_service, "make_runtime", return_value=fake_runtime), \
+             mock.patch.object(
+                 workflow_service,
+                 "validate_authoritative_report",
+                 side_effect=[failed_validation, failed_validation],
+             ):
+            with self.assertRaises(workflow_service.ReportIntegrityError) as raised:
+                workflow_service.run_report_workflow(
+                    config=config,
+                    dependencies=dependencies,
+                )
+
+        self.assertEqual(dependencies.call_maiagent.call_count, 2)
+        fake_runtime.postprocess_report.assert_not_called()
+        self.assertEqual(raised.exception.validation["duplicate_ids"], [1])
+
     def test_hanzomon_asbestos_sources_consolidate_before_model_ids(self):
         api = _selector()
         candidates = [
@@ -139,6 +277,18 @@ class P2K4RRegressionTests(unittest.TestCase):
         )
         self.assertEqual(payload["report_source"]["url"], primary_url)
         self.assertEqual(len({payload["report_source"]["url"]}), 1)
+
+        multi_url_candidate = dict(candidate)
+        multi_url_candidate["url"] = f"{primary_url}；{secondary_url}"
+        multi_url_candidate["source_href"] = f"{primary_url}；{secondary_url}"
+        multi_url_prompt = app.build_report_prompt([multi_url_candidate], [], 1)
+        multi_url_payload = next(
+            json.loads(line)
+            for line in multi_url_prompt.splitlines()
+            if line.startswith('{"candidate_id"')
+        )
+        self.assertEqual(multi_url_payload["report_source"]["url"], primary_url)
+        self.assertNotIn(secondary_url, multi_url_payload["report_source"]["url"])
 
     def test_formal_source_renderer_keeps_one_primary_source(self):
         candidate = _candidate(1, "東京捷運半藏門線石綿檢查", "東京捷運發現石綿材料並進行檢查。")

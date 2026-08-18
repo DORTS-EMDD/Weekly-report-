@@ -205,6 +205,42 @@ class WorkflowResult:
     search_count: int
 
 
+class ReportIntegrityError(RuntimeError):
+    """Raised before rendering or delivery when the formal report is invalid."""
+
+    def __init__(
+        self,
+        validation: dict,
+        selected_candidates: list[dict],
+        *,
+        retry_attempted: bool,
+    ):
+        self.validation = dict(validation or {})
+        self.selected_candidates = list(selected_candidates or [])
+        self.retry_attempted = bool(retry_attempted)
+        reasons = []
+        for key in (
+            "missing_ids",
+            "unknown_ids",
+            "duplicate_ids",
+            "missing_model_fields",
+            "parser_failure_reasons",
+            "category_mismatches",
+            "multi_candidate_model_blocks",
+            "missing_required_sections",
+            "content_quality_issues",
+            "forbidden_internal_phrases",
+        ):
+            value = self.validation.get(key)
+            if value:
+                reasons.append(f"{key}={value}")
+        detail = "; ".join(reasons) or "report_validation_passed=false"
+        super().__init__(
+            "正式報告完整性驗證未通過；已中止正式報告輸出、PDF 與 Email。"
+            f" retry_attempted={self.retry_attempted}; {detail}"
+        )
+
+
 def _profile_timing_add(timings: dict | None, key: str, elapsed: float) -> None:
     if timings is not None:
         timings[key] = float(timings.get(key, 0.0) or 0.0) + max(0.0, elapsed)
@@ -229,6 +265,12 @@ class WorkflowRuntime:
             create_requests_session=dependencies.http_session_factory,
             _profile_timing_add=_profile_timing_add,
         )
+        self.last_selection_event_consolidation_stats: dict = {
+            "input_count": 0,
+            "output_count": 0,
+            "duplicate_count": 0,
+            "duplicate_event_records": [],
+        }
 
     def _search_family_from_query(self, query: str) -> str:
         return _search_family_from_query(
@@ -623,9 +665,44 @@ class WorkflowRuntime:
         }
 
     def select_candidates(self, model_candidates: list[dict]) -> list[dict]:
-        return ensure_selected_candidate_ids(
+        selected = ensure_selected_candidate_ids(
             self.selector_api["select_candidates_by_python"](model_candidates)
         )
+        consolidate_events = self.selector_api.get("consolidate_event_candidates")
+        if not callable(consolidate_events):
+            self.last_selection_event_consolidation_stats = {
+                "input_count": len(selected),
+                "output_count": len(selected),
+                "duplicate_count": 0,
+                "duplicate_event_records": [],
+                "stage": "post_selection",
+            }
+            return selected
+
+        selected_ids_before = [
+            int(item.get("candidate_id") or item.get("id") or 0)
+            for item in selected
+        ]
+        selected, stats = consolidate_events(selected)
+        stats = dict(stats)
+        stats.update({
+            "stage": "post_selection",
+            "selected_ids_before_consolidation": selected_ids_before,
+            "selected_ids_after_consolidation": [
+                int(item.get("candidate_id") or item.get("id") or 0)
+                for item in selected
+            ],
+        })
+        if stats.get("duplicate_count", 0):
+            for index, candidate in enumerate(selected, 1):
+                candidate["id"] = index
+                candidate["candidate_id"] = index
+            stats["selected_ids_after_id_assignment"] = [
+                int(item.get("candidate_id") or item.get("id") or 0)
+                for item in selected
+            ]
+        self.last_selection_event_consolidation_stats = stats
+        return ensure_selected_candidate_ids(selected)
 
     def _prompt_context(self) -> ReportPromptContext:
         selector = self.selector_api
@@ -821,6 +898,17 @@ def run_report_workflow(
         raw_report = dependencies.call_maiagent(
             build_report_retry_prompt(report_prompt, raw_report, validation)
         )
+    final_validation = validate_authoritative_report(
+        raw_report,
+        selected_candidates,
+        selected_types=config.selected_types,
+    )
+    if not final_validation.get("report_validation_passed"):
+        raise ReportIntegrityError(
+            final_validation,
+            selected_candidates,
+            retry_attempted=retry_attempted,
+        )
     final_report, _, _ = runtime.postprocess_report(raw_report, selected_candidates)
     return WorkflowResult(
         report_md=final_report,
@@ -829,11 +917,7 @@ def run_report_workflow(
         raw_rss=raw_rss,
         raw_ddg=raw_ddg,
         report_prompt=report_prompt,
-        report_id_validation=validate_authoritative_report(
-            raw_report,
-            selected_candidates,
-            selected_types=config.selected_types,
-        ),
+        report_id_validation=final_validation,
         retry_attempted=retry_attempted,
         source_statuses=source_statuses,
         ddgs_statuses=ddgs_statuses,

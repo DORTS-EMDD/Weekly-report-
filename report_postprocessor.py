@@ -1996,6 +1996,7 @@ def validate_authoritative_report(
         and not missing_sections
         and not missing_model_fields
         and not multi_candidate_model_blocks
+        and event_level_integrity_passed
         and not category_mismatches
         and not forbidden_internal_phrases
         and not content_quality_issues

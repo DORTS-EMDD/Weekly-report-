@@ -301,6 +301,7 @@ def clear_old_report_state() -> None:
         "report_generated", "email_sent", "last_run_result",
         "latest_report", "latest_report_summary", "latest_report_stats",
         "latest_debug_info", "latest_source_statuses",
+        "latest_report_integrity_failure",
     ]
     for key in keys_to_clear:
         st.session_state.pop(key, None)
@@ -1374,6 +1375,9 @@ def select_candidates_by_python(model_candidates: list[dict]) -> list[dict]:
     )
     selected = runtime.select_candidates(model_candidates)
     LAST_PYTHON_SELECTION_DEBUG = selector_service.LAST_PYTHON_SELECTION_DEBUG
+    LAST_PYTHON_SELECTION_DEBUG["selected_event_consolidation_stats"] = dict(
+        runtime.last_selection_event_consolidation_stats
+    )
     return selected
 
 
@@ -2607,6 +2611,72 @@ if generate_btn:
             maiagent_report_response_count = count_authoritative_report_items(raw_report)
             timings["elapsed_seconds_report"] = round(time.perf_counter() - stage_start, 2)
             maiagent_call_count += 1
+            if not report_id_validation_after_retry.get("report_validation_passed"):
+                integrity_failure = {
+                    "report_validation_passed": False,
+                    "retry_attempted": report_retry_attempted,
+                    "selected_candidate_ids": report_id_validation_after_retry.get(
+                        "selected_candidate_ids", selected_ids
+                    ),
+                    "model_candidate_ids": report_id_validation_after_retry.get(
+                        "model_candidate_ids", raw_report_candidate_ids
+                    ),
+                    "missing_ids": report_id_validation_after_retry.get("missing_ids", []),
+                    "unknown_ids": report_id_validation_after_retry.get("unknown_ids", []),
+                    "duplicate_ids": report_id_validation_after_retry.get("duplicate_ids", []),
+                    "missing_model_fields": report_id_validation_after_retry.get(
+                        "missing_model_fields", {}
+                    ),
+                    "parser_failure_reasons": report_id_validation_after_retry.get(
+                        "parser_failure_reasons", {}
+                    ),
+                    "multi_candidate_model_blocks": report_id_validation_after_retry.get(
+                        "multi_candidate_model_blocks", []
+                    ),
+                    "category_mismatches": report_id_validation_after_retry.get(
+                        "category_mismatches", []
+                    ),
+                    "missing_required_sections": report_id_validation_after_retry.get(
+                        "missing_required_sections", []
+                    ),
+                    "content_quality_issues": report_id_validation_after_retry.get(
+                        "content_quality_issues", []
+                    ),
+                    "forbidden_internal_phrases": report_id_validation_after_retry.get(
+                        "forbidden_internal_phrases", []
+                    ),
+                    "event_level_integrity_passed": report_id_validation_after_retry.get(
+                        "event_level_integrity_passed", False
+                    ),
+                }
+                LAST_REPORT_ID_VALIDATION.clear()
+                LAST_REPORT_ID_VALIDATION.update(integrity_failure)
+                st.session_state["latest_report_integrity_failure"] = integrity_failure
+                st.session_state["latest_report_md"] = ""
+                st.session_state["latest_report"] = ""
+                st.session_state["latest_pdf"] = None
+                st.session_state["report_generated"] = False
+                st.session_state["email_sent"] = False
+                st.session_state["latest_report_stats"] = integrity_failure
+                st.session_state["latest_debug_info"] = {
+                    "selected_candidates": selected_candidates,
+                    "selected_ids": selected_ids,
+                    "report_prompt": report_prompt,
+                    "initial_raw_report": initial_raw_report,
+                    "raw_report": raw_report,
+                    "raw_report_candidate_ids": raw_report_candidate_ids,
+                    "report_id_validation_before_retry": report_id_validation_before_retry,
+                    "report_id_validation_after_retry": integrity_failure,
+                    "report_integrity_aborted_before_render": True,
+                }
+                st.error(
+                    "❌ 正式報告完整性驗證未通過；已停止輸出，不產生 PDF、不下載、不寄送 Email。"
+                )
+                raise workflow_service.ReportIntegrityError(
+                    integrity_failure,
+                    selected_candidates,
+                    retry_attempted=report_retry_attempted,
+                )
             progress_bar.progress(0.88)
 
             status_text.text("正在進行報告撰寫")
@@ -2668,6 +2738,16 @@ if generate_btn:
             prompt_chars = len(report_prompt)
             raw_chars = len(rss_results) + len(ddg_results)
             pipeline_debug_stats = candidate_pool.get("pipeline_debug_stats", {})
+            selected_event_consolidation_stats = dict(
+                LAST_PYTHON_SELECTION_DEBUG.get(
+                    "selected_event_consolidation_stats", {}
+                )
+            )
+            pipeline_debug_stats["selected_event_consolidation_stats"] = (
+                selected_event_consolidation_stats
+            )
+            pipeline_debug_stats["prompt_candidate_count"] = len(selected_candidates)
+            pipeline_debug_stats["prompt_candidate_ids"] = selected_ids
             pipeline_counts = pipeline_debug_stats.setdefault("pipeline_counts", {})
             pipeline_counts["selected"] = len(selected_candidates)
             pipeline_counts["reconciled_accepted"] = reconciled_accepted_count
@@ -2843,6 +2923,9 @@ if generate_btn:
                 "selected_event_count": len(selected_candidates),
                 "model_article_block_count": maiagent_report_response_count,
                 "event_consolidation_stats": candidate_pool.get("event_consolidation_stats", {}),
+                "selected_event_consolidation_stats": selected_event_consolidation_stats,
+                "prompt_candidate_count": len(selected_candidates),
+                "prompt_candidate_ids": selected_ids,
                 "multi_candidate_model_blocks": reconciliation_diagnostics.get(
                     "multi_candidate_model_blocks", []
                 ),
@@ -3099,6 +3182,9 @@ if generate_btn:
             progress_bar.progress(1.0)
             status_text.text("報告產製完成")
 
+        except workflow_service.ReportIntegrityError as e:
+            progress_placeholder.empty()
+            status_text.error(str(e))
         except Exception as e:
             progress_placeholder.empty()
             status_text.error(f"❌ 發生錯誤：{e}")

@@ -4588,6 +4588,24 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return "相同城市/地點、相近日期與相同系統主題，事件級重複排除。"
 
 
+    def _event_category_preference(candidate: dict) -> tuple[int, str]:
+        category = str(
+            candidate.get("primary_category")
+            or candidate.get("classification")
+            or candidate.get("preliminary_type")
+            or ""
+        ).strip()
+        if category in {"營運政策", "營運爭議", "營運動態", SERVICE_OPENING_CATEGORY_KEY}:
+            return (4, category)
+        if category == "重大事故":
+            return (3, category)
+        if category == "技術新知":
+            return (2, category)
+        if category == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL:
+            return (1, category)
+        return (0, category)
+
+
     def _is_same_report_event(candidate: dict, selected_item: dict) -> bool:
         candidate_fp = build_event_fingerprint(candidate)
         selected_fp = build_event_fingerprint(selected_item)
@@ -4608,7 +4626,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         }
         if is_accident and _injury_bands_conflict(candidate, selected_item):
             return False
-        date_close = _event_date_close(candidate, selected_item, days=1 if is_accident else 3)
+        date_close = _event_date_close(candidate, selected_item, days=3)
         geo_compatible = bool(
             candidate_geo
             and selected_geo
@@ -4623,8 +4641,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             == _candidate_specific_event_location(selected_item)
         )
         same_operational_event = (
-            not is_accident
-            and date_close
+            date_close
             and bool(candidate_operator and selected_operator and candidate_operator == selected_operator)
             and geo_compatible
             and (
@@ -4899,6 +4916,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
     def _merge_duplicate_event_sources(selected_item: dict, candidate: dict) -> bool:
         incoming_is_preferred = _event_source_preference_key(candidate) < _event_source_preference_key(selected_item)
         existing_copy = dict(selected_item)
+        prior_ids = selected_item.get("consolidated_candidate_ids") or [
+            selected_item.get("candidate_id", selected_item.get("id", ""))
+        ]
+        incoming_id = candidate.get("candidate_id", candidate.get("id", ""))
         primary = candidate if incoming_is_preferred else selected_item
         supplement = existing_copy if incoming_is_preferred else candidate
         source_records = [_supplemental_source_record(primary)]
@@ -4923,6 +4944,17 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             selected_item.clear()
             selected_item.update(candidate)
             selected_item.update(selection_state)
+        category_candidate = max(
+            (existing_copy, candidate),
+            key=_event_category_preference,
+        )
+        for key in ("classification", "primary_category", "preliminary_type", "operational_subtype"):
+            if category_candidate.get(key):
+                selected_item[key] = category_candidate[key]
+        selected_item["consolidated_candidate_ids"] = list(dict.fromkeys([
+            *prior_ids,
+            incoming_id,
+        ]))
         selected_item["supporting_sources"] = unique_sources
         selected_item["supplemental_sources"] = []
         selected_item["event_source_merge_count"] = len(unique_sources)
@@ -4939,6 +4971,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             )
             if duplicate_of is None:
                 candidate.setdefault("supporting_sources", [_supplemental_source_record(candidate)])
+                candidate.setdefault("consolidated_candidate_ids", [
+                    candidate.get("candidate_id", candidate.get("id", ""))
+                ])
                 candidate.setdefault("event_source_merge_count", 1)
                 consolidated.append(candidate)
                 continue
