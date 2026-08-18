@@ -210,6 +210,9 @@ class P2KRecallQualityTests(unittest.TestCase):
             )
         self.assertEqual(summary["forward_technology_query_count"], 1)
         self.assertEqual(summary["forward_technology_fallback_query_count"], 8)
+        self.assertEqual(summary["forward_technology_primary_raw_count"], 0)
+        self.assertEqual(summary["forward_technology_fallback_raw_count"], 8)
+        self.assertEqual(summary["forward_technology_raw_count"], 8)
         self.assertTrue(any(row.get("fallback_layer") for row in statuses))
 
     def test_annual_bucket_metadata_covers_forward_and_selected_families(self):

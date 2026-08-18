@@ -369,6 +369,8 @@ SUBSTANTIVE_TECHNICAL_DETAIL_TERMS = [
     "technical method", "technical specification", "technical parameter", "performance test",
     "acceptance test", "validation", "validated", "verification", "demonstration",
     "demonstrated", "pilot uses", "onboard sensor", "onboard sensors", "condition monitoring",
+    "testing and commissioning", "control system", "control systems",
+    "operational control centre", "operational control center",
     "predictive maintenance", "fault detection", "continuous monitoring", "non-destructive",
     "silicon carbide", "sic traction inverter", "traction inverter", "regenerative braking",
     "energy consumption", "energy efficiency", "energy saving", "reducing energy",
@@ -677,7 +679,7 @@ FORWARD_GATE_BENEFIT_TERMS = [
 ]
 
 FORWARD_TRACK_B_EMERGING_TERMS = [
-    "artificial intelligence", "machine learning", "computer vision", "video analytics", "automated inspection",
+    "automation", "automated operation", "automatic train operation", "artificial intelligence", "machine learning", "computer vision", "video analytics", "automated inspection",
     "predictive maintenance", "condition monitoring", "anomaly detection", "fault prediction",
     "digital twin", "cybersecurity", "cyber security", "control network", "virtual coupling",
     "system assurance", "rams", "verification and validation", "advanced signalling",
@@ -1533,6 +1535,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return False
         if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
             return False
+        if _is_short_snippet_rescue_candidate(candidate) or _is_procurement_rescue_candidate(candidate):
+            return True
         source = candidate.get("source", "")
         title_text = f"{title} {source} {candidate.get('source_domain', '')}"
         if not _has_clear_urban_rail_context(title_text, source):
@@ -1565,7 +1569,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return False
         if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
             return False
-        if _wordish_count(title) < 4 or not _has_clear_urban_rail_context(title, candidate.get("source", "")):
+        if _wordish_count(title) < 3 or not _has_clear_urban_rail_context(title, candidate.get("source", "")):
             return False
         high_value_terms = (
             TECH_NEWS_REQUIRED_TERMS

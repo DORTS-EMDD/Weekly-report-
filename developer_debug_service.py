@@ -285,6 +285,8 @@ def build_developer_debug_payload(
             "gate_pass_count_by_category": latest_stats.get("gate_pass_count_by_category", debug_info.get("pipeline_debug_stats", {}).get("gate_pass_count_by_category", {})),
             "forward_technology_query_count": latest_stats.get("forward_technology_query_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_query_count", 0)),
             "forward_technology_fallback_query_count": latest_stats.get("forward_technology_fallback_query_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_fallback_query_count", 0)),
+            "forward_technology_primary_raw_count": latest_stats.get("forward_technology_primary_raw_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_primary_raw_count", 0)),
+            "forward_technology_fallback_raw_count": latest_stats.get("forward_technology_fallback_raw_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_fallback_raw_count", 0)),
             "forward_technology_raw_count": latest_stats.get("forward_technology_raw_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_raw_count", 0)),
             "forward_technology_gate_pass_count": latest_stats.get("forward_technology_gate_pass_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_gate_pass_count", 0)),
             "forward_technology_selected_count": latest_stats.get("forward_technology_selected_count", debug_info.get("pipeline_debug_stats", {}).get("forward_technology_selected_count", 0)),

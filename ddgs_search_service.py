@@ -791,6 +791,16 @@ def build_ddgs_search_summary(
     forward_rows = [row for row in rows if (row.get("search_family") or row.get("family")) == "forward_technology"]
     summary["forward_technology_query_count"] = sum(1 for row in forward_rows if not row.get("fallback_layer"))
     summary["forward_technology_fallback_query_count"] = sum(1 for row in forward_rows if row.get("fallback_layer"))
+    summary["forward_technology_primary_raw_count"] = sum(
+        int(row.get("added_to_raw_count", 0) or 0)
+        for row in forward_rows
+        if not row.get("fallback_layer")
+    )
+    summary["forward_technology_fallback_raw_count"] = sum(
+        int(row.get("added_to_raw_count", 0) or 0)
+        for row in forward_rows
+        if row.get("fallback_layer")
+    )
     summary["forward_technology_raw_count"] = sum(
         int(row.get("added_to_raw_count", 0) or 0) for row in forward_rows
     )
@@ -1005,13 +1015,20 @@ def run_duckduckgo_searches(
             if context.progress_callback:
                 context.progress_callback(done_count / total)
 
+    primary_forward_query_count = sum(
+        1
+        for row in statuses
+        if (row.get("search_family") or row.get("family")) == "forward_technology"
+        and not row.get("fallback_layer")
+    )
     primary_forward_raw_count = sum(
         int(row.get("added_to_raw_count", 0) or 0)
         for row in statuses
         if (row.get("search_family") or row.get("family")) == "forward_technology"
         and not row.get("fallback_layer")
     )
-    if context.forward_technology_query_count and primary_forward_raw_count == 0:
+    context.forward_technology_query_count = primary_forward_query_count
+    if primary_forward_query_count and primary_forward_raw_count == 0:
         fallback_queries: list[str] = []
         for spec in FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS:
             fallback_query = _query_with_period(spec.get("query", ""), context=context)
