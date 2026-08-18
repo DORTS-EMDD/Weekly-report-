@@ -510,10 +510,17 @@ EQUIPMENT_FAILURE_TERMS = [
     "장애", "신호 장애", "신호 고장", "전력 장애", "통신 장애", "스크린도어 고장",
 ]
 
+ENVIRONMENTAL_OPERATION_ABNORMALITY_TERMS = [
+    "unusual odor", "unusual smell", "odor", "smell", "asbestos", "asbestos-containing",
+    "異味", "異臭", "臭味", "臭氣", "石綿", "石綿含有", "アスベスト", "석면", "이상 냄새",
+]
+
 TECHNICAL_OPERATION_IMPACT_TERMS = [
     "service suspension", "service suspended", "major disruption", "major delays",
     "severe delays", "degraded service", "manual operation", "local shutdown",
-    "line shutdown", "station shutdown", "operations suspended", "營運中斷",
+    "line shutdown", "station shutdown", "network shutdown", "system shutdown",
+    "shut down the network", "shuts down network", "suspend service", "suspends service",
+    "precautionary suspension", "operations suspended", "營運中斷",
     "停駛", "大幅延誤", "嚴重延誤", "降級運轉", "人工操作", "局部停運",
     "路線停運", "車站關閉", "營運暫停",
     "運転見合わせ", "運休", "運行停止", "運行中断", "운행중단", "운행 중단",
@@ -942,12 +949,10 @@ MAJOR_ACCIDENT_SEVERITY_TERMS = [
 MAJOR_ACCIDENT_DIRECT_TERMS = [
     "derailment", "derailed", "train-to-train collision", "trains collided",
     "collision", "collided", "crash", "major fire", "train fire", "station fire",
-    "mass evacuation", "official investigation", "formal investigation",
-    "safety investigation", "investigation launched", "死亡", "重傷", "多人受傷",
+    "mass evacuation", "死亡", "重傷", "多人受傷",
     "多人重傷", "出軌", "脫軌", "列車碰撞", "列車相撞", "重大火災", "大量疏散",
-    "正式調查", "事故調查", "安全調查",
-    "脱線", "脱軌", "列車衝突", "列車相撞", "火災", "避難", "運転見合わせ",
-    "탈선", "충돌", "화재", "대피", "조사", "운행중단",
+    "脱線", "脱軌", "列車衝突", "列車相撞", "火災", "避難",
+    "탈선", "충돌", "화재", "대피",
 ]
 
 POST_INCIDENT_POLICY_TERMS = [
@@ -2844,6 +2849,16 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return True
         if _contains_any_term(fragment, ["major safety consequence", "major safety consequences", "重大安全後果", "重大安全影響"]):
             return True
+        if _contains_any_term(fragment, ENVIRONMENTAL_OPERATION_ABNORMALITY_TERMS):
+            if _contains_any_term(fragment, [
+                "no injury", "no injuries", "no exposure injury", "without injury",
+                "無受傷", "未受傷", "未造成人員受傷",
+            ]):
+                return False
+            return _contains_any_term(fragment, [
+                "injury", "injured", "hospitalized", "hospitalised", "emergency",
+                "fatal", "death", "evacuation", "evacuated", "受傷", "送醫", "緊急",
+            ])
         return _contains_any_term(fragment, ["train fire", "station fire", "subway fire", "metro fire", "列車火災", "車站火災"])
 
 
@@ -2861,7 +2876,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             if not _fragment_has_urban_rail_context(fragment):
                 continue
             has_accident_context = (
-                _contains_any_term(fragment, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS + EQUIPMENT_FAILURE_TERMS)
+                _contains_any_term(
+                    fragment,
+                    ACCIDENT_SIGNAL_TERMS
+                    + SAFETY_INCIDENT_DETAIL_TERMS
+                    + EQUIPMENT_FAILURE_TERMS
+                    + ENVIRONMENTAL_OPERATION_ABNORMALITY_TERMS,
+                )
                 or _contains_any_term(fragment, ["accident", "incident", "failure", "fault", "事故", "故障", "異常"])
             )
             if not has_accident_context:
@@ -2872,8 +2893,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                     _contains_any_term(fragment, EQUIPMENT_FAILURE_TERMS)
                     and _contains_any_term(fragment, [
                         "evacuation", "evacuated", "injury", "injured", "fatal", "death",
-                        "fire", "collision", "derailment", "official investigation",
-                        "安全後果", "安全調查", "疏散", "受傷", "死亡",
+                        "fire", "collision", "derailment",
+                        "安全後果", "疏散", "受傷", "死亡",
                     ])
                 )
             )
@@ -2985,7 +3006,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         equipment_terms = EQUIPMENT_FAILURE_TERMS + [
             "system failure", "system fault", "mechanical failure", "rolling stock failure",
             "train failure", "equipment malfunction", "設備異常", "系統故障", "機械故障",
-        ]
+        ] + ENVIRONMENTAL_OPERATION_ABNORMALITY_TERMS
         has_equipment_failure = _contains_any_term(text, equipment_terms)
         has_impact = _contains_any_term(text, TECHNICAL_OPERATION_IMPACT_TERMS)
         has_system = _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS) or _contains_any_term(
@@ -4376,6 +4397,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
     def _candidate_incident_type(candidate: dict) -> str:
         text = _candidate_selection_text(candidate)
         incident_terms = [
+            ("environmental_safety", ENVIRONMENTAL_OPERATION_ABNORMALITY_TERMS),
             ("tram_collision", ["tram", "streetcar", "collision", "crash", "hit", "rammed", "電車", "路面電車", "撞擊", "碰撞"]),
             ("derailment", ["derailment", "derailed", "entgleist", "出軌", "脫軌"]),
             ("power_supply", ["power outage", "power failure", "traction power", "third rail", "供電", "牽引", "第三軌"]),
@@ -4576,15 +4598,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         selected_geo = selected_fp.get("geo_key", "")
         if candidate_geo and selected_geo and candidate_geo != selected_geo:
             return False
-        candidate_asset = candidate_fp.get("asset_key", "")
-        selected_asset = selected_fp.get("asset_key", "")
-        if candidate_asset and selected_asset and candidate_asset != selected_asset:
-            return False
         candidate_lines = _dedupe_route_line_tokens(candidate)
         selected_lines = _dedupe_route_line_tokens(selected_item)
-        if candidate_lines and selected_lines and candidate_lines.isdisjoint(selected_lines):
-            return False
-
         is_accident = "重大事故" in {
             candidate.get("classification"), selected_item.get("classification"),
             candidate.get("primary_category"), selected_item.get("primary_category"),
@@ -4592,6 +4607,37 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if is_accident and _injury_bands_conflict(candidate, selected_item):
             return False
         date_close = _event_date_close(candidate, selected_item, days=1 if is_accident else 3)
+        same_operational_event = (
+            not is_accident
+            and date_close
+            and bool(candidate_operator and selected_operator and candidate_operator == selected_operator)
+            and bool(candidate_geo and selected_geo and candidate_geo == selected_geo)
+            and (
+                bool(candidate_lines and selected_lines and not candidate_lines.isdisjoint(selected_lines))
+                or difflib.SequenceMatcher(
+                    None,
+                    _event_similarity_text(candidate),
+                    _event_similarity_text(selected_item),
+                ).ratio() >= 0.58
+            )
+            and bool(candidate_fp.get("incident_key"))
+            and candidate_fp.get("incident_key") == selected_fp.get("incident_key")
+            and candidate_fp.get("incident_key") in {
+                "environmental_safety",
+                "signal_or_switch",
+                "power_supply",
+                "platform_door",
+                "service_disruption",
+            }
+        )
+        if same_operational_event:
+            return True
+        candidate_asset = candidate_fp.get("asset_key", "")
+        selected_asset = selected_fp.get("asset_key", "")
+        if candidate_asset and selected_asset and candidate_asset != selected_asset:
+            return False
+        if candidate_lines and selected_lines and candidate_lines.isdisjoint(selected_lines):
+            return False
         if (
             date_close
             and candidate_geo
@@ -4839,12 +4885,15 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         existing_copy = dict(selected_item)
         primary = candidate if incoming_is_preferred else selected_item
         supplement = existing_copy if incoming_is_preferred else candidate
-        supplemental_sources = list(primary.get("supplemental_sources", []) or [])
-        supplemental_sources.extend(supplement.get("supplemental_sources", []) or [])
-        supplemental_sources.append(_supplemental_source_record(supplement))
+        source_records = [_supplemental_source_record(primary)]
+        source_records.extend(primary.get("supporting_sources", []) or [])
+        source_records.extend(primary.get("supplemental_sources", []) or [])
+        source_records.extend(supplement.get("supporting_sources", []) or [])
+        source_records.extend(supplement.get("supplemental_sources", []) or [])
+        source_records.append(_supplemental_source_record(supplement))
         unique_sources: list[dict] = []
         seen: set[tuple[str, str]] = set()
-        for source_row in supplemental_sources:
+        for source_row in source_records:
             key = (str(source_row.get("url", "") or ""), str(source_row.get("title", "") or ""))
             if key not in seen:
                 seen.add(key)
@@ -4858,9 +4907,55 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             selected_item.clear()
             selected_item.update(candidate)
             selected_item.update(selection_state)
-        selected_item["supplemental_sources"] = unique_sources
+        primary_record = _supplemental_source_record(primary)
+        primary_key = (
+            str(primary_record.get("url", "") or ""),
+            str(primary_record.get("title", "") or ""),
+        )
+        selected_item["supporting_sources"] = unique_sources
+        selected_item["supplemental_sources"] = [
+            source_row
+            for source_row in unique_sources
+            if (
+                str(source_row.get("url", "") or ""),
+                str(source_row.get("title", "") or ""),
+            ) != primary_key
+        ][:1]
         selected_item["event_source_merge_count"] = len(unique_sources)
         return incoming_is_preferred
+
+
+    def consolidate_event_candidates(candidates: list[dict]) -> tuple[list[dict], dict]:
+        consolidated: list[dict] = []
+        duplicate_records: list[dict] = []
+        for candidate in candidates or []:
+            duplicate_of = next(
+                (item for item in consolidated if _is_same_report_event(candidate, item)),
+                None,
+            )
+            if duplicate_of is None:
+                candidate.setdefault("supporting_sources", [_supplemental_source_record(candidate)])
+                candidate.setdefault("event_source_merge_count", 1)
+                consolidated.append(candidate)
+                continue
+            source_replaced = _merge_duplicate_event_sources(duplicate_of, candidate)
+            candidate["duplicate_of"] = duplicate_of.get("candidate_id", duplicate_of.get("id", ""))
+            candidate["selection_stage"] = "event_consolidated_duplicate"
+            duplicate_records.append({
+                "candidate_id": candidate.get("candidate_id", candidate.get("id", "")),
+                "candidate_title": candidate.get("title", ""),
+                "duplicate_of_id": duplicate_of.get("candidate_id", duplicate_of.get("id", "")),
+                "duplicate_of_title": duplicate_of.get("title", ""),
+                "source_replaced_by_higher_priority": source_replaced,
+                "supporting_source_count": len(duplicate_of.get("supporting_sources", []) or []),
+                "supporting_sources": list(duplicate_of.get("supporting_sources", []) or []),
+            })
+        return consolidated, {
+            "input_count": len(candidates or []),
+            "output_count": len(consolidated),
+            "duplicate_count": len(duplicate_records),
+            "duplicate_event_records": duplicate_records,
+        }
 
 
     def _take_next_python_candidate(pool: list[dict], selected: list[dict]) -> dict | None:
@@ -5482,6 +5577,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_event_source_preference_key": _event_source_preference_key,
         "_supplemental_source_record": _supplemental_source_record,
         "_merge_duplicate_event_sources": _merge_duplicate_event_sources,
+        "consolidate_event_candidates": consolidate_event_candidates,
         "_take_next_python_candidate": _take_next_python_candidate,
         "_is_hard_excluded_for_borderline": _is_hard_excluded_for_borderline,
         "_is_b_level_technical_candidate": _is_b_level_technical_candidate,

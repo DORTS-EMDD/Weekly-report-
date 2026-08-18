@@ -2674,7 +2674,47 @@ if generate_btn:
             pipeline_counts["rendered"] = rendered_report_count
             pipeline_stages = pipeline_debug_stats.setdefault("pipeline_stages", {})
             pipeline_stages["selected"] = len(selected_candidates)
+            pipeline_stages["model"] = len(selected_candidates)
             pipeline_stages["final"] = rendered_report_count
+            pipeline_debug_stats["selected_event_count"] = len(selected_candidates)
+            pipeline_debug_stats["model_candidate_id_count"] = reconciliation_diagnostics.get(
+                "model_candidate_id_count", len(raw_report_candidate_ids)
+            )
+            pipeline_debug_stats["model_article_block_count"] = maiagent_report_response_count
+            pipeline_debug_stats["final_unique_article_count"] = rendered_report_count
+            final_candidate_id_values = reconciliation_diagnostics.get("final_candidate_ids", [])
+            final_candidate_id_set = {
+                int(value)
+                for value in final_candidate_id_values
+                if str(value).strip().isdigit()
+            }
+            final_candidates = [
+                item
+                for item in selected_candidates
+                if int(item.get("candidate_id", item.get("id", 0)) or 0) in final_candidate_id_set
+            ]
+            if not final_candidates and rendered_report_count == len(selected_candidates):
+                final_candidates = list(selected_candidates)
+
+            def _final_count_by(items: list[dict], key: str) -> dict[str, int]:
+                counts: dict[str, int] = {}
+                for item in items:
+                    value = item.get(key, "") or "未標記"
+                    counts[str(value)] = counts.get(str(value), 0) + 1
+                return counts
+
+            final_source_tier_counts = _final_count_by(final_candidates, "source_tier")
+            pipeline_debug_stats["final_source_tier_counts"] = final_source_tier_counts
+            pipeline_debug_stats["official_source_ratio"] = round(
+                final_source_tier_counts.get("A_official", 0) / len(final_candidates), 4
+            ) if final_candidates else 0.0
+            for quality_key in (
+                "evidence_strength",
+                "technology_maturity",
+                "event_importance",
+                "innovation_type",
+            ):
+                pipeline_debug_stats[f"{quality_key}_counts"] = _final_count_by(final_candidates, quality_key)
             annual_selected_by_bucket: dict[str, int] = {}
             for item in selected_candidates:
                 date_value = _candidate_date_obj(item.get("date", ""))
@@ -2790,6 +2830,9 @@ if generate_btn:
                 "model_candidate_id_count": reconciliation_diagnostics.get(
                     "model_candidate_id_count", len(raw_report_candidate_ids)
                 ),
+                "selected_event_count": len(selected_candidates),
+                "model_article_block_count": maiagent_report_response_count,
+                "event_consolidation_stats": candidate_pool.get("event_consolidation_stats", {}),
                 "selected_to_model_id_coverage": reconciliation_diagnostics.get(
                     "selected_to_model_id_coverage", 0.0
                 ),
@@ -2820,7 +2863,7 @@ if generate_btn:
                 "maiagent_call_count": maiagent_call_count,
                 "category_counts": category_counts,
                 "journal_count": len(journal_candidates),
-                "model_candidate_count": len(model_candidates),
+                "model_candidate_count": len(selected_candidates),
                 "source_count": len(combined_sources),
                 "ddgs_query_count": search_count,
                 "ddgs_general_only_query_count": len(ddgs_general_only_queries(LAST_DDGS_QUERY_STATUSES)),

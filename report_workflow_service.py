@@ -517,6 +517,19 @@ class WorkflowRuntime:
                 exclusion_stats[reason] = exclusion_stats.get(reason, 0) + 1
         timings["preliminary_filter"] = time.perf_counter() - preliminary_started
 
+        event_consolidation_started = time.perf_counter()
+        consolidate_events = selector.get("consolidate_event_candidates")
+        if callable(consolidate_events):
+            filtered_candidates, event_consolidation_stats = consolidate_events(filtered_candidates)
+        else:
+            event_consolidation_stats = {
+                "input_count": len(filtered_candidates),
+                "output_count": len(filtered_candidates),
+                "duplicate_count": 0,
+                "duplicate_event_records": [],
+            }
+        timings["event_consolidation"] = time.perf_counter() - event_consolidation_started
+
         sorting_started = time.perf_counter()
         filtered_candidates.sort(
             key=lambda item: (
@@ -589,6 +602,7 @@ class WorkflowRuntime:
             "model": len(model_candidates),
             "final": 0,
         })
+        pipeline_debug_stats["event_consolidation_stats"] = event_consolidation_stats
         return {
             "raw_candidates": raw_candidates,
             "deduped_candidates": deduped_candidates,
@@ -598,6 +612,7 @@ class WorkflowRuntime:
             "candidate_cards": candidate_cards,
             "candidate_card_limit": candidate_limit,
             "dedupe_stats": dedupe_stats,
+            "event_consolidation_stats": event_consolidation_stats,
             "prefetch_stats": prefetch_stats,
             "exclusion_stats": exclusion_stats,
             "pipeline_debug_stats": pipeline_debug_stats,

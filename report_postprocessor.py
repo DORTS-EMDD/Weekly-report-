@@ -203,6 +203,8 @@ def normalize_source_line(line: str) -> str:
     host = _domain_from_url(url)
     source_ref = url or domain_hint
     source_label = _clean_source_label(content, source_ref, domain_hint or host)
+    if not source_label and not url and date_text == "日期未知":
+        return "• 資料來源："
     parts = [_source_label_with_link(source_label, url)]
     if date_text and date_text != "日期未知":
         parts.append(date_text)
