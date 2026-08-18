@@ -31,7 +31,7 @@ class ForwardTechnologyQueryTests(unittest.TestCase):
 
         queries, _ = ddgs_search_service.build_search_queries(context=context)
 
-        self.assertEqual(len(queries), 21)
+        self.assertEqual(len(queries), 33)
         self.assertNotIn(
             "forward_technology",
             {metadata.get("family") for metadata in context.query_metadata.values()},
@@ -53,7 +53,7 @@ class ForwardTechnologyQueryTests(unittest.TestCase):
         self.assertGreaterEqual(len(forward_queries), 5)
         self.assertLessEqual(len(forward_queries), 10)
         self.assertEqual(len(forward_queries), len(search_queries.FORWARD_TECHNOLOGY_QUERY_SPECS))
-        self.assertEqual(len(queries), 21 + len(forward_queries))
+        self.assertEqual(len(queries), 40)
 
     def test_forward_queries_are_effect_oriented_and_urban_rail_contextual(self):
         forward_queries = [

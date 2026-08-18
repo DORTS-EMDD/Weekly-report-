@@ -29,21 +29,21 @@ FIXTURE_QUERY = "fixture metro query"
 FIXED_TODAY = datetime.date(2026, 7, 23)
 
 EXPECTED_SCENARIO_SHA256 = {
-    "plan_global": "253f907090b3e2363f745a3dd7d0b7fea55420a22e069ddd9cf7dd66257bd760",
-    "plan_no_selected": "549d7739bddc7e487b502525c794834298a7916dbb1bdff68612b2162cb457fa",
+    "plan_global": "2974c4ac2f204de7d06fd95c0a5ecf0adb0c62809156a06c9ccc0eb5febb30b7",
+    "plan_no_selected": "c0eec20ff3111558b6152298874210963286a06cdd4884f5b9ec3438e4e0e0cf",
     "plan_regions": "69fccda206f49775ec021b2b72e50f1c9b28c5c35efb6ae200aa2bee5ce43b22",
-    "plan_standards": "5e641af9c1c12dfdba5377e8de1b120fecc5bfabb7243b7ddee63c47a68d33bf",
-    "run_403": "f63c0c481e687af2013903db4da8da5cbd4a9e0055e7872933b0d99a37486c85",
-    "run_429": "9798572a537f43165dca1dcf8267e7b066276b46958ff0df0260b9472c7e32e1",
-    "run_exception": "da36b8e1a7e4e2dc0346aacfdc99c9558fcc6593bda4bcd5a1756178e4a4ebb4",
-    "run_excluded": "5b24e01c6f062e3704e50a982cd20a8cc378d9a5289738538341dfe92aaedf9b",
-    "run_missing": "69562d9b31e3727ddb1993e5df312cbdddb266238d05e289512c3761dcfa69a0",
-    "run_no_selected": "da227b1f5778723ab6f1011bd568fcd1d6e7eea4181bff3436a09c0bd19abf99",
-    "run_success": "049113f28025c74ae28c249e650362e8911f684c1ef4296880285f266a007fb0",
-    "run_timeout": "90ace2d79d86601267f8d0c4bd3d44e05eb3cd7fdc4c3103127570eae8265aed",
-    "run_zero": "ef6faa67e26fcae8564a054584e3dbb7ae81fb2b4a95ccb9797e11bac865c9d7",
+    "plan_standards": "cb6b2fe9685384b703768601bfe0794a0c86d0fa32841de68de5cf000991b1cb",
+    "run_403": "513b0f56f7a88def63f2f6dabbeec62b16418cecd2f21a72aef13c4174c33451",
+    "run_429": "00c8dab870772dbee01298882bb984bb248da05872eba5f6c6b1e3a9eae22398",
+    "run_exception": "f6713d96bc038f97e191d44184a2238f71ce6c77dc94d8a66f46f229fd888575",
+    "run_excluded": "c6a46ad6df46d651aae5d51b5bbef6236c6fc319341340b7b2566bccc4f8cfd9",
+    "run_missing": "2262c22aa817a96727439cc09151d5798904a1008225e06e4ac934971eab5870",
+    "run_no_selected": "d49f78e6557a9a26d3c64db95f0b5e0296ff3c53f391b85cfea1ed55ee803d57",
+    "run_success": "b2cc66ca4f12f55a016badfcf5aea6ade3277c84e3eeb8c74f1b40357de887fd",
+    "run_timeout": "5701cb817abc5aa2cf7b13558b553935cfca97a83267121027afe33aeab06f22",
+    "run_zero": "ab65b46cb223220c88dc8864f0c8071ce491e644f0d4ccad3b68800e51b3f853",
 }
-EXPECTED_AGGREGATE_SHA256 = "d408ffbd22be4bce95eca03ef06c19069f336c32861b2e32d0f6174e56ea6fd4"
+EXPECTED_AGGREGATE_SHA256 = "e567a18a138b228fbc0e522e89463d3c50bc3d36593859310db88d4a546e2472"
 
 
 class ProgressRecorder:

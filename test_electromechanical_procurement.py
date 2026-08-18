@@ -11,6 +11,7 @@ from config import (
 from search_queries import (
     DOMESTIC_ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS,
     ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS,
+    GLOBAL_REGIONAL_COVERAGE_QUERY_SPECS,
 )
 
 
@@ -313,15 +314,15 @@ class ElectromechanicalProcurementScopeQueryAndSelectionTests(unittest.TestCase)
         context = self._query_context("international")
         queries, _news_indices = ddgs_search_service.build_search_queries(context=context)
         self.assertEqual(len(ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS), 5)
-        self.assertEqual(len(queries), 5)
+        self.assertEqual(len(queries), 17)
         self.assertNotIn("臺灣", " ".join(queries))
         self.assertEqual(
             {context.query_metadata[query]["family"] for query in queries},
-            {ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY},
+            {ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY, "technology"},
         )
         self.assertEqual(
             {context.query_metadata[query]["query_region"] for query in queries},
-            {"global"},
+            {"global"} | {spec["region"] for spec in GLOBAL_REGIONAL_COVERAGE_QUERY_SPECS},
         )
 
     def test_domestic_query_family_has_two_grouped_queries(self):
@@ -342,10 +343,10 @@ class ElectromechanicalProcurementScopeQueryAndSelectionTests(unittest.TestCase)
     def test_both_scope_combines_five_international_and_two_domestic_queries(self):
         context = self._query_context("both")
         queries, _news_indices = ddgs_search_service.build_search_queries(context=context)
-        self.assertEqual(len(queries), 7)
+        self.assertEqual(len(queries), 19)
         self.assertEqual(
             {context.query_metadata[query]["query_region"] for query in queries},
-            {"global", "domestic"},
+            {"global", "domestic"} | {spec["region"] for spec in GLOBAL_REGIONAL_COVERAGE_QUERY_SPECS},
         )
 
     def test_procurement_dispute_query_keeps_dispute_family(self):

@@ -427,6 +427,9 @@ class WorkflowRuntime:
                 "success_count": 0,
                 "failed_count": 0,
                 "skipped_limit_count": 0,
+                "rescue_candidate_count": 0,
+                "rescue_enrichment_attempted_count": 0,
+                "rescue_enrichment_success_count": 0,
                 "elapsed_seconds": 0.0,
             }
         timings["prefetch"] = time.perf_counter() - prefetch_started
@@ -512,6 +515,21 @@ class WorkflowRuntime:
             if name != "candidate_count" and isinstance(value, (int, float))
         })
         pipeline_debug_stats["candidate_pool_timings"] = candidate_pool_timings
+        pipeline_debug_stats.setdefault("pipeline_stages", {}).update({
+            "raw": len(raw_candidates),
+            "dedup": len(deduped_candidates),
+            "filtered": len(filtered_candidates),
+            "gate_pass": sum(
+                1
+                for item in filtered_candidates
+                if any((item.get("category_gates") or {}).values())
+            ),
+            "rescue_candidate": int(prefetch_stats.get("rescue_candidate_count", 0) or 0),
+            "rescue_enriched": int(prefetch_stats.get("rescue_enrichment_success_count", 0) or 0),
+            "selected": 0,
+            "model": len(model_candidates),
+            "final": 0,
+        })
         return {
             "raw_candidates": raw_candidates,
             "deduped_candidates": deduped_candidates,

@@ -219,7 +219,7 @@ class DomesticNewsScopeTests(unittest.TestCase):
         )
         queries, _news_indices = ddgs_search_service.build_search_queries(context=context)
         families = {context.query_metadata[query]["family"] for query in queries}
-        self.assertEqual(len(queries), 23)
+        self.assertEqual(len(queries), 35)
         self.assertIn("technology", families)
         self.assertIn("domestic_metro", families)
 

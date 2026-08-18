@@ -485,6 +485,14 @@ EQUIPMENT_FAILURE_TERMS = [
     "轉轍器故障", "道岔故障", "票務系統故障", "自動收費故障", "設備故障",
 ]
 
+TECHNICAL_OPERATION_IMPACT_TERMS = [
+    "service suspension", "service suspended", "major disruption", "major delays",
+    "severe delays", "degraded service", "manual operation", "local shutdown",
+    "line shutdown", "station shutdown", "operations suspended", "營運中斷",
+    "停駛", "大幅延誤", "嚴重延誤", "降級運轉", "人工操作", "局部停運",
+    "路線停運", "車站關閉", "營運暫停",
+]
+
 ENGINEERING_MILESTONE_ONLY_TERMS = [
     "tunnel boring machine", "tbm", "tbm removal", "tbm demobilization",
     "tbm breakthrough", "construction milestone", "civil works complete",
@@ -1366,12 +1374,41 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return _contains_any_term(text, international_terms) and _contains_any_term(text, URBAN_RAIL_MODE_TERMS)
 
 
+    def _contains_positive_term(text: str, terms: list[str] | tuple[str, ...]) -> bool:
+        text_lower = (text or "").casefold()
+        negation_pattern = re.compile(
+            r"\b(?:no|not|without|neither|nor|lacks?|missing|rather than)\b|"
+            r"(?:沒有|無|未列明|未提供|不含|未包含|並非|不是)",
+            flags=re.IGNORECASE,
+        )
+        for term in terms:
+            term_lower = str(term or "").casefold()
+            if not term_lower:
+                continue
+            if re.fullmatch(r"[a-z0-9][a-z0-9\s/&.\-]*", term_lower):
+                matches = list(re.finditer(rf"(?<![a-z0-9]){re.escape(term_lower)}(?![a-z0-9])", text_lower))
+            else:
+                matches = list(re.finditer(re.escape(term_lower), text_lower))
+            for match in matches:
+                start = match.start()
+                sentence_start = max(
+                    text_lower.rfind(mark, 0, start)
+                    for mark in (".", "!", "?", ";", ":", "。", "！", "？", "；", "：", "\n")
+                )
+                clause = text_lower[sentence_start + 1:start]
+                if not negation_pattern.search(clause):
+                    return True
+        return False
+
+
     def _is_urban_rail_candidate(text: str, source_name: str = "") -> bool:
         """正式新聞候選須直接連到都會軌道；標準更新另由規範規則處理。"""
         if _is_standards_source(source_name):
             return True
 
         topic_text = _strip_source_name_noise(text)
+        if source_name:
+            topic_text = re.sub(re.escape(source_name), " ", topic_text, flags=re.IGNORECASE)
         bus_event_terms = [
             "ev bus", "electric bus", "battery electric bus", "autobus", "bus", "coach",
             "電動巴士", "電動公車", "巴士", "公車", "客運", "evバス", "電動バス", "バス",
@@ -1383,7 +1420,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "都市軌道", "捷運", "地鐵", "輕軌", "號誌", "信號", "列車", "車輛", "供電",
             "지하철", "도시철도", "경전철",
         ]
-        if _contains_any_term(topic_text, bus_event_terms) and not _contains_any_term(topic_text, rail_event_terms):
+        has_bus_event = _contains_any_term(topic_text, bus_event_terms)
+        has_rail_event_detail = _contains_positive_term(topic_text, rail_event_terms)
+        if has_bus_event and not has_rail_event_detail:
             return False
         has_metro_word = _contains_any_term(topic_text, ["metro"])
         has_metro_with_rail_context = has_metro_word and _contains_any_term(topic_text, METRO_RAIL_CONTEXT_TERMS)
@@ -1487,10 +1526,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _candidate_prefetch_signal(candidate: dict) -> bool:
-        if candidate.get("source_tier") not in {"A_official", "B_professional"}:
+        if candidate.get("source_tier") not in {"A_official", "B_professional", "C_media"}:
             return False
         title = candidate.get("title", "")
         if not title or _wordish_count(title) < 4:
+            return False
+        if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
             return False
         source = candidate.get("source", "")
         title_text = f"{title} {source} {candidate.get('source_domain', '')}"
@@ -1510,7 +1551,53 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 "award", "awarded", "strike", "lawsuit", "protest", "delay", "delayed",
             ],
         )
-        return has_system_or_institution and has_action
+        return has_system_or_institution and has_action and (
+            candidate.get("source_tier") in {"A_official", "B_professional"}
+            or _is_short_snippet_rescue_candidate(candidate)
+            or _is_procurement_rescue_candidate(candidate)
+        )
+
+
+    def _is_short_snippet_rescue_candidate(candidate: dict) -> bool:
+        title = str(candidate.get("title", "") or "")
+        snippet = str(candidate.get("snippet", "") or "")
+        if candidate.get("source_tier") == "D_proxy_low_value":
+            return False
+        if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
+            return False
+        if _wordish_count(title) < 4 or not _has_clear_urban_rail_context(title, candidate.get("source", "")):
+            return False
+        high_value_terms = (
+            TECH_NEWS_REQUIRED_TERMS
+            + STRONG_TECHNICAL_DETAIL_TERMS
+            + ACCIDENT_SIGNAL_TERMS
+            + SAFETY_INCIDENT_DETAIL_TERMS
+            + FORWARD_TRACK_B_EMERGING_TERMS
+            + HIGH_VALUE_POLICY_TERMS
+        )
+        snippet_tokens = len(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", snippet))
+        return _contains_any_term(title, high_value_terms) and (snippet_tokens < 12 or len(snippet.strip()) < 90)
+
+
+    def _is_procurement_rescue_candidate(candidate: dict) -> bool:
+        text = f"{candidate.get('title', '')} {candidate.get('snippet', '')}"
+        source_tier = candidate.get("source_tier", "")
+        source_domain = str(candidate.get("source_domain", "") or "").casefold()
+        official_source = source_tier == "A_official" or source_domain.endswith((".gov", ".gov.uk", ".gov.au", ".gov.sg"))
+        action_terms = [term for terms in ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS.values() for term in terms]
+        system_terms = [term for terms in ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS.values() for term in terms]
+        return bool(
+            official_source
+            and _candidate_date_obj(candidate.get("date", ""))
+            and _has_source_reference(candidate)
+            and _candidate_urban_rail_gate(candidate)
+            and _contains_any_term(text, action_terms)
+            and _contains_any_term(text, system_terms)
+        )
+
+
+    def _is_pre_gate_rescue_candidate(candidate: dict) -> bool:
+        return _is_short_snippet_rescue_candidate(candidate) or _is_procurement_rescue_candidate(candidate)
 
 
     def prefetch_candidates_before_filter(candidates: list[dict]) -> dict:
@@ -1526,7 +1613,17 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         }
         started = time.perf_counter()
         eligible = [candidate for candidate in candidates or [] if _candidate_prefetch_signal(candidate)]
+        for candidate in eligible:
+            candidate["rescue_candidate"] = True
+            candidate["rescue_type"] = (
+                "procurement_rescue_candidate"
+                if _is_procurement_rescue_candidate(candidate)
+                else "short_snippet_rescue"
+            )
         stats["eligible_count"] = len(eligible)
+        stats["rescue_candidate_count"] = len(eligible)
+        stats["rescue_enrichment_attempted_count"] = 0
+        stats["rescue_enrichment_success_count"] = 0
         if not eligible or limit <= 0:
             stats["elapsed_seconds"] = round(time.perf_counter() - started, 2)
             return stats
@@ -1545,6 +1642,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 continue
             stats["attempted_count"] += 1
             candidate["prefetch_attempted"] = True
+            candidate["rescue_enrichment_attempted"] = True
+            stats["rescue_enrichment_attempted_count"] += 1
             result = _prefetch_candidate_article(candidate, session)
             candidate["prefetch_status"] = result.get("status", "")
             candidate["prefetch_reason"] = result.get("reason", "")
@@ -1552,8 +1651,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate["prefetch_elapsed_seconds"] = result.get("elapsed_seconds", 0.0)
             if result.get("status") == "success":
                 stats["success_count"] += 1
+                candidate["rescue_enrichment_success"] = True
+                stats["rescue_enrichment_success_count"] += 1
             else:
                 stats["failed_count"] += 1
+                candidate["rescue_enrichment_success"] = False
         stats["elapsed_seconds"] = round(time.perf_counter() - started, 2)
         return stats
 
@@ -1824,7 +1926,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         systems = [
             label
             for label in CORE_SYSTEM_LABELS
-            if _contains_any_term(text, list(CORE_SYSTEM_TERM_GROUPS[label]))
+            if _contains_positive_term(text, list(CORE_SYSTEM_TERM_GROUPS[label]))
         ]
         rolling_stock_specific_terms = (
             "vehicle equipment", "car door", "train door", "bogie", "wheelset", "coupler",
@@ -1832,19 +1934,19 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "braking system", "brake system", "tcms", "車門", "轉向架", "輪對", "聯結器",
             "推進", "牽引變流器", "牽引馬達", "煞車", "制動", "車載",
         )
-        has_depot_facility = _contains_any_term(text, list(DEPOT_FACILITY_TERMS))
-        has_specific_vehicle_evidence = _contains_any_term(text, list(rolling_stock_specific_terms))
+        has_depot_facility = _contains_positive_term(text, list(DEPOT_FACILITY_TERMS))
+        has_specific_vehicle_evidence = _contains_positive_term(text, list(rolling_stock_specific_terms))
         text_lower = text.casefold()
         has_vehicle_event = bool(
             re.search(
                 r"\b(?:new|order(?:s|ed)?|procure(?:d|ment)?|purchase(?:d)?|deliver(?:y|ed)?|"
                 r"introduc(?:e|ed|tion)|deploy(?:ed|ment)?|upgrade(?:d)?|moderni[sz](?:e|ed|ation)|"
                 r"performance|maintenan(?:ce|t)|overhaul)\b.{0,50}\b(?:rolling stock|vehicle fleet|"
-                r"metro trains?|trains?|列車|車輛)\b",
+                r"metro trains?|trainset|trainsets|trains?|列車|車輛)\b",
                 text_lower,
             )
             or re.search(
-                r"\b(?:rolling stock|vehicle fleet|metro trains?|trains?|列車|車輛)\b.{0,50}\b(?:"
+                r"\b(?:rolling stock|vehicle fleet|metro trains?|trainset|trainsets|列車|車輛)\b.{0,50}\b(?:"
                 r"maintenan(?:ce|t)|overhaul|performance|upgrade(?:d)?|moderni[sz](?:e|ed|ation))\b",
                 text_lower,
             )
@@ -1875,6 +1977,96 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             for label, terms in TECHNICAL_THEME_TERM_GROUPS.items()
             if _contains_any_term(text, list(terms))
         ]
+
+
+    def _candidate_quality_kpis(candidate: dict) -> dict:
+        text = _candidate_selection_text(candidate)
+        if _contains_any_term(text, ["systemwide rollout", "system-wide rollout", "全線部署"]):
+            technology_maturity = "systemwide_rollout"
+        elif _contains_any_term(text, ["first commercial deployment", "first deployment", "首次商轉"]):
+            technology_maturity = "first_deployment"
+        elif _contains_any_term(text, ["commercial deployment", "revenue service", "正式營運"]):
+            technology_maturity = "commercial_deployment"
+        elif _contains_any_term(text, ["modernization", "modernisation", "upgrade", "更新", "升級"]):
+            technology_maturity = "modernization"
+        elif _contains_any_term(text, ["pilot", "prototype", "試辦", "示範"]):
+            technology_maturity = "pilot"
+        elif _contains_any_term(text, ["test", "trial", "testing", "驗證", "測試"]):
+            technology_maturity = "testing"
+        elif _contains_any_term(text, ["research", "study", "研究"]):
+            technology_maturity = "research"
+        else:
+            technology_maturity = ""
+
+        if _passes_major_accident_gate(candidate):
+            event_importance = "major_failure"
+        elif _passes_electromechanical_procurement_gate(candidate):
+            event_importance = "major_procurement"
+        elif candidate.get("track_b_gate_pass") or candidate.get("track_a_gate_pass"):
+            event_importance = "pilot" if technology_maturity in {"pilot", "testing"} else "major_system_upgrade"
+        elif _passes_service_opening_gate(candidate):
+            event_importance = "major_system_upgrade"
+        elif _passes_operational_dispute_gate(candidate):
+            event_importance = "cooperation_only" if _contains_any_term(text, ["cooperation", "partnership", "合作"]) else "routine_upgrade"
+        elif _contains_any_term(text, ["routine", "regular", "例行"]):
+            event_importance = "routine_upgrade"
+        else:
+            event_importance = ""
+
+        if candidate.get("prefetch_status") == "success" or candidate.get("prefetched_text_snippet"):
+            evidence_strength = "high"
+        elif candidate.get("source_quality") in {"A", "B"} and len(str(candidate.get("snippet", "") or "")) >= 80:
+            evidence_strength = "medium"
+        else:
+            evidence_strength = "low"
+
+        if candidate.get("search_family") == "forward_technology":
+            innovation_type = "innovation" if candidate.get("innovation_score", 0) else "research"
+        elif _contains_any_term(text, ["pilot", "prototype", "research", "study", "試驗", "研究"]):
+            innovation_type = "research"
+        elif _contains_any_term(text, ["deploy", "deployed", "installed", "導入", "部署"]):
+            innovation_type = "deployment"
+        elif _contains_any_term(text, ["upgrade", "modernization", "renewal", "更新", "現代化"]):
+            innovation_type = "modernization"
+        elif _contains_any_term(text, ["cooperation", "partnership", "合作"]):
+            innovation_type = "cooperation"
+        else:
+            innovation_type = ""
+        return {
+            "technology_maturity": technology_maturity,
+            "event_importance": event_importance,
+            "evidence_strength": evidence_strength,
+            "innovation_type": innovation_type,
+        }
+
+
+    def build_cross_period_coverage_debug(
+        monthly_selected: list[dict],
+        annual_raw: list[dict],
+        annual_candidates: list[dict],
+        annual_excluded: list[dict],
+    ) -> dict:
+        def _key(candidate: dict) -> str:
+            url = _effective_source_url(candidate)
+            if url:
+                return f"url:{url.casefold().rstrip('/')}"
+            title = re.sub(r"\W+", " ", str(candidate.get("title", "") or "").casefold()).strip()
+            return f"title:{title}"
+
+        raw_keys = {_key(item) for item in annual_raw or []}
+        candidate_keys = {_key(item) for item in annual_candidates or []}
+        excluded_keys = {_key(item) for item in annual_excluded or []}
+        monthly_items = monthly_selected or []
+        missing_raw = [item for item in monthly_items if _key(item) not in raw_keys]
+        missing_candidates = [item for item in monthly_items if _key(item) not in candidate_keys]
+        excluded = [item for item in monthly_items if _key(item) in excluded_keys]
+        covered_count = len(monthly_items) - len(missing_raw)
+        return {
+            "monthly_selected_missing_from_annual_raw": [int(item.get("candidate_id") or item.get("id") or 0) for item in missing_raw],
+            "monthly_selected_missing_from_annual_candidates": [int(item.get("candidate_id") or item.get("id") or 0) for item in missing_candidates],
+            "monthly_selected_excluded_from_annual": [int(item.get("candidate_id") or item.get("id") or 0) for item in excluded],
+            "cross_period_coverage_ratio": round(covered_count / len(monthly_items), 4) if monthly_items else 1.0,
+        }
 
 
     def _has_cross_system_technical_application(candidate: dict) -> bool:
@@ -1928,7 +2120,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "base_quality": bool(
                 _candidate_date_obj(candidate.get("date", ""))
                 and _has_source_reference(candidate)
-                and candidate.get("source_quality") in {"A", "B"}
+                and candidate.get("source_quality") in {"A", "B", "C"}
                 and candidate.get("source_tier") != "D_proxy_low_value"
                 and not _information_quality_issue(candidate)
             ),
@@ -2013,7 +2205,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "base_quality": bool(
                 _candidate_date_obj(candidate.get("date", ""))
                 and _has_source_reference(candidate)
-                and candidate.get("source_quality") in {"A", "B"}
+                and (
+                    candidate.get("source_quality") in {"A", "B"}
+                    or (
+                        is_forward_family
+                        and track_b_payload.get("track_b_gate_signals", {}).get("base_quality")
+                    )
+                )
                 and candidate.get("source_tier") != "D_proxy_low_value"
                 and not _information_quality_issue(candidate)
             ),
@@ -2663,6 +2861,50 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
 
 
+    def _compute_technical_operation_incident(candidate: dict) -> dict:
+        text = _candidate_selection_text(candidate)
+        equipment_terms = EQUIPMENT_FAILURE_TERMS + [
+            "system failure", "system fault", "mechanical failure", "rolling stock failure",
+            "train failure", "equipment malfunction", "設備異常", "系統故障", "機械故障",
+        ]
+        has_equipment_failure = _contains_any_term(text, equipment_terms)
+        has_impact = _contains_any_term(text, TECHNICAL_OPERATION_IMPACT_TERMS)
+        has_system = _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS) or _contains_any_term(
+            text,
+            [term for term in equipment_terms if term not in {"equipment failure", "equipment malfunction"}],
+        )
+        minor_only = _contains_any_term(text, [
+            "minor delay", "brief delay", "passenger dispute", "personnel issue",
+            "schedule change", "輕微延誤", "旅客糾紛", "人事問題", "班表調整",
+        ]) and not has_impact
+        signals = {
+            "urban_rail": _candidate_urban_rail_gate(candidate),
+            "equipment_failure": has_equipment_failure,
+            "system_evidence": has_system,
+            "major_operational_impact": has_impact,
+            "minor_only_clear": not minor_only,
+            "metadata": _has_valid_operational_metadata(candidate),
+        }
+        failures = [
+            key for key, enabled in signals.items()
+            if not enabled
+        ]
+        passed = not failures
+        return {
+            "technical_operation_incident": passed,
+            "technical_operation_incident_signals": signals,
+            "technical_operation_incident_failure_reasons": failures,
+        }
+
+
+    def _passes_technical_operation_incident(candidate: dict) -> bool:
+        return _cached_candidate_bool(
+            candidate,
+            "technical_operation_incident",
+            lambda item: bool(_compute_technical_operation_incident(item).get("technical_operation_incident")),
+        )
+
+
     def _is_dispute_dominant(candidate: dict) -> bool:
         return _passes_operational_dispute_gate(candidate)
 
@@ -2795,6 +3037,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         passes_forward_gate = bool(forward_gate_payload.get("passes_forward_technology_gate"))
         procurement_gate_payload = _compute_electromechanical_procurement_gate(candidate)
         service_opening_payload = _compute_service_opening_gate(candidate)
+        technical_operation_incident_payload = _compute_technical_operation_incident(candidate)
         procurement_category_selected = (
             ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in selected_types
         )
@@ -2802,7 +3045,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "major_accident": _passes_major_accident_gate(candidate),
             "technology": _passes_technical_triad(candidate) or passes_forward_gate,
             "operational_dispute": _passes_operational_dispute_gate(candidate),
-            "operational_policy": _passes_high_value_policy_gate(candidate),
+            "operational_policy": _passes_high_value_policy_gate(candidate) or bool(
+                technical_operation_incident_payload.get("technical_operation_incident")
+            ),
             SERVICE_OPENING_CATEGORY_KEY: bool(service_opening_payload.get("service_opening_gate_pass")),
             ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY: bool(
                 procurement_category_selected
@@ -2833,7 +3078,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         elif _contains_any_term(text, DISPUTE_SIGNAL_TERMS):
             reasons["operational_dispute"] = "有爭議詞但缺少明確主體或營運影響。"
         if gates["operational_policy"]:
-            reasons["operational_policy"] = "具系統、路線、容量或制度層級營運影響。"
+            reasons["operational_policy"] = (
+                "設備或系統故障造成重大營運影響，列入營運動態。"
+                if technical_operation_incident_payload.get("technical_operation_incident")
+                else "具系統、路線、容量或制度層級營運影響。"
+            )
         elif _contains_any_term(text, HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS):
             reasons["operational_policy"] = "政策訊號不足或被低價值公告排除。"
         if gates[SERVICE_OPENING_CATEGORY_KEY]:
@@ -2922,6 +3171,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "operational_subtype": (
                 SERVICE_OPENING_CATEGORY_KEY
                 if gates.get(SERVICE_OPENING_CATEGORY_KEY)
+                else "technical_operation_incident"
+                if technical_operation_incident_payload.get("technical_operation_incident")
                 else "dispute"
                 if gates.get("operational_dispute")
                 else "policy"
@@ -2931,6 +3182,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "alternative_category_flags": alternatives,
             "category_reclassification": category_reclassification,
             **service_opening_payload,
+            **technical_operation_incident_payload,
             **procurement_gate_payload,
         }
         if is_forward_family:
@@ -2995,6 +3247,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if flags.intersection({
             "technical_or_system_detail", "incident_or_safety_signal", "high_value_policy",
             "trusted_title_technical_signal", "service_opening_gate", "electromechanical_procurement_gate",
+            "technical_operation_incident",
         }):
             return True
         text = _candidate_selection_text(candidate)
@@ -3220,6 +3473,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             flags.append("operational_dispute_secondary_gate")
         if _passes_electromechanical_procurement_gate(candidate):
             flags.append("electromechanical_procurement_gate")
+        if _passes_technical_operation_incident(candidate):
+            flags.append("technical_operation_incident")
         if _is_low_value_ceremonial_candidate(candidate):
             flags.append("low_value_ceremonial")
         if _contains_any_term(text, LOW_VALUE_POLICY_TERMS) or information_issue in {"日常服務推播", "低價值路線公告"}:
@@ -3501,6 +3756,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "technical_or_system_detail", "incident_or_safety_signal", "high_value_policy",
             "trusted_title_technical_signal", "operational_dispute_gate",
             "service_opening_gate", "electromechanical_procurement_gate",
+            "technical_operation_incident",
         }
         has_good_flag = bool(set(flags).intersection(good_flags))
         if not has_good_flag:
@@ -3542,6 +3798,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "primary_category": primary_category,
             "alternative_category_flags": gate_info.get("alternative_category_flags", []),
             "operational_subtype": gate_info.get("operational_subtype", ""),
+            "technical_operation_incident": gate_info.get("technical_operation_incident", False),
+            "technical_operation_incident_signals": gate_info.get("technical_operation_incident_signals", {}),
+            "technical_operation_incident_failure_reasons": gate_info.get("technical_operation_incident_failure_reasons", []),
             "candidate_level": _candidate_level(temp_candidate, score),
             "urban_rail_gate": _candidate_urban_rail_gate(candidate),
             "technical_triplet_status": "pass" if _passes_technical_triad(candidate) else "fail",
@@ -3569,6 +3828,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                         "radar_watchlist_pass",
                         "radar_watchlist_signals",
                         "radar_watchlist_failure_reasons",
+                        "cross_system_emerging_technology_gate",
+                        "track_a_gate_pass",
+                        "track_b_gate_pass",
+                        "track_b_gate_signals",
+                        "track_b_failure_reasons",
                     )
                     if key in gate_info
                 }
@@ -3618,6 +3882,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         enriched["country"] = normalize_country(enriched["resolved_region"])
         enriched["core_systems"] = _core_systems_for_candidate(enriched)
         enriched["technical_themes"] = _technical_themes_for_candidate(enriched)
+        enriched.update(_candidate_quality_kpis(enriched))
         _profile_timing_add(profile_timings, "region_resolution", time.perf_counter() - region_started)
         fingerprint_started = time.perf_counter()
         enriched["event_fingerprint"] = build_event_fingerprint(enriched)
@@ -3676,6 +3941,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "duplicate_of": candidate.get("duplicate_of", ""),
             "selection_stage": candidate.get("selection_stage", ""),
             "final_exclude_reason": candidate.get("final_exclude_reason", ""),
+            "rescue_candidate": candidate.get("rescue_candidate", False),
+            "rescue_type": candidate.get("rescue_type", ""),
+            "rescue_enrichment_attempted": candidate.get("rescue_enrichment_attempted", False),
+            "rescue_enrichment_success": candidate.get("rescue_enrichment_success", False),
         }
         for key in (
             "innovation_score",
@@ -3710,6 +3979,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "service_opening_signals",
             "service_opening_failure_reasons",
             "future_opening_signal",
+            "technical_operation_incident",
+            "technical_operation_incident_signals",
+            "technical_operation_incident_failure_reasons",
+            "technology_maturity",
+            "event_importance",
+            "evidence_strength",
+            "innovation_type",
         ):
             if key in candidate:
                 card[key] = candidate[key]
@@ -4315,6 +4591,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if classification == "營運政策" and not (
             _passes_high_value_policy_gate(dict(candidate, classification="營運政策"))
             or _passes_service_opening_gate(dict(candidate, classification="營運政策"))
+            or _passes_technical_operation_incident(dict(candidate, classification="營運政策"))
         ):
             return True
         if classification == "營運爭議" and not _passes_operational_dispute_gate(dict(candidate, classification="營運爭議")):
@@ -4458,6 +4735,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if classification == "營運政策" and not (
             _passes_high_value_policy_gate(dict(candidate, classification="營運政策"))
             or _passes_service_opening_gate(dict(candidate, classification="營運政策"))
+            or _passes_technical_operation_incident(dict(candidate, classification="營運政策"))
         ):
             return True
         if classification == "營運爭議" and not _passes_operational_dispute_gate(dict(candidate, classification="營運爭議")):
@@ -4897,6 +5175,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_candidate_page_type": _candidate_page_type,
         "_prefetch_limit_for_period": _prefetch_limit_for_period,
         "_candidate_prefetch_signal": _candidate_prefetch_signal,
+        "_is_short_snippet_rescue_candidate": _is_short_snippet_rescue_candidate,
+        "_is_procurement_rescue_candidate": _is_procurement_rescue_candidate,
+        "_is_pre_gate_rescue_candidate": _is_pre_gate_rescue_candidate,
         "prefetch_candidates_before_filter": prefetch_candidates_before_filter,
         "preliminary_filter_candidate": preliminary_filter_candidate,
         "_excluded_candidate_value_reasons": _excluded_candidate_value_reasons,
@@ -4905,6 +5186,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_candidate_selection_text": _candidate_selection_text,
         "_core_systems_for_candidate": _core_systems_for_candidate,
         "_technical_themes_for_candidate": _technical_themes_for_candidate,
+        "_candidate_quality_kpis": _candidate_quality_kpis,
+        "build_cross_period_coverage_debug": build_cross_period_coverage_debug,
         "_has_cross_system_technical_application": _has_cross_system_technical_application,
         "_is_generic_material_research": _is_generic_material_research,
         "_is_generic_ai_marketing": _is_generic_ai_marketing,
@@ -4941,6 +5224,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_compute_passes_operational_dispute_secondary_gate": _compute_passes_operational_dispute_secondary_gate,
         "_passes_operational_dispute_secondary_gate": _passes_operational_dispute_secondary_gate,
         "_passes_operational_dispute_gate": _passes_operational_dispute_gate,
+        "_compute_technical_operation_incident": _compute_technical_operation_incident,
+        "_passes_technical_operation_incident": _passes_technical_operation_incident,
         "_is_dispute_dominant": _is_dispute_dominant,
         "_is_policy_dominant": _is_policy_dominant,
         "_is_short_term_service_notice": _is_short_term_service_notice,

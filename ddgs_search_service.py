@@ -40,6 +40,8 @@ from search_queries import (
     DOMESTIC_SERVICE_OPENING_QUERY_SPECS,
     ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS,
     FORWARD_TECHNOLOGY_QUERY_SPECS,
+    FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS,
+    GLOBAL_REGIONAL_COVERAGE_QUERY_SPECS,
     QUERY_FAMILY_BY_TYPE_INDEX,
     REGION_QUERY_LANGUAGES,
     SEARCH_LANGUAGE_MARKERS,
@@ -72,6 +74,7 @@ class DdgsSearchContext:
     planned_required_families: list[str] = field(default_factory=list)
     annual_breakthrough_query_count: int = 0
     forward_technology_query_count: int = 0
+    forward_technology_fallback_query_count: int = 0
 
 
 DDGS_ERROR_STATUSES = {"http_403", "rate_limited_429", "timeout", "other_exception"}
@@ -290,6 +293,7 @@ def build_search_queries(
         query_region: str = "global",
         domestic_topic: str = "",
         date_bucket: str = "",
+        annual_bucket_families: list[str] | None = None,
     ) -> bool:
         if len(queries) >= query_limit:
             return False
@@ -311,11 +315,14 @@ def build_search_queries(
             context.query_metadata[final_query]["domestic_topic"] = domestic_topic
         if date_bucket:
             context.query_metadata[final_query]["date_bucket"] = date_bucket
+        if annual_bucket_families:
+            context.query_metadata[final_query]["annual_bucket_families"] = list(annual_bucket_families)
         if use_news:
             news_indices.add(len(queries))
         return True
 
-    selected_families = _selected_query_families(context=context)
+    radar_only = context.selected_types == ["__forward_technology_radar__"]
+    selected_families = [] if radar_only else _selected_query_families(context=context)
     include_official = "official_investigation" in selected_families
     content_families = [family for family in selected_families if family != "official_investigation"]
     if include_forward_technology:
@@ -329,6 +336,8 @@ def build_search_queries(
         else []
     )
     required_families = list(content_families)
+    if include_forward_technology and context.lookback_int >= 365:
+        required_families.append("forward_technology")
     if {"營運政策", "營運爭議", SERVICE_OPENING_CATEGORY_KEY}.intersection(context.selected_types):
         required_families.append(SERVICE_OPENING_CATEGORY_KEY)
     context.planned_required_families = (
@@ -338,10 +347,21 @@ def build_search_queries(
     )
     context.annual_breakthrough_query_count = 0
     context.forward_technology_query_count = 0
+    context.forward_technology_fallback_query_count = 0
 
     annual_bucket_queries = []
     if context.lookback_int >= 365 and context.news_scope != "domestic":
-        bucket_prefix = "metro subway urban rail (signalling OR rolling stock OR energy OR safety OR station)"
+        annual_bucket_families = ["technology"]
+        if "major_accident" in content_families or include_official:
+            annual_bucket_families.append("major_accident")
+        if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY in content_families:
+            annual_bucket_families.append(ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY)
+        if include_forward_technology:
+            annual_bucket_families.append("forward_technology")
+        bucket_prefix = (
+            "metro subway urban rail (signalling OR rolling stock OR energy OR safety OR station) "
+            "(incident OR failure OR contract OR pilot OR deployment)"
+        )
         if context.active_regions:
             bucket_prefix = f"{REGION_SEARCH_TERMS.get(context.active_regions[0], context.active_regions[0])} {bucket_prefix}"
         for bucket, bucket_start, bucket_end in _annual_quarter_windows(context):
@@ -385,6 +405,11 @@ def build_search_queries(
                 )
 
     if context.news_scope != "domestic" and context.is_global_scope:
+        global_coverage_specs = (
+            GLOBAL_REGIONAL_COVERAGE_QUERY_SPECS
+            if not radar_only and not context.active_regions
+            else []
+        )
         if {"營運政策", "營運爭議", SERVICE_OPENING_CATEGORY_KEY}.intersection(context.selected_types):
             for spec in SERVICE_OPENING_QUERY_SPECS:
                 _add(
@@ -399,6 +424,7 @@ def build_search_queries(
                 len(annual_bucket_queries)
                 + min(3, len(annual_breakthrough_specs))
                 + min(len(forward_specs), 8)
+                + len(global_coverage_specs)
             )
             core_query_limit = max(0, query_limit - annual_supplement_reserve)
             for spec in specs:
@@ -410,6 +436,14 @@ def build_search_queries(
                     lang=spec.get("lang", "en"),
                     use_news=bool(spec.get("use_news", True)),
                 )
+            for spec in global_coverage_specs:
+                _add(
+                    spec.get("query", ""),
+                    family="technology",
+                    lang=spec.get("lang", "en"),
+                    use_news=True,
+                    query_region=spec.get("region", "global"),
+                )
             for query, bucket in annual_bucket_queries:
                 _add(
                     query,
@@ -418,10 +452,11 @@ def build_search_queries(
                     use_news=True,
                     query_region="global",
                     date_bucket=bucket,
+                    annual_bucket_families=annual_bucket_families,
                 )
         else:
             forward_reserve = min(len(forward_specs), 8)
-            core_query_limit = max(0, query_limit - forward_reserve)
+            core_query_limit = max(0, query_limit - forward_reserve - len(global_coverage_specs))
             for family in content_families:
                 for spec in _active_query_specs(family):
                     if len(queries) >= core_query_limit:
@@ -432,6 +467,14 @@ def build_search_queries(
                         lang=spec.get("lang", "en"),
                         use_news=bool(spec.get("use_news", True)),
                     )
+            for spec in global_coverage_specs:
+                _add(
+                    spec.get("query", ""),
+                    family="technology",
+                    lang=spec.get("lang", "en"),
+                    use_news=True,
+                    query_region=spec.get("region", "global"),
+                )
         for spec in forward_specs:
             if _add(
                 spec.get("query", ""),
@@ -502,6 +545,7 @@ def build_search_queries(
                     use_news=True,
                     query_region=regions[0],
                     date_bucket=bucket,
+                    annual_bucket_families=annual_bucket_families,
                 )
         for spec in forward_specs:
             if _add(
@@ -596,6 +640,9 @@ def _ddgs_query_status_template(
         "error_message": "",
         "elapsed_seconds": 0.0,
         "planned_index": int(metadata.get("planned_index", 0) or 0),
+        "date_bucket": metadata.get("date_bucket", ""),
+        "annual_bucket_families": list(metadata.get("annual_bucket_families", ()) or ()),
+        "fallback_layer": metadata.get("fallback_layer", ""),
         # Backward-compatible aliases retained for existing developer tooling.
         "family": family,
         "lang": language,
@@ -742,12 +789,23 @@ def build_ddgs_search_summary(
         },
     }
     forward_rows = [row for row in rows if (row.get("search_family") or row.get("family")) == "forward_technology"]
-    summary["forward_technology_query_count"] = len(forward_rows)
+    summary["forward_technology_query_count"] = sum(1 for row in forward_rows if not row.get("fallback_layer"))
+    summary["forward_technology_fallback_query_count"] = sum(1 for row in forward_rows if row.get("fallback_layer"))
     summary["forward_technology_raw_count"] = sum(
         int(row.get("added_to_raw_count", 0) or 0) for row in forward_rows
     )
     if any(row.get("date_bucket") for row in rows):
         summary["query_count_by_date_bucket"] = _count_by("date_bucket")
+        annual_bucket_family_coverage: dict[str, dict[str, int]] = {}
+        for row in rows:
+            bucket = str(row.get("date_bucket", "") or "")
+            if not bucket:
+                continue
+            families = row.get("annual_bucket_families") or [row.get("search_family") or row.get("family") or "unassigned"]
+            for family in families:
+                bucket_stats = annual_bucket_family_coverage.setdefault(bucket, {})
+                bucket_stats[str(family)] = bucket_stats.get(str(family), 0) + 1
+        summary["annual_bucket_family_coverage"] = annual_bucket_family_coverage
     if planned_required_families:
         planned_by_family = summary["query_count_by_family"]
         missing_families = [
@@ -946,6 +1004,58 @@ def run_duckduckgo_searches(
                 context.status_callback("正在蒐集國際捷運新聞")
             if context.progress_callback:
                 context.progress_callback(done_count / total)
+
+    primary_forward_raw_count = sum(
+        int(row.get("added_to_raw_count", 0) or 0)
+        for row in statuses
+        if (row.get("search_family") or row.get("family")) == "forward_technology"
+        and not row.get("fallback_layer")
+    )
+    if context.forward_technology_query_count and primary_forward_raw_count == 0:
+        fallback_queries: list[str] = []
+        for spec in FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS:
+            fallback_query = _query_with_period(spec.get("query", ""), context=context)
+            if not fallback_query or fallback_query in context.query_metadata:
+                continue
+            fallback_queries.append(fallback_query)
+            context.query_metadata[fallback_query] = {
+                "family": "forward_technology",
+                "lang": spec.get("lang", "en"),
+                "query_region": "global",
+                "use_news": True,
+                "timelimit": news_timelimit,
+                "requested_max_results": DDGS_RESULTS_PER_QUERY,
+                "planned_index": total + len(fallback_queries),
+                "fallback_layer": "forward_technology_urban_rail_constrained",
+            }
+        if fallback_queries:
+            fallback_workers = max(1, min(6, len(fallback_queries)))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=fallback_workers) as executor:
+                fallback_futures = {
+                    executor.submit(
+                        _run_single_query,
+                        total + offset,
+                        query,
+                        True,
+                        news_timelimit,
+                        context=context,
+                    ): (total + offset, query)
+                    for offset, query in enumerate(fallback_queries, 1)
+                }
+                for future in concurrent.futures.as_completed(fallback_futures):
+                    index, query = fallback_futures[future]
+                    try:
+                        i, query, backend, items, status, query_status = future.result()
+                    except Exception as exc:
+                        i, backend, items = index, "auto", []
+                        status = _ddgs_exception_status(exc)
+                        query_status = _ddgs_query_status_template(query, news_timelimit, context=context)
+                        query_status["execution_status"] = status
+                        query_status["error_message"] = str(exc)[:300]
+                    query_status["fallback_layer"] = "forward_technology_urban_rail_constrained"
+                    statuses.append(query_status)
+                    results_map[i] = _format_ddg_block(i, backend, query, items, status)
+            context.forward_technology_fallback_query_count = len(fallback_queries)
 
     statuses = sorted(
         statuses,

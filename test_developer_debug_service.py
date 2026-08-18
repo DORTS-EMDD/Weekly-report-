@@ -25,17 +25,17 @@ import streamlit_app as app
 
 
 EXPECTED_SCENARIO_SHA256 = {
-    "fast_mode": "3311b2c4f10e9d22a0a734c3c28f87b1748d8a800895d83ce5972bfd15e94724",
-    "full_weekly": "ab3bb9066afb06730d8197d8406f4bb5de87f0af1e8b1146698b22cbb0fd206c",
-    "no_debug_info": "4a89c29e6d826cba72111307f1a8525e24ae303028984db5d1f3b0f42a2b37eb",
-    "missing_report_stats": "e861abfe403158a9fec3f626a4334f9136a16ee01622d67afdc0fc79564feccf",
-    "current_config_fallback": "a00e068aa410e995cce0c08190d5dc07fac93e129f63f345cdbb27188f2d4ec1",
+    "fast_mode": "8b32d500e621e976f32bbce27c71780353bc9f7436749b0374b49199476603c5",
+    "full_weekly": "29d1cc536ad9fdf5fd2cea33c00868dfa66bc96de10530b961b039bdec10550a",
+    "no_debug_info": "fb12e5f3ac718267fe8640d05fcb5e0d4e6a7f2f83c11c90da2f6c04b891ee0c",
+    "missing_report_stats": "9895f907afe233b3d073c95903c4268652e22ec110c15d07514cfb332b05e62a",
+    "current_config_fallback": "0751891442c729fe683f2e84749ba651a30599355c62833d145854cbc8af1bac",
     "json_safe_types": "5cf8865f0d742f7a4911fb086b889607650d1e869334fdd7ea7de420b17160f5",
-    "internal_fields": "b865f8f9e65eecd224818b537167287cb9d9ee8d274abaaba6129187d14ccdac",
-    "empty_candidates": "18ba57b38f6e99639876a07c5842f91b01b8d7b5f51dc8e990142fd0e0a45898",
-    "full_candidates": "a8ab514960b9886152f98df3fe5ee247c0b9dce1826e04fba59edf252cb06286",
+    "internal_fields": "8b1b2126335836aa623ecf84986c5889da8f6af504001904e188a9c5c656dd64",
+    "empty_candidates": "f18daffbd0d5a93de4028c09af6878350a28e1b020e2910e01d5a7802fce3294",
+    "full_candidates": "ef80bdaa0e81d23e37efb3de1a779c6b5963028f4ce29a4f5307ac7aed9dec3f",
 }
-EXPECTED_AGGREGATE_SHA256 = "a54fabfb8e4a044e0c75b45954bbb68d330a7fb8222034e2f741081cc04b0ac8"
+EXPECTED_AGGREGATE_SHA256 = "849dd12a4de20eebf83d054a936ea6c6070bbff2f1c4b454ea18418d941dcd6a"
 
 
 class FixedDateTime(real_datetime.datetime):

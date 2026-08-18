@@ -189,6 +189,32 @@ FORWARD_TECHNOLOGY_QUERY_SPECS = [
     {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail advanced signalling virtual coupling RAMS verification validation field test improve capacity"},
 ]
 
+FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS = [
+    {"family": "forward_technology", "lang": "en", "query": "metro AI maintenance"},
+    {"family": "forward_technology", "lang": "en", "query": "subway predictive maintenance"},
+    {"family": "forward_technology", "lang": "en", "query": "metro digital twin"},
+    {"family": "forward_technology", "lang": "en", "query": "urban rail cybersecurity"},
+    {"family": "forward_technology", "lang": "en", "query": "metro energy storage"},
+    {"family": "forward_technology", "lang": "en", "query": "subway energy technology"},
+    {"family": "forward_technology", "lang": "en", "query": "light rail new materials"},
+    {"family": "forward_technology", "lang": "en", "query": "metro smart maintenance"},
+]
+
+GLOBAL_REGIONAL_COVERAGE_QUERY_SPECS = [
+    {"region": "臺灣", "lang": "zh", "query": "Taiwan metro MRT urban rail technical news"},
+    {"region": "日本", "lang": "ja", "query": "Japan metro subway urban rail technical news"},
+    {"region": "韓國", "lang": "ko", "query": "Korea subway urban rail technical news"},
+    {"region": "新加坡", "lang": "en", "query": "Singapore MRT urban rail technical news"},
+    {"region": "香港", "lang": "zh", "query": "Hong Kong MTR urban rail technical news"},
+    {"region": "澳洲", "lang": "en", "query": "Australia metro light rail technical news"},
+    {"region": "英國", "lang": "en", "query": "UK metro tram urban rail technical news"},
+    {"region": "法國", "lang": "fr", "query": "France metro tramway technical news"},
+    {"region": "德國", "lang": "de", "query": "Germany U-Bahn Stadtbahn technical news"},
+    {"region": "美國", "lang": "en", "query": "US subway metro technical news"},
+    {"region": "加拿大", "lang": "en", "query": "Canada metro light rail technical news"},
+    {"region": "西班牙", "lang": "es", "query": "Spain metro tranvia urban rail technical news"},
+]
+
 ANNUAL_TECHNOLOGY_BREAKTHROUGH_QUERY_SPECS = [
     {"family": "technology", "lang": "en", "query": "metro subway MRT light rail new material advanced material composite lightweight material fire resistant material"},
     {"family": "technology", "lang": "en", "query": "metro subway MRT light rail SiC semiconductor traction energy storage battery technology"},

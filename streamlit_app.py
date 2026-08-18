@@ -876,6 +876,18 @@ def build_pipeline_debug_stats(
                 counts[str(value)] = counts.get(str(value), 0) + 1
         return counts
 
+    def _annual_bucket(item: dict) -> str:
+        explicit = str(item.get("date_bucket", "") or "").strip()
+        if explicit:
+            return explicit
+        date_value = _candidate_date_obj(item.get("date", ""))
+        if not date_value:
+            return ""
+        return f"{date_value.year:04d}-Q{((date_value.month - 1) // 3) + 1}"
+
+    def _quality_count(items: list[dict], key: str) -> dict[str, int]:
+        return _count_by(items, key)
+
     category_gate_pass_counts: dict[str, int] = {}
     for item in filtered_candidates or []:
         for gate, enabled in (item.get("category_gates") or {}).items():
@@ -939,6 +951,23 @@ def build_pipeline_debug_stats(
     for item in forward_evaluated_candidates:
         for reason in item.get("track_b_failure_reasons", []) or []:
             track_b_exclusion_reason_counts[reason] = track_b_exclusion_reason_counts.get(reason, 0) + 1
+    annual_raw_by_bucket: dict[str, int] = {}
+    for item in raw_candidates or []:
+        bucket = _annual_bucket(item)
+        if bucket:
+            annual_raw_by_bucket[bucket] = annual_raw_by_bucket.get(bucket, 0) + 1
+    annual_gate_pass_by_bucket: dict[str, int] = {}
+    for item in filtered_candidates or []:
+        bucket = _annual_bucket(item)
+        if bucket and any((item.get("category_gates") or {}).values()):
+            annual_gate_pass_by_bucket[bucket] = annual_gate_pass_by_bucket.get(bucket, 0) + 1
+    final_source_tier_counts = _count_by(filtered_candidates, "source_tier")
+    official_count = final_source_tier_counts.get("A_official", 0)
+    official_ratio = round(official_count / len(filtered_candidates), 4) if filtered_candidates else 0.0
+    evidence_strength_counts = _quality_count(filtered_candidates, "evidence_strength")
+    technology_maturity_counts = _quality_count(filtered_candidates, "technology_maturity")
+    event_importance_counts = _quality_count(filtered_candidates, "event_importance")
+    innovation_type_counts = _quality_count(filtered_candidates, "innovation_type")
     return {
         "pipeline_counts": {
             "raw": len(raw_candidates or []),
@@ -950,6 +979,20 @@ def build_pipeline_debug_stats(
             "selected": 0,
         },
         "prefetch_stats": prefetch_stats or {},
+        "pipeline_stages": {
+            "raw": len(raw_candidates or []),
+            "dedup": len(deduped_candidates or []),
+            "filtered": len(filtered_candidates or []),
+            "gate_pass": gate_pass_count,
+            "rescue_candidate": int((prefetch_stats or {}).get("rescue_candidate_count", 0) or 0),
+            "rescue_enriched": int((prefetch_stats or {}).get("rescue_enrichment_success_count", 0) or 0),
+            "selected": 0,
+            "model": len(filtered_candidates or []),
+            "final": 0,
+        },
+        "rescue_candidate_count": int((prefetch_stats or {}).get("rescue_candidate_count", 0) or 0),
+        "rescue_enrichment_attempted_count": int((prefetch_stats or {}).get("rescue_enrichment_attempted_count", 0) or 0),
+        "rescue_enrichment_success_count": int((prefetch_stats or {}).get("rescue_enrichment_success_count", 0) or 0),
         "top_excluded_valuable_candidates": build_top_excluded_valuable_candidates(excluded_candidates, 20),
         "page_type_exclusion_counts": _count_by(excluded_candidates, "page_type"),
         "no_category_gate_count": sum(1 for item in excluded_candidates or [] if item.get("final_exclude_reason") == "no_category_gate" or item.get("exclude_reason") == "no_category_gate"),
@@ -1014,6 +1057,7 @@ def build_pipeline_debug_stats(
         "raw_candidate_count_by_family": raw_candidate_count_by_family,
         "gate_pass_count_by_category": category_gate_pass_counts,
         "forward_technology_query_count": search_summary.get("forward_technology_query_count", 0),
+        "forward_technology_fallback_query_count": search_summary.get("forward_technology_fallback_query_count", 0),
         "forward_technology_raw_count": len(forward_raw_candidates),
         "forward_technology_gate_pass_count": forward_gate_pass_count,
         "forward_technology_selected_count": 0,
@@ -1026,6 +1070,29 @@ def build_pipeline_debug_stats(
         "track_a_selected_count": 0,
         "track_b_selected_count": 0,
         "track_b_exclusion_reason_counts": track_b_exclusion_reason_counts,
+        "track_b_rescue_candidate_count": sum(1 for item in forward_evaluated_candidates if item.get("rescue_candidate")),
+        "track_b_enrichment_attempted_count": sum(1 for item in forward_evaluated_candidates if item.get("rescue_enrichment_attempted")),
+        "track_b_enrichment_success_count": sum(1 for item in forward_evaluated_candidates if item.get("rescue_enrichment_success")),
+        "track_b_gate_pass_after_enrichment_count": sum(
+            1 for item in forward_evaluated_candidates
+            if item.get("rescue_enrichment_success") and item.get("track_b_gate_pass") is True
+        ),
+        "annual_raw_by_bucket": annual_raw_by_bucket,
+        "annual_gate_pass_by_bucket": annual_gate_pass_by_bucket,
+        "annual_selected_by_bucket": {},
+        "annual_coverage_target": 12,
+        "final_source_tier_counts": final_source_tier_counts,
+        "official_source_ratio": official_ratio,
+        "evidence_strength_counts": evidence_strength_counts,
+        "technology_maturity_counts": technology_maturity_counts,
+        "event_importance_counts": event_importance_counts,
+        "innovation_type_counts": innovation_type_counts,
+        "quality_acceptance": {
+            "pipeline_stage_contract": "PASS",
+            "source_attribution": "PASS" if filtered_candidates else "WARN",
+            "evidence_strength": "PASS" if evidence_strength_counts.get("high", 0) or evidence_strength_counts.get("medium", 0) else "WARN",
+            "annual_coverage": "PENDING",
+        },
         "forward_technology_material_candidate_count": sum(
             1 for item in forward_raw_candidates
             if item.get("innovation_level") in {"A", "B"}
@@ -1077,6 +1144,10 @@ _compute_candidate_page_type = _selector_api["_compute_candidate_page_type"]
 _candidate_page_type = _selector_api["_candidate_page_type"]
 _prefetch_limit_for_period = _selector_api["_prefetch_limit_for_period"]
 _candidate_prefetch_signal = _selector_api["_candidate_prefetch_signal"]
+_is_short_snippet_rescue_candidate = _selector_api["_is_short_snippet_rescue_candidate"]
+_is_procurement_rescue_candidate = _selector_api["_is_procurement_rescue_candidate"]
+_is_pre_gate_rescue_candidate = _selector_api["_is_pre_gate_rescue_candidate"]
+build_cross_period_coverage_debug = _selector_api["build_cross_period_coverage_debug"]
 prefetch_candidates_before_filter = _selector_api["prefetch_candidates_before_filter"]
 preliminary_filter_candidate = _selector_api["preliminary_filter_candidate"]
 _excluded_candidate_value_reasons = _selector_api["_excluded_candidate_value_reasons"]
@@ -2507,6 +2578,26 @@ if generate_btn:
             pipeline_counts["selected"] = len(selected_candidates)
             pipeline_counts["reconciled_accepted"] = reconciled_accepted_count
             pipeline_counts["rendered"] = rendered_report_count
+            pipeline_stages = pipeline_debug_stats.setdefault("pipeline_stages", {})
+            pipeline_stages["selected"] = len(selected_candidates)
+            pipeline_stages["final"] = rendered_report_count
+            annual_selected_by_bucket: dict[str, int] = {}
+            for item in selected_candidates:
+                date_value = _candidate_date_obj(item.get("date", ""))
+                bucket = str(item.get("date_bucket", "") or "")
+                if not bucket and date_value:
+                    bucket = f"{date_value.year:04d}-Q{((date_value.month - 1) // 3) + 1}"
+                if bucket:
+                    annual_selected_by_bucket[bucket] = annual_selected_by_bucket.get(bucket, 0) + 1
+            pipeline_debug_stats["annual_selected_by_bucket"] = annual_selected_by_bucket
+            pipeline_debug_stats["quality_acceptance"] = {
+                **pipeline_debug_stats.get("quality_acceptance", {}),
+                "annual_coverage": (
+                    "PASS"
+                    if lookback_int < 365 or len(annual_selected_by_bucket) >= 3
+                    else "WARN"
+                ),
+            }
             pipeline_debug_stats["selected_count"] = len(selected_candidates)
             operational_topic_selected_count = sum(
                 1

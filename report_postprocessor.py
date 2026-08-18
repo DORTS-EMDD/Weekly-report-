@@ -1180,6 +1180,7 @@ def simplify_formal_report_format(text: str) -> str:
 
 REPORT_FIELD_ALIASES = {
     "發布/事件日期": "發布/事件日期",
+    "國家": "國家",
     "國家/地區": "國家/地區",
     "相關機電系統": "相關機電系統",
     "事件摘要": "事件摘要",
@@ -1722,7 +1723,9 @@ def _authoritative_block_field_values(lines: list[str]) -> dict[str, str]:
             current_field = field_names[match.group(1)]
             values[current_field] = match.group(2).strip()
             continue
-        if not line or line.startswith(("#", "🔹", "<!--", "&lt;!--")):
+        if not line:
+            continue
+        if line.startswith(("#", "🔹", "<!--", "&lt;!--")):
             current_field = ""
             continue
         if current_field:
@@ -1738,6 +1741,7 @@ def _authoritative_block_field_status(
     report_md: str,
     *,
     country_by_id: dict[int, str] | None = None,
+    system_optional_by_id: dict[int, bool] | None = None,
 ) -> list[dict]:
     marker_pattern = re.compile(
         r"^(?:<!--\s*candidate_id\s*:\s*(\d+)\s*-->|&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;)$",
@@ -1765,10 +1769,32 @@ def _authoritative_block_field_status(
             for candidate_id in current_ids
         ):
             required_field_names.pop("country", None)
+        if system_optional_by_id and current_ids and all(
+            system_optional_by_id.get(candidate_id, False)
+            for candidate_id in current_ids
+        ):
+            required_field_names.pop("system", None)
+
+        def _field_has_value(field_name: str, matcher) -> bool:
+            for index, line in enumerate(current_lines):
+                if not matcher(line):
+                    continue
+                value = line.split("：", 1)[-1].split(":", 1)[-1].strip()
+                if value:
+                    return True
+                for following in current_lines[index + 1:]:
+                    following_value = following.strip()
+                    if not following_value:
+                        continue
+                    if _match_report_field_line(following_value) or following_value.startswith(("🔹", "#", "<!--", "&lt;!--")):
+                        break
+                    return True
+                return False
+            return False
         missing_fields = [
             name
             for name, matcher in required_field_names.items()
-            if not any(matcher(line) for line in current_lines)
+            if not _field_has_value(name, matcher)
         ]
         reasons = []
         if "title" in missing_fields:
@@ -1821,6 +1847,10 @@ def validate_authoritative_report(
         candidate_id: str(candidate.get("country") or "").strip()
         for candidate_id, candidate in selected_map.items()
     }
+    system_optional_by_id = {
+        candidate_id: "core_systems" in candidate and not candidate.get("core_systems")
+        for candidate_id, candidate in selected_map.items()
+    }
     model_ids = list(candidate_validation.get("found_ids", []))
     selected_category_labels = {
         OPERATIONAL_DYNAMICS_CATEGORY_LABEL
@@ -1844,6 +1874,7 @@ def validate_authoritative_report(
     block_field_status = _authoritative_block_field_status(
         report_md,
         country_by_id=country_by_id,
+        system_optional_by_id=system_optional_by_id,
     )
     missing_model_fields = {
         str(candidate_id): status["missing_fields"]
@@ -2812,9 +2843,11 @@ def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext
         f'<!-- candidate_id: {candidate_id} -->', f'🔹 [{category}] {title}', '',
         f'• 發布/事件日期：{date_value}', '',
         f'• 國家/地區：{_candidate_region_display(candidate, context=context)}', '',
-        f'• 相關機電系統：{_fallback_electromechanical_system(candidate)}', '',
-        '• 事件摘要：', summary, '',
     ]
+    system_value = _fallback_electromechanical_system(candidate)
+    if system_value and not ("core_systems" in candidate and not candidate.get("core_systems")):
+        lines.extend([f'• 相關機電系統：{system_value}', ''])
+    lines.extend(['• 事件摘要：', summary, ''])
     if insight:
         lines.extend(['• 臺北捷運局啟示：', insight, ''])
     lines.extend([_candidate_source_line(candidate, context=context), '', '________________________________________'])
@@ -2850,11 +2883,26 @@ def _force_candidate_fields_in_block(block: str, candidate: dict | list[dict], *
     source_lines = [_candidate_source_line(item, context=context) for item in candidates if _effective_source_url(item)]
     source_line = '；'.join(line.replace('• 資料來源：', '') for line in source_lines)
     source_line = f'• 資料來源：{source_line}' if source_line else ''
-    if re.search('(?m)^•\\s*資料來源\\s*[：:].*$', normalized):
-        if source_line:
-            normalized = re.sub('(?m)^•\\s*資料來源\\s*[：:].*$', source_line, normalized, count=1)
-    elif source_line:
-        normalized = normalized.rstrip() + f'\n\n{source_line}'
+    existing_source_match = re.search('(?m)^•\\s*資料來源\\s*[：:]\\s*(.*)$', normalized)
+    if source_line:
+        if not existing_source_match:
+            normalized = normalized.rstrip() + f'\n\n{source_line}'
+        else:
+            existing_source_value = existing_source_match.group(1).strip()
+            generic_source = (
+                not _extract_complete_url(existing_source_value)
+                and (
+                    existing_source_value in _GENERIC_SOURCE_FALLBACKS
+                    or existing_source_value.startswith('原始來源')
+                )
+            )
+            if generic_source:
+                candidate_source_values = source_line.split('：', 1)[1]
+                normalized = (
+                    normalized[:existing_source_match.end()]
+                    + f'；{candidate_source_values}'
+                    + normalized[existing_source_match.end():]
+                )
     marker_lines = '\n'.join(
         f'<!-- candidate_id: {int(item.get("candidate_id") or item.get("id") or 0)} -->'
         for item in candidates
@@ -2866,7 +2914,7 @@ def _extract_research_section_for_reconcile(report_md: str, *, context: ReportPo
     return match.group(0).strip() if match else ''
 
 
-def _report_block_missing_fields(normalized: str) -> list[str]:
+def _report_block_missing_fields(normalized: str, candidate: dict | None = None) -> list[str]:
     if not re.search(r"^🔹\s*\[[^\]]+\]\s*\S+", normalized or "", flags=re.MULTILINE):
         missing = ["title"]
     else:
@@ -2874,29 +2922,31 @@ def _report_block_missing_fields(normalized: str) -> list[str]:
     lines = (normalized or "").splitlines()
     field_labels = {
         "date": "發布/事件日期",
-        "country": "國家/地區",
+        "country": "國家",
         "system": "相關機電系統",
         "summary": "事件摘要",
         "source": "資料來源",
     }
     for name, label in field_labels.items():
+        if name == "system" and candidate is not None and "core_systems" in candidate and not candidate.get("core_systems"):
+            continue
         found = False
         for index, line in enumerate(lines):
-            match = re.match(rf"^•\s*{re.escape(label)}\s*[：:]\s*(.*)$", line.strip())
+            label_pattern = "國家(?:/地區)?" if name == "country" else re.escape(label)
+            match = re.match(rf"^•\s*{label_pattern}\s*[：:]\s*(.*)$", line.strip())
             if not match:
                 continue
             if match.group(1).strip():
                 found = True
                 break
-            if name == "summary":
-                for following in lines[index + 1:]:
-                    value = following.strip()
-                    if not value:
-                        continue
-                    if _match_report_field_line(value) or value.startswith(("🔹", "##", "###")):
-                        break
-                    found = True
+            for following in lines[index + 1:]:
+                value = following.strip()
+                if not value:
+                    continue
+                if _match_report_field_line(value) or value.startswith(("🔹", "##", "###")):
                     break
+                found = True
+                break
             break
         if not found:
             missing.append(name)
@@ -2964,7 +3014,11 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
             warnings.append(f'報告 block 含未知、重複或無效 candidate_id：{list(candidate_ids)}。')
             continue
         normalized = normalize_final_report_md(unescape(parsed.get('body', '') or ''))
-        missing_fields = _report_block_missing_fields(normalized)
+        block_candidate = candidates[0] if candidates and all(
+            item is not None and "core_systems" in item and not item.get("core_systems")
+            for item in candidates
+        ) else None
+        missing_fields = _report_block_missing_fields(normalized, block_candidate)
         if missing_fields:
             reason = 'missing_required_fields:' + ','.join(missing_fields)
             warnings.append(f'報告 block parser failure candidate_id={list(candidate_ids)}；缺失欄位={missing_fields}。')

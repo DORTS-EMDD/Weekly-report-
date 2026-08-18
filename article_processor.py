@@ -910,6 +910,10 @@ def _make_news_candidate(
         "search_language": search_language,
         "query_region": query_metadata.get("query_region", ""),
     }
+    if query_metadata.get("date_bucket"):
+        candidate["date_bucket"] = query_metadata["date_bucket"]
+    if query_metadata.get("annual_bucket_families"):
+        candidate["annual_bucket_families"] = list(query_metadata["annual_bucket_families"])
     candidate["region"] = _region_guess_from_candidate(candidate)
     return candidate
 
