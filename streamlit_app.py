@@ -224,6 +224,7 @@ from article_processor import (
     _extract_complete_url, _extract_complete_urls, _extract_domain_hint,
     _canonical_url_from_html, _resolve_google_news_article_url,
     _prefetch_url_for_candidate, _extract_prefetch_text, _prefetch_candidate_article,
+    normalize_country, region_matches_selected_regions,
 )
 from search_queries import (
     build_rss_sources, KNOWN_BAD_OFFICIAL_RSS_HOSTS, KNOWN_BAD_OFFICIAL_RSS_LABELS,
@@ -947,6 +948,27 @@ def build_pipeline_debug_stats(
         for item in (filtered_candidates or []) + (excluded_candidates or [])
         if item.get("search_family") == "forward_technology"
     ]
+    selected_region_values = list(dict.fromkeys(
+        list(selected_regions or [])
+        + [
+            region
+            for item in forward_evaluated_candidates
+            for region in (item.get("query_selected_regions") or [])
+            if region
+        ]
+    ))
+    forward_candidates_by_region: dict[str, int] = {}
+    for item in forward_evaluated_candidates:
+        region = item.get("country") or normalize_country(item.get("resolved_region") or item.get("region", "")) or "未判定"
+        forward_candidates_by_region[region] = forward_candidates_by_region.get(region, 0) + 1
+    forward_candidates_in_selected_regions = sum(
+        1
+        for item in forward_evaluated_candidates
+        if selected_region_values and region_matches_selected_regions(
+            item.get("country") or normalize_country(item.get("resolved_region") or item.get("region", "")),
+            selected_region_values,
+        )
+    )
     track_b_exclusion_reason_counts: dict[str, int] = {}
     for item in forward_evaluated_candidates:
         for reason in item.get("track_b_failure_reasons", []) or []:
@@ -1075,9 +1097,25 @@ def build_pipeline_debug_stats(
         "track_b_rescue_candidate_count": sum(1 for item in forward_evaluated_candidates if item.get("rescue_candidate")),
         "track_b_enrichment_attempted_count": sum(1 for item in forward_evaluated_candidates if item.get("rescue_enrichment_attempted")),
         "track_b_enrichment_success_count": sum(1 for item in forward_evaluated_candidates if item.get("rescue_enrichment_success")),
-        "track_b_gate_pass_after_enrichment_count": sum(
-            1 for item in forward_evaluated_candidates
-            if item.get("rescue_enrichment_success") and item.get("track_b_gate_pass") is True
+        "track_b_gate_pass_before_enrichment_count": int(
+            (prefetch_stats or {}).get(
+                "track_b_gate_pass_before_enrichment_count",
+                sum(1 for item in forward_evaluated_candidates if item.get("track_b_gate_pass_before_enrichment")),
+            )
+            or 0
+        ),
+        "track_b_gate_pass_after_enrichment_count": int(
+            (prefetch_stats or {}).get(
+                "track_b_gate_pass_after_enrichment_count",
+                sum(1 for item in forward_evaluated_candidates if item.get("track_b_gate_pass_after_enrichment")),
+            )
+            or 0
+        ),
+        "forward_candidates_by_region": forward_candidates_by_region,
+        "forward_candidates_in_selected_regions": forward_candidates_in_selected_regions,
+        "forward_candidates_outside_selected_regions": (
+            len(forward_evaluated_candidates) - forward_candidates_in_selected_regions
+            if selected_region_values else 0
         ),
         "annual_raw_by_bucket": annual_raw_by_bucket,
         "annual_gate_pass_by_bucket": annual_gate_pass_by_bucket,

@@ -120,13 +120,15 @@ def _clean_source_label(content: str, url: str, domain: str) -> str:
         label = ""
     if re.sub(r"\s+", "", label) in {"報導", "新聞", "公告", "來源", "資料來源"}:
         label = ""
+    if label in _GENERIC_SOURCE_FALLBACKS:
+        label = ""
     if not label and domain:
         label = domain
-    return label or "資料來源未明確辨識"
+    return label
 
 
 def _source_label_with_link(label: str, url: str) -> str:
-    label = str(label or "").strip() or _domain_from_url(url) or "來源"
+    label = str(label or "").strip() or _domain_from_url(url)
     url = _extract_complete_url(str(url or ""))
     return f"[{label}]({url})" if url else label
 
@@ -144,6 +146,9 @@ def normalize_source_line(line: str) -> str:
     if not match:
         return line
     content = match.group(1).strip()
+    for fallback in _GENERIC_SOURCE_FALLBACKS:
+        content = re.sub(re.escape(fallback), " ", content, flags=re.IGNORECASE)
+    content = re.sub(r"\s+", " ", content).strip()
     content = re.sub(r"(原文連結)(?:\s*[，,、]\s*\1)+", r"\1", content)
     if re.search(r"[；;]\s*補充來源\s*[：:]", content):
         primary_content, supplemental_content = re.split(
@@ -2739,7 +2744,13 @@ def _extract_marked_candidate_blocks(report_md: str, *, context: ReportPostproce
 
 def _candidate_source_line(candidate: dict, *, context: ReportPostprocessContext) -> str:
     source_url = _effective_source_url(candidate)
-    source_display = unescape(str(candidate.get('source_display') or candidate.get('source') or _domain_from_url(source_url) or '原始來源'))
+    raw_source_display = unescape(str(candidate.get('source_display') or '').strip())
+    if raw_source_display in _GENERIC_SOURCE_FALLBACKS:
+        raw_source_display = ""
+    raw_source = unescape(str(candidate.get('source') or '').strip())
+    if raw_source in _GENERIC_SOURCE_FALLBACKS:
+        raw_source = ""
+    source_display = raw_source_display or raw_source or _domain_from_url(source_url) or ''
     item_date = _normalize_report_date_text(str(candidate.get('date') or ''))
     if item_date == '日期未知':
         item_date = '日期未明'

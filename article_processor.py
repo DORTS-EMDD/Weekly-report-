@@ -910,6 +910,12 @@ def _make_news_candidate(
         "search_language": search_language,
         "query_region": query_metadata.get("query_region", ""),
     }
+    if query_metadata.get("query_region"):
+        candidate["query_region"] = query_metadata["query_region"]
+    if query_metadata.get("selected_regions"):
+        candidate["query_selected_regions"] = list(query_metadata["selected_regions"])
+    if query_metadata.get("region_group"):
+        candidate["query_region_group"] = list(query_metadata["region_group"])
     if query_metadata.get("date_bucket"):
         candidate["date_bucket"] = query_metadata["date_bucket"]
     if query_metadata.get("annual_bucket_families"):
@@ -1328,49 +1334,192 @@ def _extract_prefetch_text(html: str) -> str:
     return _shorten(text, PREFETCH_MAX_CHARS)
 
 
-def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> dict:
-    started = time.perf_counter()
-    url = _prefetch_url_for_candidate(candidate, session)
-    if not url:
-        return {"status": "skipped_no_direct_url", "chars": 0, "elapsed_seconds": 0.0, "reason": "no_direct_article_url"}
+def _invalidate_candidate_selection_caches(candidate: dict) -> None:
+    for key in (
+        "_selection_text_cache", "_selection_text_fingerprint", "_score_cache",
+        "_score_cache_fingerprint", "_analysis_cache", "_analysis_cache_fingerprint",
+    ):
+        candidate.pop(key, None)
+
+
+def _apply_prefetch_evidence(
+    candidate: dict,
+    text: str,
+    *,
+    method: str,
+    content_source: str,
+    resolved_url: str = "",
+) -> int:
+    text = _shorten(_clean_text(text), PREFETCH_MAX_CHARS)
+    if len(text) < 120:
+        return 0
+    if resolved_url:
+        candidate["resolved_article_url"] = resolved_url
+    candidate["prefetched_text_snippet"] = _shorten(text, REPORT_SNIPPET_CHARS)
+    candidate["snippet"] = _shorten(
+        f"{candidate.get('snippet', '')} {text}",
+        REPORT_SNIPPET_CHARS,
+    )
+    candidate["enrichment_method"] = method
+    candidate["enriched_content_source"] = content_source
+    candidate["enriched_snippet_chars"] = len(text)
+    candidate["enrichment_failure_reason"] = ""
+    _invalidate_candidate_selection_caches(candidate)
+    return len(text)
+
+
+def _source_domain_followup_url(candidate: dict) -> str:
+    title = _clean_text(str(candidate.get("title", "") or ""))
+    if not title:
+        return ""
+    for raw_value in (candidate.get("source_href", ""), candidate.get("source_domain", "")):
+        raw_value = str(raw_value or "").strip()
+        if not raw_value:
+            continue
+        base_url = raw_value if "://" in raw_value else f"https://{raw_value}"
+        host = _domain_from_url(base_url)
+        if not host or "news.google.com" in host:
+            continue
+        return f"https://{host}/search/?q={urllib.parse.quote_plus(title)}"
+    return ""
+
+
+def _source_article_link_from_search(html: str, base_url: str, candidate: dict) -> str:
+    source_host = _domain_from_url(base_url)
+    title_tokens = {
+        token.casefold()
+        for token in re.findall(r"[A-Za-z0-9\u3400-\u9fff]{4,}", str(candidate.get("title", "") or ""))
+    }
+    if not source_host or len(title_tokens) < 2:
+        return ""
+    matches: list[tuple[int, str]] = []
+    for match in re.finditer(
+        r"<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+        html or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        link = urllib.parse.urljoin(base_url, unescape(match.group(1)).strip())
+        if not _is_article_level_url(link) or not _host_matches(_domain_from_url(link), source_host):
+            continue
+        anchor_text = re.sub(r"<[^>]+>", " ", unescape(match.group(2)))
+        link_text = f"{anchor_text} {link}".casefold()
+        overlap = sum(1 for token in title_tokens if token in link_text)
+        if overlap >= 2:
+            matches.append((overlap, link))
+    if not matches:
+        return ""
+    matches.sort(key=lambda item: (-item[0], len(item[1])))
+    return matches[0][1]
+
+
+def _prefetch_from_source_domain(candidate: dict, session: requests.Session) -> dict:
+    lookup_url = _source_domain_followup_url(candidate)
+    if not lookup_url:
+        return {"reason": "no_known_source_domain"}
     try:
-        resolved_html = candidate.pop("_resolved_article_html", "")
-        resolved_content_type = candidate.pop("_resolved_article_content_type", "").casefold()
-        if resolved_html:
-            article_text = _extract_prefetch_text(resolved_html)
-            if len(article_text) >= 120:
-                candidate["prefetched_text_snippet"] = _shorten(article_text, REPORT_SNIPPET_CHARS)
-                candidate["snippet"] = _shorten(f"{candidate.get('snippet', '')} {article_text}", REPORT_SNIPPET_CHARS)
-                candidate.pop("_selection_text_cache", None)
-                candidate.pop("_selection_text_fingerprint", None)
-                candidate.pop("_score_cache", None)
-                candidate.pop("_score_cache_fingerprint", None)
-                candidate.pop("_analysis_cache", None)
-                candidate.pop("_analysis_cache_fingerprint", None)
-                return {"status": "success", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "resolved_google_news_redirect"}
-            if resolved_content_type and not any(kind in resolved_content_type for kind in ("html", "text", "xml")):
-                return {"status": "skipped_content_type", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": resolved_content_type[:80]}
-        response = session.get(
-            url,
+        lookup_response = session.get(
+            lookup_url,
             timeout=PREFETCH_TIMEOUT_SECONDS,
             headers={"Accept": "text/html,application/xhtml+xml,text/plain,*/*"},
         )
-        content_type = response.headers.get("Content-Type", "").casefold()
-        if response.status_code >= 400:
-            return {"status": "failed_http", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": f"http_{response.status_code}"}
-        if content_type and not any(kind in content_type for kind in ("html", "text", "xml")):
-            return {"status": "skipped_content_type", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": content_type[:80]}
-        article_text = _extract_prefetch_text(response.text)
-        if len(article_text) < 120:
-            return {"status": "failed_too_short", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "too_short"}
-        candidate["prefetched_text_snippet"] = _shorten(article_text, REPORT_SNIPPET_CHARS)
-        candidate["snippet"] = _shorten(f"{candidate.get('snippet', '')} {article_text}", REPORT_SNIPPET_CHARS)
-        candidate.pop("_selection_text_cache", None)
-        candidate.pop("_selection_text_fingerprint", None)
-        candidate.pop("_score_cache", None)
-        candidate.pop("_score_cache_fingerprint", None)
-        candidate.pop("_analysis_cache", None)
-        candidate.pop("_analysis_cache_fingerprint", None)
-        return {"status": "success", "chars": len(article_text), "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": ""}
+        if getattr(lookup_response, "status_code", 200) >= 400:
+            return {"reason": f"source_lookup_http_{lookup_response.status_code}"}
+        lookup_html = getattr(lookup_response, "text", "") or ""
+        article_url = _source_article_link_from_search(lookup_html, lookup_url, candidate)
+        if article_url:
+            article_response = session.get(
+                article_url,
+                timeout=PREFETCH_TIMEOUT_SECONDS,
+                headers={"Accept": "text/html,application/xhtml+xml,text/plain,*/*"},
+            )
+            content_type = getattr(article_response, "headers", {}).get("Content-Type", "").casefold()
+            if getattr(article_response, "status_code", 200) < 400 and (
+                not content_type or any(kind in content_type for kind in ("html", "text", "xml"))
+            ):
+                article_text = _extract_prefetch_text(getattr(article_response, "text", ""))
+                if len(article_text) >= 120:
+                    return {
+                        "text": article_text,
+                        "resolved_url": article_url,
+                        "reason": "source_domain_article_lookup",
+                    }
+        search_text = _extract_prefetch_text(lookup_html)
+        if len(search_text) >= 120 and _normalize_title(str(candidate.get("title", ""))) in _normalize_title(search_text):
+            return {"text": search_text, "reason": "source_domain_search_snippet"}
+        return {"reason": "source_domain_article_not_found"}
     except Exception as exc:
-        return {"status": "failed_exception", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": str(exc)[:160]}
+        return {"reason": f"source_lookup_exception:{str(exc)[:140]}"}
+
+
+def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> dict:
+    started = time.perf_counter()
+    candidate.setdefault("enrichment_method", "")
+    candidate.setdefault("enrichment_failure_reason", "")
+    candidate.setdefault("resolved_article_url", "")
+    candidate.setdefault("enriched_snippet_chars", 0)
+    candidate.setdefault("enriched_content_source", "")
+    url = _prefetch_url_for_candidate(candidate, session)
+    direct_reason = "no_direct_article_url"
+    try:
+        resolved_html = candidate.pop("_resolved_article_html", "")
+        resolved_content_type = candidate.pop("_resolved_article_content_type", "").casefold()
+        if resolved_html and (not resolved_content_type or any(kind in resolved_content_type for kind in ("html", "text", "xml"))):
+            article_text = _extract_prefetch_text(resolved_html)
+            chars = _apply_prefetch_evidence(
+                candidate, article_text, method="resolved_article_url",
+                content_source="resolved_article_html", resolved_url=url,
+            )
+            if chars:
+                return {"status": "success", "chars": chars, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "resolved_google_news_redirect", "enrichment_method": "resolved_article_url", "enriched_content_source": "resolved_article_html"}
+            direct_reason = "resolved_article_too_short"
+        if url:
+            response = session.get(
+                url,
+                timeout=PREFETCH_TIMEOUT_SECONDS,
+                headers={"Accept": "text/html,application/xhtml+xml,text/plain,*/*"},
+            )
+            content_type = response.headers.get("Content-Type", "").casefold()
+            if response.status_code >= 400:
+                direct_reason = f"http_{response.status_code}"
+            elif content_type and not any(kind in content_type for kind in ("html", "text", "xml")):
+                direct_reason = content_type[:80]
+            else:
+                article_text = _extract_prefetch_text(response.text)
+                chars = _apply_prefetch_evidence(
+                    candidate, article_text,
+                    method="direct_article_url",
+                    content_source="article_html",
+                    resolved_url=url,
+                )
+                if chars:
+                    return {"status": "success", "chars": chars, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "direct_article_url", "enrichment_method": "direct_article_url", "enriched_content_source": "article_html"}
+                direct_reason = "direct_article_too_short"
+    except Exception as exc:
+        direct_reason = f"direct_fetch_exception:{str(exc)[:140]}"
+
+    followup = _prefetch_from_source_domain(candidate, session)
+    if followup.get("text"):
+        chars = _apply_prefetch_evidence(
+            candidate,
+            followup["text"],
+            method="source_domain_followup",
+            content_source="source_domain_search",
+            resolved_url=followup.get("resolved_url", ""),
+        )
+        if chars:
+            return {"status": "success", "chars": chars, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": followup.get("reason", "source_domain_followup"), "enrichment_method": "source_domain_followup", "enriched_content_source": "source_domain_search"}
+
+    feed_snippet = _clean_text(str(candidate.get("snippet", "") or ""))
+    if len(feed_snippet) >= 120:
+        chars = _apply_prefetch_evidence(
+            candidate,
+            feed_snippet,
+            method="source_feed_snippet",
+            content_source="candidate_source_feed",
+        )
+        if chars:
+            return {"status": "success", "chars": chars, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "source_feed_snippet", "enrichment_method": "source_feed_snippet", "enriched_content_source": "candidate_source_feed"}
+
+    reason = followup.get("reason") or direct_reason
+    candidate["enrichment_failure_reason"] = reason
+    return {"status": "failed_enrichment", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": reason, "enrichment_method": "", "enriched_content_source": ""}

@@ -686,9 +686,11 @@ FORWARD_TRACK_B_EMERGING_TERMS = [
     "new material", "novel material", "lightweight", "composite", "fire-resistant", "fire resistant",
     "high-performance material", "new coating", "low-friction", "low friction",
     "energy optimization", "energy optimisation", "energy efficiency", "regenerative energy",
-    "regenerative braking", "energy storage", "heat recovery", "thermal energy network",
-    "platform cooling", "thermal management", "new sensing method", "new manufacturing method",
-    "new process", "emerging technology", "advanced technology",
+    "regenerative braking", "energy storage", "heat recovery", "waste heat", "thermal energy",
+    "energy reuse", "heat exchanger", "district energy", "station cooling", "subway heat",
+    "thermal energy network", "platform cooling", "thermal management", "new sensing method",
+    "new manufacturing method", "new process", "system modernization", "system modernisation",
+    "modernization", "modernisation", "emerging technology", "advanced technology",
 ]
 
 FORWARD_TRACK_B_APPLICATION_EVIDENCE_TERMS = [
@@ -714,6 +716,13 @@ FORWARD_TRACK_B_CIVIL_MATERIAL_TERMS = [
 FORWARD_TRACK_B_GENERIC_AI_MARKETING_TERMS = [
     "ai strategy", "ai investment", "ai market", "ai solution", "ai platform", "smart city",
     "conference", "marketing", "announced a partnership", "investment in ai",
+]
+
+RESCUE_LOW_VALUE_TERMS = [
+    "elevator-only", "escalator-only", "weekender", "weekend closure", "routine service notice",
+    "timetable", "ridership", "ridership statistics", "passenger count", "passenger numbers",
+    "financial result", "community event", "pr event", "tourism", "bus stop page",
+    "generic station status", "generic mta page", "電梯", "電扶梯", "載客量", "客流量",
 ]
 
 FORWARD_WATCHLIST_OPERATION_TERMS = [
@@ -1531,11 +1540,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if candidate.get("source_tier") not in {"A_official", "B_professional", "C_media"}:
             return False
         title = candidate.get("title", "")
-        if not title or _wordish_count(title) < 4:
+        if not title or _wordish_count(title) < 3:
             return False
         if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
             return False
-        if _is_short_snippet_rescue_candidate(candidate) or _is_procurement_rescue_candidate(candidate):
+        if _is_high_priority_rescue_candidate(candidate) or _is_procurement_rescue_candidate(candidate):
             return True
         source = candidate.get("source", "")
         title_text = f"{title} {source} {candidate.get('source_domain', '')}"
@@ -1562,15 +1571,24 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
 
 
-    def _is_short_snippet_rescue_candidate(candidate: dict) -> bool:
+    def _is_high_priority_rescue_candidate(candidate: dict) -> bool:
         title = str(candidate.get("title", "") or "")
         snippet = str(candidate.get("snippet", "") or "")
         if candidate.get("source_tier") == "D_proxy_low_value":
             return False
         if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
             return False
-        if _wordish_count(title) < 3 or not _has_clear_urban_rail_context(title, candidate.get("source", "")):
+        text = _candidate_selection_text(candidate)
+        if not _has_clear_urban_rail_context(text, candidate.get("source", "")):
             return False
+        if _contains_any_term(text, RESCUE_LOW_VALUE_TERMS):
+            return False
+        if _contains_any_term(text, ["elevator", "elevators", "escalator", "escalators", "電梯", "電扶梯"]):
+            if not _contains_any_term(text, [
+                "predictive maintenance", "condition monitoring", "automated inspection",
+                "computer vision", "digital twin", "cybersecurity", "故障偵測", "狀態監測",
+            ]):
+                return False
         high_value_terms = (
             TECH_NEWS_REQUIRED_TERMS
             + STRONG_TECHNICAL_DETAIL_TERMS
@@ -1578,9 +1596,28 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             + SAFETY_INCIDENT_DETAIL_TERMS
             + FORWARD_TRACK_B_EMERGING_TERMS
             + HIGH_VALUE_POLICY_TERMS
+            + [
+                "ai", "pilot", "trial", "deployment", "deployment", "procurement", "award",
+                "tender", "advanced signalling", "cbtc", "ato", "atp", "communications",
+                "traction power", "platform screen door", "depot equipment", "new material",
+            ]
         )
+        if not _contains_any_term(text, high_value_terms):
+            return False
+        if _is_generic_ai_marketing(candidate):
+            return False
+        gates = candidate.get("category_gates") or {}
+        no_category_gate = candidate.get("primary_category") in {None, "", "excluded"} or not any(gates.values())
+        information_insufficient = bool(_information_quality_issue(candidate))
+        return bool(no_category_gate or information_insufficient)
+
+
+    def _is_short_snippet_rescue_candidate(candidate: dict) -> bool:
+        if not _is_high_priority_rescue_candidate(candidate):
+            return False
+        snippet = str(candidate.get("snippet", "") or "")
         snippet_tokens = len(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", snippet))
-        return _contains_any_term(title, high_value_terms) and (snippet_tokens < 12 or len(snippet.strip()) < 90)
+        return snippet_tokens < 24 or len(snippet.strip()) < 180
 
 
     def _is_procurement_rescue_candidate(candidate: dict) -> bool:
@@ -1601,7 +1638,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _is_pre_gate_rescue_candidate(candidate: dict) -> bool:
-        return _is_short_snippet_rescue_candidate(candidate) or _is_procurement_rescue_candidate(candidate)
+        return _is_high_priority_rescue_candidate(candidate) or _is_procurement_rescue_candidate(candidate)
 
 
     def prefetch_candidates_before_filter(candidates: list[dict]) -> dict:
@@ -1628,6 +1665,22 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         stats["rescue_candidate_count"] = len(eligible)
         stats["rescue_enrichment_attempted_count"] = 0
         stats["rescue_enrichment_success_count"] = 0
+        forward_candidates = [
+            candidate for candidate in candidates or []
+            if candidate.get("search_family") == "forward_technology"
+        ]
+        for candidate in forward_candidates:
+            before_payload = _compute_cross_system_emerging_technology_gate(candidate)
+            candidate["track_b_gate_pass_before_enrichment"] = bool(before_payload.get("track_b_gate_pass"))
+            candidate["track_b_failure_reasons_before_enrichment"] = list(
+                before_payload.get("track_b_failure_reasons", []) or []
+            )
+            candidate["track_b_gate_pass_after_enrichment"] = candidate["track_b_gate_pass_before_enrichment"]
+        stats["track_b_gate_pass_before_enrichment_count"] = sum(
+            1 for candidate in forward_candidates
+            if candidate.get("track_b_gate_pass_before_enrichment")
+        )
+        stats["track_b_gate_pass_after_enrichment_count"] = stats["track_b_gate_pass_before_enrichment_count"]
         if not eligible or limit <= 0:
             stats["elapsed_seconds"] = round(time.perf_counter() - started, 2)
             return stats
@@ -1653,6 +1706,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate["prefetch_reason"] = result.get("reason", "")
             candidate["prefetch_chars"] = result.get("chars", 0)
             candidate["prefetch_elapsed_seconds"] = result.get("elapsed_seconds", 0.0)
+            candidate["enrichment_method"] = result.get("enrichment_method", candidate.get("enrichment_method", ""))
+            candidate["enrichment_failure_reason"] = result.get("reason", "") if result.get("status") != "success" else ""
+            candidate["enriched_snippet_chars"] = result.get("chars", candidate.get("enriched_snippet_chars", 0))
+            candidate["enriched_content_source"] = result.get("enriched_content_source", candidate.get("enriched_content_source", ""))
             if result.get("status") == "success":
                 stats["success_count"] += 1
                 candidate["rescue_enrichment_success"] = True
@@ -1660,6 +1717,16 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             else:
                 stats["failed_count"] += 1
                 candidate["rescue_enrichment_success"] = False
+            if candidate.get("search_family") == "forward_technology":
+                after_payload = _compute_cross_system_emerging_technology_gate(candidate)
+                candidate["track_b_gate_pass_after_enrichment"] = bool(after_payload.get("track_b_gate_pass"))
+                candidate["track_b_failure_reasons_after_enrichment"] = list(
+                    after_payload.get("track_b_failure_reasons", []) or []
+                )
+        stats["track_b_gate_pass_after_enrichment_count"] = sum(
+            1 for candidate in forward_candidates
+            if candidate.get("track_b_gate_pass_after_enrichment")
+        )
         stats["elapsed_seconds"] = round(time.perf_counter() - started, 2)
         return stats
 
@@ -3949,6 +4016,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "rescue_type": candidate.get("rescue_type", ""),
             "rescue_enrichment_attempted": candidate.get("rescue_enrichment_attempted", False),
             "rescue_enrichment_success": candidate.get("rescue_enrichment_success", False),
+            "enrichment_method": candidate.get("enrichment_method", ""),
+            "enrichment_failure_reason": candidate.get("enrichment_failure_reason", ""),
+            "resolved_article_url": candidate.get("resolved_article_url", ""),
+            "enriched_snippet_chars": candidate.get("enriched_snippet_chars", 0),
+            "enriched_content_source": candidate.get("enriched_content_source", ""),
+            "track_b_gate_pass_before_enrichment": candidate.get("track_b_gate_pass_before_enrichment", False),
+            "track_b_gate_pass_after_enrichment": candidate.get("track_b_gate_pass_after_enrichment", False),
         }
         for key in (
             "innovation_score",
@@ -5179,6 +5253,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_candidate_page_type": _candidate_page_type,
         "_prefetch_limit_for_period": _prefetch_limit_for_period,
         "_candidate_prefetch_signal": _candidate_prefetch_signal,
+        "_is_high_priority_rescue_candidate": _is_high_priority_rescue_candidate,
         "_is_short_snippet_rescue_candidate": _is_short_snippet_rescue_candidate,
         "_is_procurement_rescue_candidate": _is_procurement_rescue_candidate,
         "_is_pre_gate_rescue_candidate": _is_pre_gate_rescue_candidate,

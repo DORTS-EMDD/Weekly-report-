@@ -1030,15 +1030,33 @@ def run_duckduckgo_searches(
     context.forward_technology_query_count = primary_forward_query_count
     if primary_forward_query_count and primary_forward_raw_count == 0:
         fallback_queries: list[str] = []
-        for spec in FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS:
-            fallback_query = _query_with_period(spec.get("query", ""), context=context)
+        selected_regions = list(dict.fromkeys(str(region).strip() for region in context.active_regions if str(region).strip()))
+        if selected_regions:
+            group_count = min(4, max(1, (len(selected_regions) + 2) // 3))
+            group_size = (len(selected_regions) + group_count - 1) // group_count
+            region_groups = [
+                selected_regions[index:index + group_size]
+                for index in range(0, len(selected_regions), group_size)
+            ]
+        else:
+            region_groups = [[]]
+        for spec_index, spec in enumerate(FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS):
+            region_group = region_groups[spec_index % len(region_groups)]
+            region_prefix = " ".join(
+                " ".join(REGION_SEARCH_TERMS.get(region, region).split()[:6])
+                for region in region_group
+            )
+            base_query = f"{region_prefix} {spec.get('query', '')}".strip()
+            fallback_query = _query_with_period(base_query, context=context)
             if not fallback_query or fallback_query in context.query_metadata:
                 continue
             fallback_queries.append(fallback_query)
             context.query_metadata[fallback_query] = {
                 "family": "forward_technology",
                 "lang": spec.get("lang", "en"),
-                "query_region": "global",
+                "query_region": region_group[0] if len(region_group) == 1 else "selected_regions",
+                "selected_regions": list(selected_regions),
+                "region_group": list(region_group),
                 "use_news": True,
                 "timelimit": news_timelimit,
                 "requested_max_results": DDGS_RESULTS_PER_QUERY,
