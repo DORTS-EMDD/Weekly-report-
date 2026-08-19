@@ -50,7 +50,7 @@ class P2K54UiHotfixTests(unittest.TestCase):
 
         self.assertFalse(result.generate_requested)
         self.assertEqual(result.lookback_days, 30)
-        self.assertTrue(any(call["name"] == "form" for call in recorder.calls))
+        self.assertFalse(any(call["name"] == "form" for call in recorder.calls))
         self.assertFalse(
             any(
                 call["name"] == "form_submit_button"
@@ -58,6 +58,45 @@ class P2K54UiHotfixTests(unittest.TestCase):
                 and "🚀 產生捷運 AI" in call["args"][0]
                 for call in recorder.calls
             )
+        )
+
+    def test_sidebar_latest_setting_is_written_without_submit(self):
+        recorder = FakeStreamlit(
+            responses={"lookback_days_state": 365},
+        )
+        with patch.object(streamlit_sidebar_ui, "st", recorder):
+            result = streamlit_sidebar_ui.render_sidebar(_sidebar_context())
+
+        self.assertEqual(result.lookback_days, 365)
+        self.assertEqual(
+            recorder.session_state["_sidebar_settings_snapshot"]["lookback_days"],
+            365,
+        )
+        self.assertFalse(any(call["name"] == "form" for call in recorder.calls))
+
+    def test_inflight_snapshot_is_immutable_until_next_generate(self):
+        first = FakeStreamlit(
+            responses={"lookback_days_state": 365},
+        )
+        with patch.object(streamlit_sidebar_ui, "st", first):
+            streamlit_sidebar_ui.render_sidebar(_sidebar_context())
+        running_snapshot = dict(first.session_state["_sidebar_settings_snapshot"])
+
+        second = FakeStreamlit(
+            session_state=first.session_state,
+            responses={"lookback_days_state": 7},
+        )
+        with patch.object(streamlit_sidebar_ui, "st", second):
+            streamlit_sidebar_ui.render_sidebar(_sidebar_context())
+
+        self.assertEqual(running_snapshot["lookback_days"], 365)
+        self.assertEqual(
+            second.session_state["_sidebar_settings_snapshot"]["lookback_days"],
+            7,
+        )
+        self.assertIsNot(
+            running_snapshot,
+            second.session_state["_sidebar_settings_snapshot"],
         )
 
     def test_developer_toggle_is_outside_settings_form(self):

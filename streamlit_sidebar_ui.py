@@ -1,5 +1,6 @@
 """Streamlit sidebar rendering with an explicit structured result."""
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Callable
 
@@ -49,7 +50,27 @@ class SidebarSelection:
     generate_requested: bool
 
 
-def render_sidebar(context: SidebarContext) -> SidebarSelection:
+def build_sidebar_settings_snapshot(selection: SidebarSelection) -> dict:
+    return {
+        "recipients": selection.recipient_input,
+        "lookback_days": int(selection.lookback_days),
+        "selected_types": list(selection.selected_types),
+        "standards_enabled": bool(selection.standards_enabled),
+        "news_scope": selection.news_scope,
+        "scope_mode": selection.scope_mode,
+        "selected_regions": list(selection.selected_regions),
+        "include_research_supplement": bool(selection.include_research_supplement),
+        "show_developer_info": bool(selection.show_developer_info),
+        "demo_cache_mode": bool(selection.demo_cache_mode),
+        "send_after_generate": bool(selection.send_after_generate),
+    }
+
+
+def render_sidebar(
+    context: SidebarContext,
+    *,
+    _inside_sidebar: bool = False,
+) -> SidebarSelection:
     visible_lookback_options = [
         days
         for days in VISIBLE_LOOKBACK_DAYS
@@ -109,7 +130,8 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             )
         return defaults
 
-    with st.sidebar:
+    sidebar_scope = nullcontext() if _inside_sidebar else st.sidebar
+    with sidebar_scope:
         st.markdown(
             """
         <div class="sidebar-title">🚇 捷運技術週報 AI 系統</div>
@@ -117,7 +139,7 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         """,
             unsafe_allow_html=True,
         )
-        with st.form("report_settings_form", clear_on_submit=False):
+        with nullcontext():
             st.markdown("### 📬 收件設定")
             if "recipients_text" not in st.session_state:
                 st.session_state["recipients_text"] = context.default_recipients
@@ -167,12 +189,12 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             st.caption(f"已選 {selected_type_count} 種類型｜{period_summary}")
             with st.expander("展開選擇新聞類型", expanded=False):
                 col_t_all, col_t_clear = st.columns(2)
-                col_t_all.form_submit_button(
+                col_t_all.button(
                     "全選類型",
                     use_container_width=True,
                     on_click=select_all_report_types,
                 )
-                col_t_clear.form_submit_button(
+                col_t_clear.button(
                     "清除類型",
                     use_container_width=True,
                     on_click=clear_selected_report_types,
@@ -233,14 +255,14 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
 
             with st.expander("展開選擇國家", expanded=False):
                 col_all, col_clear = st.columns(2)
-                col_all.form_submit_button(
+                col_all.button(
                     "全選國家",
                     use_container_width=True,
                     key="select_all_regions",
                     disabled=global_scope_selected,
                     on_click=select_all_regions,
                 )
-                col_clear.form_submit_button(
+                col_clear.button(
                     "清除全選",
                     use_container_width=True,
                     key="clear_all_regions",
@@ -328,7 +350,7 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             help="啟用後只顯示 AI 校正資料 JSON 下載按鈕，供排錯使用。",
         )
 
-    return SidebarSelection(
+    selection = SidebarSelection(
         recipient_input=recipient_input,
         lookback_days=lookback_days,
         selected_types=selected_types,
@@ -344,3 +366,15 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         send_after_generate=send_after_generate,
         generate_requested=False,
     )
+    st.session_state["_sidebar_settings_snapshot"] = build_sidebar_settings_snapshot(selection)
+    return selection
+
+
+def _render_sidebar_fragment(context: SidebarContext) -> SidebarSelection:
+    return render_sidebar(context, _inside_sidebar=True)
+
+
+if hasattr(st, "fragment"):
+    render_sidebar_fragment = st.fragment(_render_sidebar_fragment)
+else:
+    render_sidebar_fragment = _render_sidebar_fragment

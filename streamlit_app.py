@@ -8,6 +8,7 @@ import os
 import re
 import json
 import hashlib
+import copy
 import time
 import random
 import difflib
@@ -168,7 +169,11 @@ from run_config_service import (
     build_run_settings,
     get_report_type_code as service_get_report_type_code,
 )
-from streamlit_sidebar_ui import SidebarContext, render_sidebar
+from streamlit_sidebar_ui import (
+    SidebarContext,
+    render_sidebar,
+    render_sidebar_fragment,
+)
 from streamlit_report_ui import (
     MainDashboardContext,
     ReportDisplayContext,
@@ -444,22 +449,24 @@ model_choice = "MaiAgent 雲端 API"
 gmail_user = get_secret("GMAIL_USER")
 gmail_pass = get_secret("GMAIL_APP_PASS")
 
-sidebar_selection = render_sidebar(
-    SidebarContext(
-        default_recipients=get_secret("DEFAULT_RECIPIENTS", ""),
-        default_selected_types=STREAMLIT_DEFAULT_SELECTED_TYPES,
-        advanced_types=BACKEND_CATEGORY_TYPES,
-        normal_lookback_options=NORMAL_LOOKBACK_OPTIONS,
-        advanced_lookback_options=ADVANCED_LOOKBACK_OPTIONS,
-        report_period_labels=REPORT_PERIOD_LABELS,
-        long_term_target_labels=LONG_TERM_TARGET_LABELS,
-        default_regions=DEFAULT_REGIONS,
-        advanced_regions=ADVANCED_REGIONS,
-        standards_watchlist=STANDARDS_WATCHLIST,
-        get_research_supplement_lookback_days=get_research_supplement_lookback_days,
-        default_news_scope="both",
-    )
+sidebar_context = SidebarContext(
+    default_recipients=get_secret("DEFAULT_RECIPIENTS", ""),
+    default_selected_types=STREAMLIT_DEFAULT_SELECTED_TYPES,
+    advanced_types=BACKEND_CATEGORY_TYPES,
+    normal_lookback_options=NORMAL_LOOKBACK_OPTIONS,
+    advanced_lookback_options=ADVANCED_LOOKBACK_OPTIONS,
+    report_period_labels=REPORT_PERIOD_LABELS,
+    long_term_target_labels=LONG_TERM_TARGET_LABELS,
+    default_regions=DEFAULT_REGIONS,
+    advanced_regions=ADVANCED_REGIONS,
+    standards_watchlist=STANDARDS_WATCHLIST,
+    get_research_supplement_lookback_days=get_research_supplement_lookback_days,
+    default_news_scope="both",
 )
+with st.sidebar:
+    sidebar_selection = render_sidebar_fragment(sidebar_context)
+if sidebar_selection is None:
+    sidebar_selection = render_sidebar(sidebar_context)
 recipient_input = sidebar_selection.recipient_input
 lookback_days = sidebar_selection.lookback_days
 selected_types = sidebar_selection.selected_types
@@ -516,7 +523,12 @@ active_regions = run_settings.active_regions
 report_scope_label = run_settings.report_scope_label
 
 
+_ACTIVE_WORKFLOW_CONFIG: workflow_service.WorkflowConfig | None = None
+
+
 def _workflow_config() -> workflow_service.WorkflowConfig:
+    if _ACTIVE_WORKFLOW_CONFIG is not None:
+        return _ACTIVE_WORKFLOW_CONFIG
     return workflow_service.WorkflowConfig(
         today=today,
         lookback_days=lookback_int,
@@ -569,6 +581,25 @@ def build_current_run_config() -> dict:
 
 
 current_run_config = build_current_run_config()
+
+
+def _build_run_snapshot() -> dict:
+    return {
+        "lookback_days": int(lookback_days),
+        "selected_types": list(selected_types),
+        "selected_regions": list(selected_regions),
+        "active_regions": list(active_regions),
+        "scope_mode": scope_mode,
+        "news_scope": news_scope,
+        "is_global_scope": bool(is_global_scope),
+        "include_research_supplement": bool(include_research_supplement),
+        "standards_enabled": bool(standards_enabled),
+        "send_after_generate": bool(send_after_generate),
+        "recipients": recipient_input,
+        "demo_cache_mode": bool(demo_cache_mode_enabled),
+        "run_config": copy.deepcopy(current_run_config),
+        "workflow_config": copy.deepcopy(_workflow_config()),
+    }
 
 
 def get_report_type_code(report_label: str, lookback_days: int) -> str:
@@ -2370,8 +2401,11 @@ def send_current_report_email(report_md: str, status_target=None, progress_targe
 
 
 if generate_btn:
+    run_snapshot = _build_run_snapshot()
+    _ACTIVE_WORKFLOW_CONFIG = run_snapshot["workflow_config"]
+    st.session_state["_active_run_snapshot"] = copy.deepcopy(run_snapshot)
+    run_config = copy.deepcopy(run_snapshot["run_config"])
     if demo_cache_mode_enabled:
-        run_config = current_run_config.copy()
         progress_bar = progress_placeholder.progress(0.15)
         status_text = status_placeholder
 
@@ -2501,7 +2535,7 @@ if generate_btn:
             }
 
             email_note = "未自動寄送 Email"
-            if send_after_generate:
+            if run_snapshot["send_after_generate"]:
                 email_ok = send_current_report_email(
                     st.session_state["latest_report_md"],
                     status_target=status_text,
@@ -2526,7 +2560,6 @@ if generate_btn:
     elif not is_global_scope and not active_regions:
         status_placeholder.error("❌ 指定先進國家/地區模式下，請至少勾選一個國家/地區。")
     else:
-        run_config = current_run_config.copy()
         progress_bar = progress_placeholder.progress(0.10)
         status_text = status_placeholder
 
@@ -3214,7 +3247,7 @@ if generate_btn:
             }
 
             email_note = "未自動寄送 Email"
-            if send_after_generate:
+            if run_snapshot["send_after_generate"]:
                 email_ok = send_current_report_email(
                     st.session_state["latest_report_md"],
                     status_target=status_text,

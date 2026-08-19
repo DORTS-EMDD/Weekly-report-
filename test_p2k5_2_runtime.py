@@ -215,17 +215,13 @@ class P2K52RuntimeTests(unittest.TestCase):
         }
         self.assertEqual(report_postprocessor._fallback_electromechanical_system(candidate), "號誌系統")
 
-    def test_sidebar_settings_use_form_without_requesting_workflow(self):
+    def test_sidebar_settings_use_fragment_without_requesting_workflow(self):
         recorder = FakeStreamlit()
         with patch.object(streamlit_sidebar_ui, "st", recorder):
             result = streamlit_sidebar_ui.render_sidebar(_sidebar_context())
         self.assertFalse(result.generate_requested)
-        self.assertEqual([call["name"] for call in recorder.calls].count("button"), 0)
-        self.assertGreaterEqual(
-            [call["name"] for call in recorder.calls].count("form_submit_button"),
-            4,
-        )
-        self.assertTrue(any(call["name"] == "form" for call in recorder.calls))
+        self.assertEqual([call["name"] for call in recorder.calls].count("button"), 4)
+        self.assertFalse(any(call["name"] == "form" for call in recorder.calls))
         self.assertFalse(
             any(
                 "🚀 產生捷運 AI" in json.dumps(call, ensure_ascii=False)
