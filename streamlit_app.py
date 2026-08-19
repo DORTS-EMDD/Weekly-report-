@@ -630,7 +630,7 @@ def build_run_news_sources(
 initial_region_sources = build_region_news_sources(active_regions, int(lookback_days), fast_mode=fast_mode_enabled)
 initial_standard_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
 initial_combined_sources = build_run_news_sources(initial_region_sources, initial_standard_sources, fast_mode_enabled)
-_, _, progress_placeholder, status_placeholder = (
+generate_btn, _, progress_placeholder, status_placeholder = (
     service_render_main_dashboard(
         source_count=len(initial_combined_sources),
         standards_count=sum(len(v) for v in STANDARDS_WATCHLIST.values()),
@@ -645,7 +645,6 @@ _, _, progress_placeholder, status_placeholder = (
         ),
     )
 )
-generate_btn = sidebar_selection.generate_requested
 
 
 def _make_news_candidate(title: str, date: str, source: str, url: str, snippet: str, query: str, region: str, source_type: str, source_href: str = "") -> dict:

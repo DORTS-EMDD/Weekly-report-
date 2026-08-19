@@ -49,8 +49,12 @@ def render_main_dashboard(
         '<div class="section-title">報告產出</div>',
         unsafe_allow_html=True,
     )
-    generate_clicked = False
-    st.caption("請在左側報告設定表單按下「產生報告」開始產製。")
+    generate_clicked = st.button(
+        f"🚀 產生捷運 AI {context.report_period_label}",
+        type="primary",
+        use_container_width=True,
+    )
+    st.caption("請按上方按鈕開始產製報告。")
     if context.demo_cache_mode_enabled:
         st.info(
             "展覽快速版已啟用：按下產生報告會顯示預先產製展示報告，"

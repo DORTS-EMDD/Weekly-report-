@@ -281,12 +281,6 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
                         "並以獨立補充內容呈現；不計入新聞類型統計。"
                     ),
                 )
-                show_developer_info = st.checkbox(
-                    "開發者資訊顯示",
-                    value=False,
-                    key="show_developer_info",
-                    help="啟用後只顯示 AI 校正資料 JSON 下載按鈕，供排錯使用。",
-                )
                 st.markdown("**展覽快速版**")
                 demo_cache_mode = st.checkbox(
                     "展覽快速版（10 秒內顯示預產報告）",
@@ -325,12 +319,14 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             st.session_state["selected_types_state"] = selected_types
             if not selected_types:
                 st.warning("⚠️ 請至少選擇一種新聞類型。")
-            generate_requested = st.form_submit_button(
-                f"🚀 產生捷運 AI {period_summary}",
-                type="primary",
-                use_container_width=True,
-            )
             st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統")
+
+        show_developer_info = st.checkbox(
+            "開發者資訊顯示",
+            value=False,
+            key="show_developer_info",
+            help="啟用後只顯示 AI 校正資料 JSON 下載按鈕，供排錯使用。",
+        )
 
     return SidebarSelection(
         recipient_input=recipient_input,
@@ -346,5 +342,5 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         show_developer_info=show_developer_info,
         demo_cache_mode=demo_cache_mode,
         send_after_generate=send_after_generate,
-        generate_requested=generate_requested,
+        generate_requested=False,
     )

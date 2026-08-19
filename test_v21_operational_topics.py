@@ -62,9 +62,18 @@ class V21OperationalTopicTests(unittest.TestCase):
                 "type_營運動態",
                 "type_規範更新",
                 "include_research_supplement",
-                "show_developer_info",
                 "demo_cache_mode",
             },
+        )
+        self.assertEqual(
+            {
+                call["kwargs"].get("key")
+                for call in recorder.calls
+                if call["name"] == "checkbox"
+                and call["kwargs"].get("key") == "show_developer_info"
+                and call["receiver"] == "sidebar"
+            },
+            {"show_developer_info"},
         )
         checkbox_labels = {
             call["args"][0]
