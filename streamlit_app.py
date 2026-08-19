@@ -472,6 +472,7 @@ long_term_mode = sidebar_selection.long_term_mode
 include_research_supplement = sidebar_selection.include_research_supplement
 show_developer_info = sidebar_selection.show_developer_info
 demo_cache_mode = sidebar_selection.demo_cache_mode
+send_after_generate = sidebar_selection.send_after_generate
 
 run_settings = build_run_settings(
     RunSettingsContext(
@@ -629,7 +630,7 @@ def build_run_news_sources(
 initial_region_sources = build_region_news_sources(active_regions, int(lookback_days), fast_mode=fast_mode_enabled)
 initial_standard_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
 initial_combined_sources = build_run_news_sources(initial_region_sources, initial_standard_sources, fast_mode_enabled)
-generate_btn, send_after_generate, progress_placeholder, status_placeholder = (
+_, _, progress_placeholder, status_placeholder = (
     service_render_main_dashboard(
         source_count=len(initial_combined_sources),
         standards_count=sum(len(v) for v in STANDARDS_WATCHLIST.values()),
@@ -644,6 +645,7 @@ generate_btn, send_after_generate, progress_placeholder, status_placeholder = (
         ),
     )
 )
+generate_btn = sidebar_selection.generate_requested
 
 
 def _make_news_candidate(title: str, date: str, source: str, url: str, snippet: str, query: str, region: str, source_type: str, source_href: str = "") -> dict:
@@ -897,6 +899,19 @@ def build_pipeline_debug_stats(
             if enabled:
                 category_gate_pass_counts[gate] = category_gate_pass_counts.get(gate, 0) + 1
     gate_pass_count = sum(1 for item in filtered_candidates or [] if any((item.get("category_gates") or {}).values()))
+    gate_evaluated_candidates = list(deduped_candidates or [])
+    if not gate_evaluated_candidates:
+        gate_evaluated_candidates = list(filtered_candidates or []) + list(excluded_candidates or [])
+    technology_gate_pass_count = 0
+    technology_gate_failure_reason_counts: dict[str, int] = {}
+    for item in gate_evaluated_candidates:
+        category_gates = item.get("category_gates") or {}
+        if category_gates.get("technology"):
+            technology_gate_pass_count += 1
+            continue
+        reasons = item.get("technical_gate_failure_reasons") or []
+        for reason in reasons or ["technical_triad_failed"]:
+            technology_gate_failure_reason_counts[reason] = technology_gate_failure_reason_counts.get(reason, 0) + 1
     query_count_by_family = (LAST_DDGS_SEARCH_SUMMARY or {}).get("query_count_by_family", {})
     if not query_count_by_family:
         query_count_by_family = {
@@ -935,10 +950,6 @@ def build_pipeline_debug_stats(
         method = item.get("region_resolution_method") or "未記錄"
         region_resolution_method_counts[method] = region_resolution_method_counts.get(method, 0) + 1
     raw_candidate_count_by_family = _count_by(raw_candidates, "search_family")
-    gate_evaluated_candidates = list(deduped_candidates or [])
-    if not gate_evaluated_candidates:
-        gate_evaluated_candidates = list(filtered_candidates or []) + list(excluded_candidates or [])
-
     def _count_signal_values(values, counts: dict[str, int]) -> None:
         if isinstance(values, dict):
             values = [key for key, enabled in values.items() if enabled]
@@ -1122,6 +1133,8 @@ def build_pipeline_debug_stats(
         "raw_candidate_count_by_family": raw_candidate_count_by_family,
         "raw_count_by_category_family": raw_candidate_count_by_family,
         "gate_pass_count_by_category": category_gate_pass_counts,
+        "technology_gate_pass_count": technology_gate_pass_count,
+        "technology_gate_failure_reason_counts": technology_gate_failure_reason_counts,
         "gate_fail_reason_counts_by_category": category_gate_failure_counts,
         "major_accident_positive_signal_counts": category_gate_signal_counts["major_accident"],
         "technical_operation_incident_positive_signal_counts": category_gate_signal_counts["technical_operation_incident"],
@@ -1177,6 +1190,9 @@ def build_pipeline_debug_stats(
         "annual_gate_pass_by_bucket": annual_gate_pass_by_bucket,
         "annual_selected_by_bucket": {},
         "annual_coverage_target": 12,
+        "annual_rescue_candidate_count": int((prefetch_stats or {}).get("annual_rescue_candidate_count", 0) or 0),
+        "annual_rescue_attempted_by_bucket": dict((prefetch_stats or {}).get("annual_rescue_attempted_by_bucket", {}) or {}),
+        "annual_rescue_success_by_bucket": dict((prefetch_stats or {}).get("annual_rescue_success_by_bucket", {}) or {}),
         "final_source_tier_counts": final_source_tier_counts,
         "official_source_ratio": official_ratio,
         "evidence_strength_counts": evidence_strength_counts,
@@ -3029,6 +3045,19 @@ if generate_btn:
                 "prefetch_stats": candidate_pool.get("prefetch_stats", {}),
                 "prefetch_attempted_count": candidate_pool.get("prefetch_stats", {}).get("attempted_count", 0),
                 "prefetch_success_count": candidate_pool.get("prefetch_stats", {}).get("success_count", 0),
+                "annual_target": LAST_PYTHON_SELECTION_DEBUG.get("annual_target", pipeline_debug_stats.get("annual_coverage_target", 0)),
+                "annual_qualified_count": LAST_PYTHON_SELECTION_DEBUG.get("annual_qualified_count", len(selected_candidates) if lookback_int >= 365 else 0),
+                "annual_shortfall": LAST_PYTHON_SELECTION_DEBUG.get("annual_shortfall", 0),
+                "annual_rescue_candidate_count": pipeline_debug_stats.get("annual_rescue_candidate_count", candidate_pool.get("prefetch_stats", {}).get("annual_rescue_candidate_count", 0)),
+                "annual_rescue_attempted_by_bucket": candidate_pool.get("prefetch_stats", {}).get("annual_rescue_attempted_by_bucket", {}),
+                "annual_rescue_success_by_bucket": candidate_pool.get("prefetch_stats", {}).get("annual_rescue_success_by_bucket", {}),
+                "annual_gate_pass_by_bucket": pipeline_debug_stats.get("annual_gate_pass_by_bucket", LAST_PYTHON_SELECTION_DEBUG.get("annual_gate_pass_by_bucket", {})),
+                "annual_selected_by_bucket": pipeline_debug_stats.get("annual_selected_by_bucket", LAST_PYTHON_SELECTION_DEBUG.get("annual_selected_by_bucket", {})),
+                "annual_backfill_triggered": LAST_PYTHON_SELECTION_DEBUG.get("annual_backfill_triggered", False),
+                "annual_backfill_added_count": LAST_PYTHON_SELECTION_DEBUG.get("annual_backfill_added_count", 0),
+                "annual_backfill_failure_reason": LAST_PYTHON_SELECTION_DEBUG.get("annual_backfill_failure_reason", ""),
+                "technology_gate_pass_count": pipeline_debug_stats.get("technology_gate_pass_count", 0),
+                "technology_gate_failure_reason_counts": pipeline_debug_stats.get("technology_gate_failure_reason_counts", {}),
                 "top_excluded_valuable_count": len(pipeline_debug_stats.get("top_excluded_valuable_candidates", [])),
                 "dropped_selected_ids": dropped_selected_ids,
                 "dropped_selected_titles": dropped_selected_titles,

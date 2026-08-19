@@ -2977,6 +2977,8 @@ _FALLBACK_ELECTROMECHANICAL_SYSTEM_LABELS = {
 
 
 def _fallback_electromechanical_system(candidate: dict) -> str:
+    if candidate.get("procurement_generic_electromechanical_scope") and not candidate.get("core_systems"):
+        return ""
     systems = candidate.get('procurement_systems') or []
     if isinstance(systems, str):
         systems = [systems]

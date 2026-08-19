@@ -49,22 +49,14 @@ def render_main_dashboard(
         '<div class="section-title">報告產出</div>',
         unsafe_allow_html=True,
     )
-    generate_clicked = st.button(
-        f"🚀 產生捷運 AI {context.report_period_label}",
-        type="primary",
-        use_container_width=True,
-    )
+    generate_clicked = False
+    st.caption("請在左側報告設定表單按下「產生報告」開始產製。")
     if context.demo_cache_mode_enabled:
         st.info(
             "展覽快速版已啟用：按下產生報告會顯示預先產製展示報告，"
             "不是即時搜尋結果。"
         )
-    send_after_generate = st.checkbox(
-        "產生後寄送 Email",
-        value=False,
-        key="send_after_generate",
-        help="預設只產生並顯示報告；勾選後會在報告成功產生後才寄送。",
-    )
+    send_after_generate = False
     progress_placeholder = st.empty()
     status_placeholder = st.empty()
 

@@ -334,7 +334,8 @@ CROSS_SYSTEM_TECHNICAL_APPLICATION_TERMS = (
     "system integration", "energy efficiency", "smart dispatch", "passenger analysis",
     "maintenance decision support", "automated inspection", "operational analysis",
     "thermal energy network", "heat recovery", "platform cooling", "thermal management",
-    "platform temperature", "cooler subway platforms",
+    "thermal energy", "heat capture", "heat transfer", "platform temperature",
+    "cooler subway platforms", "subway heat",
     "智慧維修", "狀態監測", "預測性維護", "故障預測", "故障偵測", "數位分身",
     "資料治理", "資安", "系統保證", "互通性", "系統整合", "能源效率", "智慧調度",
     "旅客分析", "維修決策支援", "自動巡檢", "營運分析",
@@ -836,6 +837,18 @@ REPORT_SELECTION_DEBUG_DEFAULT = {
     "track_a_selected_count": 0,
     "track_b_selected_count": 0,
     "track_b_exclusion_reason_counts": {},
+    "annual_target": 0,
+    "annual_qualified_count": 0,
+    "annual_shortfall": 0,
+    "annual_rescue_attempted_by_bucket": {},
+    "annual_rescue_success_by_bucket": {},
+    "annual_gate_pass_by_bucket": {},
+    "annual_selected_by_bucket": {},
+    "annual_backfill_triggered": False,
+    "annual_backfill_added_count": 0,
+    "annual_backfill_failure_reason": "",
+    "technology_gate_pass_count": 0,
+    "technology_gate_failure_reason_counts": {},
 }
 
 URBAN_RAIL_MODE_TERMS.extend(["metros"])
@@ -1739,8 +1752,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         stats["annual_rescue_candidate_count"] = len(annual_rescue_candidates)
         annual_rescue_buckets_attempted: set[str] = set()
         annual_rescue_buckets_succeeded: set[str] = set()
+        annual_rescue_attempted_by_bucket: dict[str, int] = {}
+        annual_rescue_success_by_bucket: dict[str, int] = {}
         stats["annual_rescue_buckets_attempted"] = []
         stats["annual_rescue_buckets_succeeded"] = []
+        stats["annual_rescue_attempted_by_bucket"] = {}
+        stats["annual_rescue_success_by_bucket"] = {}
         forward_candidates = [
             candidate for candidate in candidates or []
             if candidate.get("search_family") == "forward_technology"
@@ -1771,19 +1788,63 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 if date_obj else ""
             )
 
-        ordered_eligible = sorted(
-            eligible,
-            key=lambda item: (
-                0 if lookback_int >= 365 and _is_annual_quality_rescue_candidate(item) else 1,
+        def _rescue_priority(item: dict) -> tuple:
+            return (
                 -int(item.get("final_selection_score", item.get("python_score", 0)) or 0),
                 _source_tier_rank(item.get("source_tier", "C_media")),
                 _quality_rank(item.get("source_quality", "B")),
-                (
-                    _date_sort_key(item)
-                    if lookback_int >= 365 and _is_annual_quality_rescue_candidate(item)
-                    else -_date_sort_key(item)
+                -_date_sort_key(item),
+            )
+
+        annual_candidates_by_bucket: dict[str, list[dict]] = {}
+        for candidate in annual_rescue_candidates:
+            bucket = _annual_rescue_bucket(candidate)
+            if bucket:
+                annual_candidates_by_bucket.setdefault(bucket, []).append(candidate)
+        for bucket in annual_candidates_by_bucket:
+            annual_candidates_by_bucket[bucket].sort(key=_rescue_priority)
+
+        ordered_eligible: list[dict] = []
+        if lookback_int >= 365 and annual_candidates_by_bucket:
+            buckets = sorted(annual_candidates_by_bucket)
+            base_budget, remainder = divmod(limit, len(buckets))
+            bucket_budgets = {
+                bucket: base_budget + (1 if index < remainder else 0)
+                for index, bucket in enumerate(buckets)
+            }
+            while len(ordered_eligible) < min(limit, len(annual_rescue_candidates)):
+                added = False
+                for bucket in buckets:
+                    if bucket_budgets[bucket] <= 0:
+                        continue
+                    bucket_candidates = annual_candidates_by_bucket[bucket]
+                    if not bucket_candidates:
+                        bucket_budgets[bucket] = 0
+                        continue
+                    ordered_eligible.append(bucket_candidates.pop(0))
+                    bucket_budgets[bucket] -= 1
+                    added = True
+                    if len(ordered_eligible) >= limit:
+                        break
+                if not added:
+                    break
+            if len(ordered_eligible) < limit:
+                remaining_annual = [
+                    candidate
+                    for candidates_in_bucket in annual_candidates_by_bucket.values()
+                    for candidate in candidates_in_bucket
+                ]
+                ordered_eligible.extend(
+                    sorted(remaining_annual, key=_rescue_priority)[: limit - len(ordered_eligible)]
+                )
+        ordered_eligible.extend(
+            sorted(
+                [candidate for candidate in eligible if candidate not in ordered_eligible],
+                key=lambda item: (
+                    0 if lookback_int >= 365 and _is_annual_quality_rescue_candidate(item) else 1,
+                    _rescue_priority(item),
                 ),
-            ),
+            )
         )
         for candidate in ordered_eligible:
             if stats["attempted_count"] >= limit:
@@ -1795,7 +1856,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate["rescue_enrichment_attempted"] = True
             stats["rescue_enrichment_attempted_count"] += 1
             if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
-                annual_rescue_buckets_attempted.add(_annual_rescue_bucket(candidate))
+                bucket = _annual_rescue_bucket(candidate)
+                annual_rescue_buckets_attempted.add(bucket)
+                annual_rescue_attempted_by_bucket[bucket] = annual_rescue_attempted_by_bucket.get(bucket, 0) + 1
             result = _prefetch_candidate_article(candidate, session)
             candidate["prefetch_status"] = result.get("status", "")
             candidate["prefetch_reason"] = result.get("reason", "")
@@ -1810,7 +1873,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 candidate["rescue_enrichment_success"] = True
                 stats["rescue_enrichment_success_count"] += 1
                 if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
-                    annual_rescue_buckets_succeeded.add(_annual_rescue_bucket(candidate))
+                    bucket = _annual_rescue_bucket(candidate)
+                    annual_rescue_buckets_succeeded.add(bucket)
+                    annual_rescue_success_by_bucket[bucket] = annual_rescue_success_by_bucket.get(bucket, 0) + 1
             else:
                 stats["failed_count"] += 1
                 candidate["rescue_enrichment_success"] = False
@@ -1826,6 +1891,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
         stats["annual_rescue_buckets_attempted"] = sorted(filter(None, annual_rescue_buckets_attempted))
         stats["annual_rescue_buckets_succeeded"] = sorted(filter(None, annual_rescue_buckets_succeeded))
+        stats["annual_rescue_attempted_by_bucket"] = dict(sorted(annual_rescue_attempted_by_bucket.items()))
+        stats["annual_rescue_success_by_bucket"] = dict(sorted(annual_rescue_success_by_bucket.items()))
         stats["elapsed_seconds"] = round(time.perf_counter() - started, 2)
         return stats
 
@@ -2102,7 +2169,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "vehicle equipment", "car door", "train door", "bogie", "wheelset", "coupler",
             "propulsion", "traction inverter", "traction inverters", "traction motor",
             "braking system", "brake system", "tcms", "車門", "轉向架", "輪對", "聯結器",
-            "推進", "牽引變流器", "牽引馬達", "煞車", "制動", "車載",
+            "牽引變流器", "牽引馬達", "煞車", "制動", "車載",
         )
         has_depot_facility = _contains_positive_term(text, list(DEPOT_FACILITY_TERMS))
         has_specific_vehicle_evidence = _contains_positive_term(text, list(rolling_stock_specific_terms))
@@ -2662,6 +2729,35 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def _passes_technical_triad(candidate: dict) -> bool:
         return _cached_candidate_bool(candidate, "passes_technical_triad", _compute_passes_technical_triad)
+
+
+    def _technical_gate_failure_reasons(candidate: dict) -> list[str]:
+        text = _candidate_selection_text(candidate)
+        reasons: list[str] = []
+        if _is_financial_market_candidate(candidate):
+            reasons.append("financial_or_investment")
+        if _is_security_or_crime_candidate(candidate):
+            reasons.append("security_or_crime")
+        if _is_airport_people_mover_only_text(text, candidate.get("source", "")):
+            reasons.append("airport_people_mover_only")
+        if _is_accessibility_only_technical_candidate(candidate):
+            reasons.append("accessibility_only")
+        if _is_non_core_equipment_only(candidate):
+            reasons.append("non_core_equipment_only")
+        if _is_project_only_technical_candidate(candidate):
+            reasons.append("project_only")
+        if not _candidate_urban_rail_gate(candidate):
+            reasons.append("urban_rail_missing")
+        if not _technical_system_gate(candidate):
+            reasons.append("technical_system_missing")
+        if not _technical_action_gate(candidate):
+            reasons.append("technical_action_missing")
+        if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS) and not _contains_any_term(
+            text,
+            CORE_METRO_TECHNICAL_TERMS + STRONG_TECHNICAL_DETAIL_TERMS + TECHNICAL_IMPLEMENTATION_TERMS,
+        ):
+            reasons.append("non_technical_context")
+        return list(dict.fromkeys(reasons))
 
 
     def _electromechanical_procurement_matches(
@@ -3419,6 +3515,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         result = {
             "category_gates": gates,
             "category_gate_reasons": reasons,
+            "technical_gate_failure_reasons": (
+                []
+                if gates["technology"]
+                else _technical_gate_failure_reasons(candidate)
+            ),
             "canonical_tags": canonical_tags,
             "primary_category": primary_category,
             "operational_subtype": (
@@ -4174,7 +4275,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 "country",
                 normalize_country(candidate.get("resolved_region") or candidate.get("region", "未判定")),
             ),
-            "core_systems": candidate.get("core_systems", _core_systems_for_candidate(candidate)),
+            "core_systems": _core_systems_for_candidate(candidate),
             "technical_themes": candidate.get("technical_themes", _technical_themes_for_candidate(candidate)),
             "page_type": candidate.get("page_type", ""),
             "page_type_reason": candidate.get("page_type_reason", ""),
@@ -5378,7 +5479,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         debug: dict,
     ) -> list[dict]:
         selected_ids = {int(item.get("id", 0) or 0) for item in selected}
-        shortfall_before = max(0, min_items - len(selected))
+        target_items = 12 if lookback_int >= 365 else min_items
+        shortfall_before = max(0, target_items - len(selected))
         borderline_cap = _borderline_cap(lookback_int)
         debug["shortfall_before_backfill"] = shortfall_before
         debug["B_backfill_triggered"] = shortfall_before > 0
@@ -5414,7 +5516,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
         borderline_pool = sorted(borderline_pool, key=_python_selection_sort_key)
         debug["B_backfill_considered_count"] = len(borderline_pool)
-        while borderline_pool and len(selected) < min_items and len(selected) < max_items:
+        while borderline_pool and len(selected) < target_items and len(selected) < max_items:
             if len(debug["borderline_candidates"]) >= borderline_cap:
                 debug["backfill_reason"] = f"B級候補已達本期上限 {borderline_cap} 則。"
                 break
@@ -5430,7 +5532,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
         debug["borderline_added_count"] = len(debug["B_backfill_appended_ids"])
         debug["B_added_count"] = debug["borderline_added_count"]
-        debug["shortfall_after_backfill"] = max(0, min_items - len(selected))
+        debug["shortfall_after_backfill"] = max(0, target_items - len(selected))
         if debug["borderline_added_count"]:
             debug["backfill_reason"] = f"嚴格入選不足 {shortfall_before} 則，已補入合格候補 {debug['borderline_added_count']} 則。"
         elif debug["shortfall_after_backfill"]:
@@ -5460,8 +5562,44 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         LAST_PYTHON_SELECTION_DEBUG = _selection_debug_reset()
         min_items, max_items = _selection_target_range(lookback_int)
         max_items = max(len(model_candidates or []), min_items)
+        annual_target = 12 if lookback_int >= 365 else 0
+        LAST_PYTHON_SELECTION_DEBUG["annual_target"] = annual_target
         grouped: dict[str, list[dict]] = {category: [] for category in selected_types}
         eligible_A_count = 0
+        technology_gate_failure_reason_counts: dict[str, int] = {}
+        annual_gate_pass_by_bucket: dict[str, int] = {}
+
+        def _selection_annual_bucket(candidate: dict) -> str:
+            explicit = str(candidate.get("date_bucket", "") or "").strip()
+            if explicit:
+                return explicit
+            date_obj = _candidate_date_obj(candidate.get("date", ""))
+            return (
+                f"{date_obj.year:04d}-Q{((date_obj.month - 1) // 3) + 1}"
+                if date_obj else ""
+            )
+
+        for item in model_candidates or []:
+            category = _selection_classification(item)
+            category_gates = item.get("category_gates") or {}
+            if category == "技術新知":
+                technology_pass = bool(
+                    category_gates.get("technology")
+                    or _passes_technical_triad(item)
+                    or _passes_forward_technology_gate(item)
+                )
+                if technology_pass:
+                    LAST_PYTHON_SELECTION_DEBUG["technology_gate_pass_count"] += 1
+                else:
+                    reasons = item.get("technical_gate_failure_reasons") or _technical_gate_failure_reasons(item)
+                    for reason in reasons or ["technical_triad_failed"]:
+                        technology_gate_failure_reason_counts[reason] = technology_gate_failure_reason_counts.get(reason, 0) + 1
+            if any(category_gates.values()):
+                bucket = _selection_annual_bucket(item)
+                if bucket:
+                    annual_gate_pass_by_bucket[bucket] = annual_gate_pass_by_bucket.get(bucket, 0) + 1
+        LAST_PYTHON_SELECTION_DEBUG["technology_gate_failure_reason_counts"] = technology_gate_failure_reason_counts
+        LAST_PYTHON_SELECTION_DEBUG["annual_gate_pass_by_bucket"] = dict(sorted(annual_gate_pass_by_bucket.items()))
         forward_candidates = [
             item for item in model_candidates or []
             if item.get("search_family") == "forward_technology"
@@ -5541,6 +5679,26 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             eligible_A_count - same_event_count,
         )
         LAST_PYTHON_SELECTION_DEBUG["excluded_by_count_cap_count"] = 0
+        if annual_target:
+            annual_selected_by_bucket: dict[str, int] = {}
+            for item in selected:
+                bucket = _selection_annual_bucket(item)
+                if bucket:
+                    annual_selected_by_bucket[bucket] = annual_selected_by_bucket.get(bucket, 0) + 1
+            LAST_PYTHON_SELECTION_DEBUG["annual_selected_by_bucket"] = dict(sorted(annual_selected_by_bucket.items()))
+            LAST_PYTHON_SELECTION_DEBUG["annual_qualified_count"] = len(selected)
+            LAST_PYTHON_SELECTION_DEBUG["annual_shortfall"] = max(0, annual_target - len(selected))
+            LAST_PYTHON_SELECTION_DEBUG["annual_backfill_triggered"] = bool(
+                LAST_PYTHON_SELECTION_DEBUG.get("B_backfill_triggered")
+            )
+            LAST_PYTHON_SELECTION_DEBUG["annual_backfill_added_count"] = int(
+                LAST_PYTHON_SELECTION_DEBUG.get("borderline_added_count", 0) or 0
+            )
+            LAST_PYTHON_SELECTION_DEBUG["annual_backfill_failure_reason"] = (
+                LAST_PYTHON_SELECTION_DEBUG.get("backfill_reason", "")
+                if LAST_PYTHON_SELECTION_DEBUG["annual_shortfall"]
+                else ""
+            )
         return _cap_operational_dynamics(selected)
 
     return {
@@ -5593,6 +5751,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_technical_system_gate": _technical_system_gate,
         "_compute_technical_action_gate": _compute_technical_action_gate,
         "_technical_action_gate": _technical_action_gate,
+        "_technical_gate_failure_reasons": _technical_gate_failure_reasons,
         "_is_project_only_technical_candidate": _is_project_only_technical_candidate,
         "_compute_passes_technical_triad": _compute_passes_technical_triad,
         "_passes_technical_triad": _passes_technical_triad,

@@ -14,10 +14,10 @@ import streamlit_sidebar_ui
 
 
 EXPECTED_SIDEBAR_SHA256 = (
-    "8367c0627a33dd896bdda8a032c16144ce68866abf8a5ad73f772ee03feed86b"
+    "d86e1e836c3f774dc5dddb4fb9e74df68c627b12b6799665c67956ec04edc26d"
 )
 EXPECTED_DASHBOARD_SHA256 = (
-    "95e2d49770b2af8a273b96fdc15b1f4ac65fa423d52b2b30bf40843f1ff39c49"
+    "fccc5c2672167c56b3007c5e1e2a07ff68d73a2eb5e00b35ed2ced986864468e"
 )
 EXPECTED_REPORT_SHA256 = (
     "4dd2e5ffa5d148c99a246d79f429aee533b539390ecfef8152374dd46ec0e5e8"
@@ -73,6 +73,9 @@ class _Node:
     def button(self, *args, **kwargs):
         return self._call("button", *args, **kwargs)
 
+    def form_submit_button(self, *args, **kwargs):
+        return self._call("form_submit_button", *args, **kwargs)
+
     def checkbox(self, *args, **kwargs):
         return self._call("checkbox", *args, **kwargs)
 
@@ -126,7 +129,7 @@ class FakeStreamlit:
             value = self.session_state.get(key, options[kwargs.get("index", 0)])
         elif name == "checkbox":
             value = self.session_state.get(key, kwargs.get("value", False))
-        elif name == "button":
+        elif name in {"button", "form_submit_button"}:
             value = False
         else:
             value = None
@@ -138,6 +141,7 @@ class FakeStreamlit:
         self._record(name, args, kwargs, receiver=receiver)
         if name in {
             "button",
+            "form_submit_button",
             "checkbox",
             "radio",
             "selectbox",
@@ -179,6 +183,9 @@ class FakeStreamlit:
     def button(self, *args, **kwargs):
         return self._call("button", args, kwargs)
 
+    def form_submit_button(self, *args, **kwargs):
+        return self._call("form_submit_button", args, kwargs)
+
     def download_button(self, *args, **kwargs):
         return self._call("download_button", args, kwargs)
 
@@ -200,6 +207,11 @@ class FakeStreamlit:
         self._record("expander", args, kwargs)
         self._counter += 1
         return _Node(self, f"expander:{self._counter}")
+
+    def form(self, *args, **kwargs):
+        self._record("form", args, kwargs)
+        self._counter += 1
+        return _Node(self, f"form:{self._counter}")
 
     def rerun(self):
         self._record("rerun", (), {})
@@ -441,6 +453,8 @@ class StreamlitUiModuleTests(unittest.TestCase):
                 "include_research_supplement",
                 "show_developer_info",
                 "demo_cache_mode",
+                "send_after_generate",
+                "generate_requested",
             ),
         )
         self.assertEqual(config.NORMAL_LOOKBACK_OPTIONS, [7, 14, 30])
