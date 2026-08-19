@@ -79,6 +79,41 @@ class DdgsSearchContext:
 
 DDGS_ERROR_STATUSES = {"http_403", "rate_limited_429", "timeout", "other_exception"}
 
+FORWARD_DISCOVERY_RAIL_TERMS = (
+    "metro", "subway", "urban rail", "light rail", "tram", "streetcar",
+    "mrt", "mtr", "metrolink", "rail transit", "railway transit",
+)
+FORWARD_DISCOVERY_TECHNOLOGY_TERMS = (
+    "new material", "advanced material", "composite", "cfrp", "carbon fiber",
+    "new coating", "low-friction", "sensor", "computer vision", "robotics",
+    "artificial intelligence", "machine learning", "predictive maintenance",
+    "digital twin", "cybersecurity", "virtual coupling", "advanced signalling",
+    "advanced signaling", "energy storage", "flywheel", "thermal energy",
+    "heat recovery", "traction", "automation", "automated inspection",
+)
+FORWARD_DISCOVERY_EVIDENCE_TERMS = (
+    "pilot", "trial", "test", "tested", "testing", "prototype", "deployed",
+    "deployment", "implemented", "installed", "operational", "study", "research",
+    "evaluation", "validation", "monitoring", "inspection", "maintenance",
+)
+FORWARD_DISCOVERY_APPLICATION_TERMS = (
+    "rolling stock", "rail vehicle", "vehicle body", "bogie", "traction", "track",
+    "signalling", "signaling", "control network", "train control", "station",
+    "platform", "depot", "maintenance", "inspection", "sensor", "energy storage",
+    "thermal energy network", "virtual coupling",
+)
+
+
+def _forward_result_has_discovery_signal(item: dict) -> bool:
+    """Identify whether a primary result is worth sending to the strict gate."""
+    text = f"{item.get('title', '')} {item.get('summary', '')}".casefold()
+    return (
+        any(term in text for term in FORWARD_DISCOVERY_RAIL_TERMS)
+        and any(term in text for term in FORWARD_DISCOVERY_TECHNOLOGY_TERMS)
+        and any(term in text for term in FORWARD_DISCOVERY_EVIDENCE_TERMS)
+        and any(term in text for term in FORWARD_DISCOVERY_APPLICATION_TERMS)
+    )
+
 
 def _search_language_from_query(
     query: str,
@@ -1011,6 +1046,7 @@ def run_duckduckgo_searches(
         return "沒有規劃 DDGS 查詢。", statuses, build_ddgs_search_summary([], 0)
 
     results_map: dict[int, str] = {}
+    primary_forward_relevance_by_index: dict[int, int] = {}
     done_count = 0
     max_workers = max(1, min(6, total))
 
@@ -1040,6 +1076,13 @@ def run_duckduckgo_searches(
                 query_status["error_message"] = str(exc)[:300]
             statuses.append(query_status)
             results_map[i] = _format_ddg_block(i, backend, query, items, status)
+            if (
+                (query_status.get("search_family") or query_status.get("family")) == "forward_technology"
+                and not query_status.get("fallback_layer")
+            ):
+                primary_forward_relevance_by_index[i] = sum(
+                    1 for item in items if _forward_result_has_discovery_signal(item)
+                )
             done_count += 1
             if context.status_callback:
                 context.status_callback("正在蒐集國際捷運新聞")
@@ -1058,8 +1101,11 @@ def run_duckduckgo_searches(
         if (row.get("search_family") or row.get("family")) == "forward_technology"
         and not row.get("fallback_layer")
     )
+    primary_forward_relevant_count = sum(primary_forward_relevance_by_index.values())
     context.forward_technology_query_count = primary_forward_query_count
-    if primary_forward_query_count and primary_forward_raw_count == 0:
+    if context.selected_types != ["__forward_technology_radar__"] and primary_forward_query_count and (
+        primary_forward_raw_count == 0 or primary_forward_relevant_count == 0
+    ):
         fallback_queries: list[str] = []
         selected_regions = list(dict.fromkeys(str(region).strip() for region in context.active_regions if str(region).strip()))
         if selected_regions:

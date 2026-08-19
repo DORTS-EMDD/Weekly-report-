@@ -679,6 +679,8 @@ FORWARD_GATE_APPLICATION_OBJECT_TERMS = [
     "substation", "signalling", "signaling", "communications", "depot", "ventilation",
     "hvac", "escalator", "elevator", "maintenance equipment", "infrastructure",
     "inspection system", "metro train", "metro trains", "subway train", "subway trains",
+    "advanced train control", "train control", "control system", "thermal energy network",
+    "energy storage", "flywheel", "battery", "sensor", "sensors", "composite material",
 ]
 
 FORWARD_GATE_NOVELTY_TERMS = [
@@ -686,13 +688,15 @@ FORWARD_GATE_NOVELTY_TERMS = [
     "first use", "prototype", "pilot", "demonstration", "trial", "emerging technology",
     "innovative technology", "new material", "new coating", "new low-friction coating",
     "new low friction coating", "new sensing method",
-    "new manufacturing method",
+    "new manufacturing method", "advanced technology", "advanced control", "advanced signalling",
+    "advanced signaling", "composite", "carbon fiber", "cfrp", "flywheel", "digital twin",
 ]
 
 FORWARD_GATE_VALIDATION_TERMS = [
     "tested", "test", "trial", "pilot", "pilots", "demonstrated", "validated", "validates",
     "deployed", "implemented", "installed", "field test", "field-test", "field-tests", "operational test",
-    "prototype tested", "in-service trial", "demonstration project",
+    "prototype tested", "in-service trial", "demonstration project", "research", "study", "evaluation",
+    "field validation", "engineering study", "operational application",
 ]
 
 FORWARD_GATE_BENEFIT_TERMS = [
@@ -709,6 +713,7 @@ FORWARD_GATE_BENEFIT_TERMS = [
     "improve safety", "improving safety", "increase capacity", "increasing capacity",
     "lower lifecycle cost", "lower life-cycle cost", "improve fire resistance",
     "improving fire resistance", "improve thermal performance", "improving thermal performance",
+    "heat recovery", "platform cooling", "thermal management", "energy storage", "energy saving",
 ]
 
 FORWARD_TRACK_B_EMERGING_TERMS = [
@@ -723,7 +728,12 @@ FORWARD_TRACK_B_EMERGING_TERMS = [
     "energy reuse", "heat exchanger", "district energy", "station cooling", "subway heat",
     "thermal energy network", "platform cooling", "thermal management", "new sensing method",
     "new manufacturing method", "new process", "system modernization", "system modernisation",
-    "modernization", "modernisation", "emerging technology", "advanced technology",
+    "modernization", "modernisation", "emerging technology", "advanced technology", "advanced material",
+    "advanced materials", "carbon fiber", "carbon fibre", "cfrp", "aramid", "nanocomposite",
+    "battery", "flywheel", "energy storage", "sensing", "sensor", "sensors", "robotics",
+    "advanced traction", "traction inverter", "silicon carbide", "sic traction", "cbtc", "ato", "atp",
+    "advanced train control", "train control", "thermal energy network", "heat recovery",
+    "platform cooling", "hvac", "environmental control", "field validation", "operational application",
 ]
 
 FORWARD_TRACK_B_APPLICATION_EVIDENCE_TERMS = [
@@ -732,14 +742,26 @@ FORWARD_TRACK_B_APPLICATION_EVIDENCE_TERMS = [
     "implemented", "implements", "deploys", "uses", "use", "in operation", "operational use", "operational", "research deployment",
     "study", "studies", "studying", "research", "evaluation", "evaluated", "validation", "validated", "verification",
     "maintenance", "inspection", "monitoring", "fault detection", "in service", "in-service",
+    "developed", "development", "engineering study", "field validation", "operational application",
+    "maintenance application", "engineering performance",
 ]
 
 FORWARD_TRACK_B_RAIL_TECHNICAL_OBJECT_TERMS = [
     "rolling stock", "rail vehicle", "rail vehicles", "metro train", "subway train", "vehicle body",
-    "bogie", "traction", "track", "rail component", "signalling", "signaling", "control network",
+    "bogie", "traction", "track", "rail component", "rail components", "signalling", "signaling", "control network",
     "train control", "station equipment", "platform", "depot", "maintenance", "inspection",
     "subway platform", "metro system", "rail system", "urban rail system",
+    "advanced train control", "virtual coupling", "energy storage", "thermal energy network",
+    "sensor", "sensors", "sensing", "composite material", "traction inverter", "heat recovery", "waste heat",
 ]
+
+FORWARD_MATERIAL_TERMS = (
+    "advanced material", "advanced materials", "new material", "new materials", "composite",
+    "composite laminate", "carbon fiber", "carbon fibre", "cfrp", "aramid", "nanocomposite",
+    "lightweight material", "lightweight structure", "fire-resistant material", "fire resistant material",
+    "high-performance material", "new coating", "wear-resistant coating", "low-friction coating",
+    "insulation material",
+)
 
 FORWARD_TRACK_B_CIVIL_MATERIAL_TERMS = [
     "building", "buildings", "construction", "civil works", "civil engineering", "concrete",
@@ -837,6 +859,11 @@ REPORT_SELECTION_DEBUG_DEFAULT = {
     "track_a_selected_count": 0,
     "track_b_selected_count": 0,
     "track_b_exclusion_reason_counts": {},
+    "forward_gate_failure_reason_counts": {},
+    "forward_gate_pass_ids": [],
+    "forward_gate_pass_titles": [],
+    "forward_selected_ids": [],
+    "forward_selected_titles": [],
     "annual_target": 0,
     "annual_qualified_count": 0,
     "annual_shortfall": 0,
@@ -2345,6 +2372,14 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return has_material and has_research and has_civil_context and not has_rail_object
 
 
+    def _is_forward_material_candidate(candidate: dict) -> bool:
+        return bool(
+            candidate.get("search_family") == "forward_technology"
+            and _candidate_urban_rail_gate(candidate)
+            and _contains_any_term(_candidate_selection_text(candidate), FORWARD_MATERIAL_TERMS)
+        )
+
+
     def _is_generic_ai_marketing(candidate: dict) -> bool:
         text = _candidate_selection_text(candidate)
         return (
@@ -2367,6 +2402,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "urban_rail": _candidate_urban_rail_gate(candidate),
             "emerging_technology": _contains_any_term(text, FORWARD_TRACK_B_EMERGING_TERMS),
             "application_or_evidence": _contains_any_term(text, FORWARD_TRACK_B_APPLICATION_EVIDENCE_TERMS),
+            "technical_application": _contains_any_term(text, FORWARD_TRACK_B_RAIL_TECHNICAL_OBJECT_TERMS),
             "project_only_clear": not _is_project_only_technical_candidate(candidate),
             "base_quality": bool(
                 _candidate_date_obj(candidate.get("date", ""))
@@ -2383,6 +2419,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             ("urban_rail", "missing_urban_rail_context"),
             ("emerging_technology", "missing_emerging_technology_signal"),
             ("application_or_evidence", "missing_application_evidence"),
+            ("technical_application", "missing_substantive_technical_application"),
             ("project_only_clear", "project_only_candidate"),
             ("base_quality", "source_date_or_content_quality_insufficient"),
             ("generic_ai_marketing_clear", "generic_ai_marketing"),
@@ -5610,6 +5647,29 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         LAST_PYTHON_SELECTION_DEBUG["track_b_gate_pass_count"] = sum(
             1 for item in forward_candidates if item.get("track_b_gate_pass") is True
         )
+        forward_gate_failure_reason_counts: dict[str, int] = {}
+        forward_gate_pass_ids: list[object] = []
+        forward_gate_pass_titles: list[str] = []
+        for item in forward_candidates:
+            passes_forward_gate = item.get("passes_forward_technology_gate") is True
+            if not passes_forward_gate:
+                passes_forward_gate = _passes_forward_technology_gate(item)
+            candidate_id = item.get("candidate_id", item.get("id", ""))
+            title = str(item.get("title", "") or "")
+            if passes_forward_gate:
+                if candidate_id not in forward_gate_pass_ids:
+                    forward_gate_pass_ids.append(candidate_id)
+                if title and title not in forward_gate_pass_titles:
+                    forward_gate_pass_titles.append(title)
+            else:
+                reasons = item.get("forward_gate_failure_reasons") or ["forward_gate_failed"]
+                for reason in reasons:
+                    forward_gate_failure_reason_counts[reason] = (
+                        forward_gate_failure_reason_counts.get(reason, 0) + 1
+                    )
+        LAST_PYTHON_SELECTION_DEBUG["forward_gate_failure_reason_counts"] = forward_gate_failure_reason_counts
+        LAST_PYTHON_SELECTION_DEBUG["forward_gate_pass_ids"] = forward_gate_pass_ids
+        LAST_PYTHON_SELECTION_DEBUG["forward_gate_pass_titles"] = forward_gate_pass_titles
         for item in forward_candidates:
             for reason in item.get("track_b_failure_reasons", []) or []:
                 counts = LAST_PYTHON_SELECTION_DEBUG["track_b_exclusion_reason_counts"]
@@ -5668,6 +5728,16 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
         annual_pool = [candidate for candidates in grouped.values() for candidate in candidates]
         selected = rebalance_selected_candidates(selected, annual_pool)
+        forward_selected = [
+            item for item in selected
+            if item.get("search_family") == "forward_technology"
+        ]
+        LAST_PYTHON_SELECTION_DEBUG["forward_selected_ids"] = [
+            item.get("candidate_id", item.get("id", "")) for item in forward_selected
+        ]
+        LAST_PYTHON_SELECTION_DEBUG["forward_selected_titles"] = [
+            str(item.get("title", "") or "") for item in forward_selected if item.get("title")
+        ]
         same_event_count = sum(
             1
             for record in LAST_PYTHON_SELECTION_DEBUG.get("duplicate_event_records", [])
@@ -5740,6 +5810,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "build_cross_period_coverage_debug": build_cross_period_coverage_debug,
         "_has_cross_system_technical_application": _has_cross_system_technical_application,
         "_is_generic_material_research": _is_generic_material_research,
+        "_is_forward_material_candidate": _is_forward_material_candidate,
         "_is_generic_ai_marketing": _is_generic_ai_marketing,
         "_compute_cross_system_emerging_technology_gate": _compute_cross_system_emerging_technology_gate,
         "_is_non_core_equipment_only": _is_non_core_equipment_only,

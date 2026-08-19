@@ -1027,6 +1027,23 @@ def build_pipeline_debug_stats(
     for item in forward_evaluated_candidates:
         for reason in item.get("track_b_failure_reasons", []) or []:
             track_b_exclusion_reason_counts[reason] = track_b_exclusion_reason_counts.get(reason, 0) + 1
+    forward_gate_failure_reason_counts: dict[str, int] = {}
+    forward_gate_pass_ids: list[object] = []
+    forward_gate_pass_titles: list[str] = []
+    for item in forward_evaluated_candidates:
+        candidate_id = item.get("candidate_id", item.get("id", ""))
+        title = str(item.get("title", "") or "")
+        if item.get("passes_forward_technology_gate") is True:
+            if candidate_id not in forward_gate_pass_ids:
+                forward_gate_pass_ids.append(candidate_id)
+            if title and title not in forward_gate_pass_titles:
+                forward_gate_pass_titles.append(title)
+            continue
+        reasons = item.get("forward_gate_failure_reasons") or ["forward_gate_failed"]
+        for reason in reasons:
+            forward_gate_failure_reason_counts[reason] = (
+                forward_gate_failure_reason_counts.get(reason, 0) + 1
+            )
     annual_raw_by_bucket: dict[str, int] = {}
     for item in raw_candidates or []:
         bucket = _annual_bucket(item)
@@ -1154,6 +1171,11 @@ def build_pipeline_debug_stats(
         "forward_technology_raw_count": len(forward_raw_candidates),
         "forward_technology_gate_pass_count": forward_gate_pass_count,
         "forward_technology_selected_count": 0,
+        "forward_gate_failure_reason_counts": forward_gate_failure_reason_counts,
+        "forward_gate_pass_ids": forward_gate_pass_ids,
+        "forward_gate_pass_titles": forward_gate_pass_titles,
+        "forward_selected_ids": [],
+        "forward_selected_titles": [],
         "track_a_gate_pass_count": sum(
             1 for item in forward_evaluated_candidates if item.get("track_a_gate_pass") is True
         ),
@@ -1206,11 +1228,7 @@ def build_pipeline_debug_stats(
             "annual_coverage": "PENDING",
         },
         "forward_technology_material_candidate_count": sum(
-            1 for item in forward_raw_candidates
-            if item.get("innovation_level") in {"A", "B"}
-            or item.get("novelty_evidence")
-            or item.get("validation_evidence")
-            or item.get("benefit_evidence")
+            1 for item in forward_raw_candidates if _is_forward_material_candidate(item)
         ),
     }
 
@@ -1268,6 +1286,7 @@ _canonical_tags_from_text = _selector_api["_canonical_tags_from_text"]
 _candidate_selection_text = _selector_api["_candidate_selection_text"]
 _candidate_analysis_fingerprint = _selector_api["_candidate_analysis_fingerprint"]
 _candidate_analysis_cache = _selector_api["_candidate_analysis_cache"]
+_is_forward_material_candidate = _selector_api["_is_forward_material_candidate"]
 _cached_candidate_bool = _selector_api["_cached_candidate_bool"]
 _candidate_urban_rail_gate = _selector_api["_candidate_urban_rail_gate"]
 _compute_technical_system_gate = _selector_api["_compute_technical_system_gate"]
@@ -2852,11 +2871,16 @@ if generate_btn:
             pipeline_debug_stats["forward_technology_selected_count"] = len(forward_selected_candidates)
             pipeline_debug_stats["forward_technology_material_selected_count"] = sum(
                 1 for item in forward_selected_candidates
-                if item.get("innovation_level") in {"A", "B"}
-                or item.get("novelty_evidence")
-                or item.get("validation_evidence")
-                or item.get("benefit_evidence")
+                if _is_forward_material_candidate(item)
             )
+            pipeline_debug_stats["forward_selected_ids"] = [
+                item.get("candidate_id", item.get("id", "")) for item in forward_selected_candidates
+            ]
+            pipeline_debug_stats["forward_selected_titles"] = [
+                str(item.get("title", "") or "")
+                for item in forward_selected_candidates
+                if item.get("title")
+            ]
             pipeline_debug_stats["track_a_selected_count"] = sum(
                 1 for item in forward_selected_candidates if item.get("track_a_gate_pass") is True
             )
@@ -3021,6 +3045,11 @@ if generate_btn:
                 "forward_technology_raw_count": pipeline_debug_stats.get("forward_technology_raw_count", 0),
                 "forward_technology_gate_pass_count": pipeline_debug_stats.get("forward_technology_gate_pass_count", 0),
                 "forward_technology_selected_count": pipeline_debug_stats.get("forward_technology_selected_count", 0),
+                "forward_gate_failure_reason_counts": pipeline_debug_stats.get("forward_gate_failure_reason_counts", {}),
+                "forward_gate_pass_ids": pipeline_debug_stats.get("forward_gate_pass_ids", []),
+                "forward_gate_pass_titles": pipeline_debug_stats.get("forward_gate_pass_titles", []),
+                "forward_selected_ids": pipeline_debug_stats.get("forward_selected_ids", []),
+                "forward_selected_titles": pipeline_debug_stats.get("forward_selected_titles", []),
                 "forward_technology_material_candidate_count": pipeline_debug_stats.get("forward_technology_material_candidate_count", 0),
                 "forward_technology_material_selected_count": pipeline_debug_stats.get("forward_technology_material_selected_count", 0),
                 "track_a_gate_pass_count": pipeline_debug_stats.get("track_a_gate_pass_count", 0),
