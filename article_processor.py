@@ -591,6 +591,98 @@ def _effective_source_url(candidate: dict) -> str:
     return _clean_candidate_url(source_href or url)
 
 
+_GENERIC_SOURCE_DISPLAY_LABELS = {
+    "資料來源未明確辨識",
+    "來源未明確",
+    "未提供來源名稱",
+    "原始候選資料未提供來源",
+}
+
+
+def _formal_source_domain(candidate: dict) -> str:
+    """Resolve a publisher domain for formal output without trusting a proxy host."""
+    for value in (
+        candidate.get("resolved_article_url", ""),
+        candidate.get("source_href", ""),
+        candidate.get("url", ""),
+    ):
+        host = _normalize_source_domain(_domain_from_url(str(value or "")))
+        if host and host != "news.google.com":
+            return host
+        site_domain = _normalize_source_domain(_extract_site_domain_from_google_news(str(value or "")))
+        if site_domain and site_domain != "news.google.com":
+            return site_domain
+    for value in (
+        candidate.get("source_domain", ""),
+        candidate.get("source_domain_normalized", ""),
+        candidate.get("source_display", ""),
+        candidate.get("source", ""),
+    ):
+        host = _normalize_source_domain(str(value or ""))
+        if host and host != "news.google.com" and "." in host:
+            return host
+        hint = _normalize_source_domain(_domain_hint_from_source_label(str(value or "")))
+        if hint and hint != "news.google.com":
+            return hint
+    return _normalize_source_domain(
+        _original_source_domain(
+            str(candidate.get("source", "") or ""),
+            str(candidate.get("url", "") or ""),
+            str(candidate.get("source_href", "") or ""),
+            str(candidate.get("query", "") or ""),
+        )
+    )
+
+
+def _formal_source_url(candidate: dict, domain: str = "") -> str:
+    for value in (
+        candidate.get("resolved_article_url", ""),
+        candidate.get("source_href", ""),
+        candidate.get("url", ""),
+    ):
+        value = _clean_candidate_url(str(value or ""))
+        if _is_article_level_url(value):
+            return value
+    if domain:
+        return f"https://{domain}/"
+    return ""
+
+
+def canonical_source_display_name(
+    source: str = "",
+    url: str = "",
+    source_href: str = "",
+    source_domain: str = "",
+) -> str:
+    domain = _normalize_source_domain(source_domain) or _normalize_source_domain(
+        _domain_from_url(url) or _domain_from_url(source_href)
+    )
+    if not domain:
+        domain = _normalize_source_domain(_domain_hint_from_source_label(source))
+    for known_domain, label in SOURCE_DISPLAY_BY_DOMAIN.items():
+        if domain and _host_matches(domain, known_domain):
+            return label
+    cleaned = clean_source_name_for_ui(source)
+    if cleaned and cleaned not in _GENERIC_SOURCE_DISPLAY_LABELS and "." not in cleaned:
+        return cleaned
+    return domain or "資料來源未明確辨識"
+
+
+def build_formal_report_source(candidate: dict) -> dict[str, str]:
+    """Return the single visible source contract used by formal report output."""
+    domain = _formal_source_domain(candidate)
+    url = _formal_source_url(candidate, domain)
+    return {
+        "display_name": canonical_source_display_name(
+            str(candidate.get("source_display") or candidate.get("source") or ""),
+            url,
+            str(candidate.get("source_href", "") or ""),
+            domain,
+        ),
+        "display_url": url,
+    }
+
+
 def _extract_complete_url(text: str) -> str:
     match = re.search(r"https?://[^\s\)\]）＞>，,；;。]+", text or "")
     if not match:
@@ -910,6 +1002,16 @@ def _make_news_candidate(
         "search_language": search_language,
         "query_region": query_metadata.get("query_region", ""),
     }
+    proxy_url = next(
+        (
+            value.strip()
+            for value in (url, source_href)
+            if "news.google.com" in _domain_from_url(value)
+        ),
+        "",
+    )
+    if proxy_url:
+        candidate["source_proxy_url"] = proxy_url
     if query_metadata.get("query_region"):
         candidate["query_region"] = query_metadata["query_region"]
     if query_metadata.get("selected_regions"):

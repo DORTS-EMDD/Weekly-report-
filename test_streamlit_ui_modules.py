@@ -14,7 +14,7 @@ import streamlit_sidebar_ui
 
 
 EXPECTED_SIDEBAR_SHA256 = (
-    "1e611c7aed2f508368cfa81dc0f278aa2c2cbc9c8ce80e129547b55b861a9efd"
+    "8367c0627a33dd896bdda8a032c16144ce68866abf8a5ad73f772ee03feed86b"
 )
 EXPECTED_DASHBOARD_SHA256 = (
     "95e2d49770b2af8a273b96fdc15b1f4ac65fa423d52b2b30bf40843f1ff39c49"

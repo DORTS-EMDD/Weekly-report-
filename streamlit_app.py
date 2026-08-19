@@ -87,6 +87,7 @@ from report_postprocessor import (
     strip_unselected_types_from_title as service_strip_unselected_types_from_title,
 )
 import report_postprocessor as report_postprocess_service
+from streamlit_report_state import record_failed_report_attempt
 from journal_service import (
     JournalServiceContext,
     _first_meta_content,
@@ -1436,8 +1437,19 @@ def _iter_calendar_months(start_date: datetime.date, end_date: datetime.date) ->
     return report_postprocess_service._iter_calendar_months(start_date, end_date, context=_report_postprocess_context())
 
 
-def build_final_report_coverage_warning(final_report_md: str, report_days: int, report_end: datetime.date | None=None) -> dict:
-    return report_postprocess_service.build_final_report_coverage_warning(final_report_md, report_days, report_end, context=_report_postprocess_context())
+def build_final_report_coverage_warning(
+    final_report_md: str,
+    report_days: int,
+    report_end: datetime.date | None = None,
+    structured_candidates: list[dict] | None = None,
+) -> dict:
+    return report_postprocess_service.build_final_report_coverage_warning(
+        final_report_md,
+        report_days,
+        report_end,
+        structured_candidates=structured_candidates,
+        context=_report_postprocess_context(),
+    )
 
 
 def _annual_observation_report_dates_are_recent(blocks: list[str]) -> bool:
@@ -2171,7 +2183,6 @@ def _builtin_demo_report_text() -> str:
     sections: list[str] = [
         f"# {demo_report_title}",
         f"> 資料涵蓋期間：{date_range}",
-        f"> 報導範圍：{report_scope_label}",
         "",
         "一、技術新知",
         "",
@@ -2327,10 +2338,6 @@ def send_current_report_email(report_md: str, status_target=None, progress_targe
 if generate_btn:
     if demo_cache_mode_enabled:
         run_config = current_run_config.copy()
-        clear_old_report_state()
-        st.session_state["latest_run_config"] = run_config
-        st.session_state["report_generated"] = False
-        st.session_state["email_sent"] = False
         progress_bar = progress_placeholder.progress(0.15)
         status_text = status_placeholder
 
@@ -2443,6 +2450,8 @@ if generate_btn:
             st.session_state["latest_report_stats"] = report_stats
             st.session_state["latest_run_config"] = run_config
             st.session_state["report_generated"] = True
+            st.session_state["email_sent"] = False
+            st.session_state.pop("latest_report_integrity_failure", None)
             st.session_state["latest_debug_info"] = debug_info
             st.session_state["latest_source_statuses"] = source_statuses
             st.session_state["latest_debug_payload"] = {
@@ -2484,10 +2493,6 @@ if generate_btn:
         status_placeholder.error("❌ 指定先進國家/地區模式下，請至少勾選一個國家/地區。")
     else:
         run_config = current_run_config.copy()
-        clear_old_report_state()
-        st.session_state["latest_run_config"] = run_config
-        st.session_state["report_generated"] = False
-        st.session_state["email_sent"] = False
         progress_bar = progress_placeholder.progress(0.10)
         status_text = status_placeholder
 
@@ -2651,24 +2656,7 @@ if generate_btn:
                 }
                 LAST_REPORT_ID_VALIDATION.clear()
                 LAST_REPORT_ID_VALIDATION.update(integrity_failure)
-                st.session_state["latest_report_integrity_failure"] = integrity_failure
-                st.session_state["latest_report_md"] = ""
-                st.session_state["latest_report"] = ""
-                st.session_state["latest_pdf"] = None
-                st.session_state["report_generated"] = False
-                st.session_state["email_sent"] = False
-                st.session_state["latest_report_stats"] = integrity_failure
-                st.session_state["latest_debug_info"] = {
-                    "selected_candidates": selected_candidates,
-                    "selected_ids": selected_ids,
-                    "report_prompt": report_prompt,
-                    "initial_raw_report": initial_raw_report,
-                    "raw_report": raw_report,
-                    "raw_report_candidate_ids": raw_report_candidate_ids,
-                    "report_id_validation_before_retry": report_id_validation_before_retry,
-                    "report_id_validation_after_retry": integrity_failure,
-                    "report_integrity_aborted_before_render": True,
-                }
+                record_failed_report_attempt(st.session_state, integrity_failure)
                 st.error(
                     "❌ 正式報告完整性驗證未通過；已停止輸出，不產生 PDF、不下載、不寄送 Email。"
                 )
@@ -2713,7 +2701,12 @@ if generate_btn:
                 reconciliation_diagnostics.get("report_validation_passed", False)
             )
 
-            long_term_coverage = build_final_report_coverage_warning(clean_report, lookback_int, today)
+            long_term_coverage = build_final_report_coverage_warning(
+                clean_report,
+                lookback_int,
+                today,
+                structured_candidates=selected_candidates,
+            )
             pdf_bytes = try_markdown_to_pdf_bytes(clean_report)
             dropped_selected_ids = [int(item.get("id", 0) or 0) for item in dropped_selected_candidates]
             dropped_selected_titles = [item.get("title", "") for item in dropped_selected_candidates]
@@ -2947,6 +2940,12 @@ if generate_btn:
                 "postprocess_mode": reconciliation_diagnostics.get(
                     "postprocess_mode", ""
                 ),
+                "POST_MAIAGENT_CONTENT_PRESERVATION": (
+                    "PASS"
+                    if reconciliation_diagnostics.get("postprocess_mode") == "authoritative_passthrough"
+                    and reconciliation_diagnostics.get("report_validation_passed", False)
+                    else "FAIL"
+                ),
                 "validated_report_count": validated_report_count,
                 "clean_report_marker_count": len(extract_report_candidate_ids(clean_report)),
                 "report_id_reconciliation": LAST_REPORT_ID_VALIDATION,
@@ -3090,6 +3089,8 @@ if generate_btn:
             st.session_state["latest_report_stats"] = report_stats
             st.session_state["latest_run_config"] = run_config
             st.session_state["report_generated"] = True
+            st.session_state["email_sent"] = False
+            st.session_state.pop("latest_report_integrity_failure", None)
             st.session_state["latest_debug_info"] = {
                 "run_config": run_config,
                 "raw_candidates": candidate_pool["raw_candidates"],

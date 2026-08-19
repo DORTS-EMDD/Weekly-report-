@@ -194,13 +194,13 @@ class P2GCoreSystemTests(unittest.TestCase):
         named = _candidate("Metro deploys CBTC", "CBTC was deployed on the metro.")
         named.update({"classification": TECHNICAL, "source_display": "Railway-News", "source_domain": "railway-news.com"})
         named_prompt = runtime.build_report_prompt([named], [], 1)
-        self.assertIn('"source_display": "Railway-News"', named_prompt)
-        self.assertNotIn('"source_display": "資料來源未明確辨識"', named_prompt)
+        self.assertIn('"display_name": "Railway-News"', named_prompt)
+        self.assertNotIn('"display_name": "資料來源未明確辨識"', named_prompt)
 
         domain_only = dict(named, source_display="", source_domain="railway-news.com")
         domain_prompt = runtime.build_report_prompt([domain_only], [], 1)
-        self.assertIn('"source_display": "railway-news.com"', domain_prompt)
-        self.assertNotIn('"source_display": "資料來源未明確辨識"', domain_prompt)
+        self.assertIn('"display_name": "Fixture Metro News"', domain_prompt)
+        self.assertNotIn('"display_name": "資料來源未明確辨識"', domain_prompt)
 
     def test_python_classification_is_authoritative_over_model_category(self):
         policy = _candidate("Sydney Metro West service policy", "Sydney Metro published a service policy update.")

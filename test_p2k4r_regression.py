@@ -134,7 +134,8 @@ class P2K4RRegressionTests(unittest.TestCase):
         ]
         self.assertEqual([payload["candidate_id"] for payload in payloads], [1, 2])
         self.assertEqual(payloads[0]["classification"], "營運動態")
-        self.assertEqual(payloads[0]["report_source"]["source_display"], "Tokyo Metro")
+        self.assertEqual(payloads[0]["report_source"]["display_name"], "Tokyo Metro")
+        self.assertTrue(payloads[0]["report_source"]["display_url"])
         self.assertNotIn("supporting_sources", payloads[0])
         self.assertNotIn("supplemental_sources", payloads[0])
         self.assertNotIn("source_display", payloads[0])
@@ -275,8 +276,8 @@ class P2K4RRegressionTests(unittest.TestCase):
             for line in prompt.splitlines()
             if line.startswith('{"candidate_id"')
         )
-        self.assertEqual(payload["report_source"]["url"], primary_url)
-        self.assertEqual(len({payload["report_source"]["url"]}), 1)
+        self.assertEqual(payload["report_source"]["display_url"], primary_url)
+        self.assertEqual(len({payload["report_source"]["display_url"]}), 1)
 
         multi_url_candidate = dict(candidate)
         multi_url_candidate["url"] = f"{primary_url}；{secondary_url}"
@@ -287,8 +288,8 @@ class P2K4RRegressionTests(unittest.TestCase):
             for line in multi_url_prompt.splitlines()
             if line.startswith('{"candidate_id"')
         )
-        self.assertEqual(multi_url_payload["report_source"]["url"], primary_url)
-        self.assertNotIn(secondary_url, multi_url_payload["report_source"]["url"])
+        self.assertEqual(multi_url_payload["report_source"]["display_url"], primary_url)
+        self.assertNotIn(secondary_url, multi_url_payload["report_source"]["display_url"])
 
     def test_formal_source_renderer_keeps_one_primary_source(self):
         candidate = _candidate(1, "東京捷運半藏門線石綿檢查", "東京捷運發現石綿材料並進行檢查。")

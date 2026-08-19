@@ -520,6 +520,14 @@ SOURCE_TIER_PROFESSIONAL_DOMAINS = {
 }
 
 SOURCE_DISPLAY_BY_DOMAIN = {
+    "news.ttv.com.tw": "台視新聞網",
+    "news.ltn.com.tw": "自由時報",
+    "news.yahoo.co.jp": "Yahoo! JAPAN",
+    "nbcwashington.com": "NBC Washington",
+    "scooptw.com": "Scoop Taiwan",
+    "msn.com": "MSN",
+    "startribune.com": "Star Tribune",
+    "n.yam.com": "yam蕃薯藤",
     "mta.info": "MTA 官方公告",
     "tokyometro.jp": "Tokyo Metro 官方公告",
     "mtr.com.hk": "港鐵官方資料",
@@ -556,6 +564,14 @@ SOURCE_DISPLAY_BY_DOMAIN = {
 }
 
 SOURCE_DOMAIN_HINT_BY_LABEL = {
+    "台視新聞網": "news.ttv.com.tw",
+    "自由時報": "news.ltn.com.tw",
+    "yahoo! japan": "news.yahoo.co.jp",
+    "yahoo japan": "news.yahoo.co.jp",
+    "nbc washington": "nbcwashington.com",
+    "scoop taiwan": "scooptw.com",
+    "star tribune": "startribune.com",
+    "yam蕃薯藤": "n.yam.com",
     "mta": "mta.info",
     "tokyo metro": "tokyometro.jp",
     "mtr": "mtr.com.hk",

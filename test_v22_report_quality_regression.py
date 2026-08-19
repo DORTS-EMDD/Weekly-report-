@@ -417,11 +417,13 @@ class V22ReportQualityRegressionTests(unittest.TestCase):
         self.assertIn("• 相關機電系統：未明確", fallback)
         self.assertNotRegex(fallback, r"號誌系統|供電系統|通訊系統|自動收費系統")
 
-    def test_source_line_uses_canonical_markdown_link(self):
+    def test_source_line_uses_canonical_visible_source(self):
         source = normalize_source_line(
             "• 資料來源：來源名稱：https://example.com/source，2026-08-01"
         )
-        self.assertIn("[來源名稱](https://example.com/source)", source)
+        self.assertIn("• 資料來源：來源名稱", source)
+        self.assertIn("https://example.com/source", source)
+        self.assertNotIn("[來源名稱]", source)
         self.assertNotIn("來源名稱：https://example.com/source", source)
 
     def test_internal_editor_note_is_not_kept_in_formal_report(self):

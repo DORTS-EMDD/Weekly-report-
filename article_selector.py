@@ -284,8 +284,8 @@ CORE_SYSTEM_TERM_GROUPS: dict[str, tuple[str, ...]] = {
     "通訊": (
         "cctv", "wireless radio", "radio system", "fiber optic", "fibre optic",
         "fiber communication", "fibre communication", "pids", "passenger information display",
-        "telecommunications", "telecommunication system", "communications system",
-        "communication network", "telephone system", "通訊", "CCTV", "無線電", "光纖",
+    "telecommunications", "telecommunication system", "communications system",
+        "communications", "communications systems", "communication network", "telephone system", "通訊", "CCTV", "無線電", "光纖",
         "旅客資訊顯示", "電話",
     ),
     "自動收費": (
@@ -1585,6 +1585,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return False
         if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
             return False
+        if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
+            return True
         if _is_high_priority_rescue_candidate(candidate) or _is_procurement_rescue_candidate(candidate):
             return True
         source = candidate.get("source", "")
@@ -1610,6 +1612,26 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             or _is_short_snippet_rescue_candidate(candidate)
             or _is_procurement_rescue_candidate(candidate)
         )
+
+
+    def _is_annual_quality_rescue_candidate(candidate: dict) -> bool:
+        """Prioritize older, evidence-bearing candidates without relaxing gates."""
+        if candidate.get("source_tier") not in {"A_official", "B_professional"}:
+            return False
+        if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
+            return False
+        text = _candidate_selection_text(candidate)
+        if not _has_clear_urban_rail_context(text, candidate.get("source", "")):
+            return False
+        if _contains_any_term(text, RESCUE_LOW_VALUE_TERMS):
+            return False
+        high_value_terms = (
+            TECH_NEWS_REQUIRED_TERMS
+            + STRONG_TECHNICAL_DETAIL_TERMS
+            + SUBSTANTIVE_TECHNICAL_DETAIL_TERMS
+            + ["rams", "reliability", "availability", "maintainability", "safety case", "urban rail"]
+        )
+        return _contains_any_term(text, high_value_terms)
 
 
     def _is_high_priority_rescue_candidate(candidate: dict) -> bool:
@@ -1700,12 +1722,25 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate["rescue_type"] = (
                 "procurement_rescue_candidate"
                 if _is_procurement_rescue_candidate(candidate)
-                else "short_snippet_rescue"
+                else (
+                    "annual_quality_rescue"
+                    if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate)
+                    else "short_snippet_rescue"
+                )
             )
         stats["eligible_count"] = len(eligible)
         stats["rescue_candidate_count"] = len(eligible)
         stats["rescue_enrichment_attempted_count"] = 0
         stats["rescue_enrichment_success_count"] = 0
+        annual_rescue_candidates = [
+            candidate for candidate in eligible
+            if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate)
+        ]
+        stats["annual_rescue_candidate_count"] = len(annual_rescue_candidates)
+        annual_rescue_buckets_attempted: set[str] = set()
+        annual_rescue_buckets_succeeded: set[str] = set()
+        stats["annual_rescue_buckets_attempted"] = []
+        stats["annual_rescue_buckets_succeeded"] = []
         forward_candidates = [
             candidate for candidate in candidates or []
             if candidate.get("search_family") == "forward_technology"
@@ -1726,14 +1761,31 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             stats["elapsed_seconds"] = round(time.perf_counter() - started, 2)
             return stats
         session = create_requests_session()
-        for candidate in sorted(
+        def _annual_rescue_bucket(candidate: dict) -> str:
+            explicit = str(candidate.get("date_bucket", "") or "").strip()
+            if explicit:
+                return explicit
+            date_obj = _candidate_date_obj(candidate.get("date", ""))
+            return (
+                f"{date_obj.year:04d}-Q{((date_obj.month - 1) // 3) + 1}"
+                if date_obj else ""
+            )
+
+        ordered_eligible = sorted(
             eligible,
             key=lambda item: (
+                0 if lookback_int >= 365 and _is_annual_quality_rescue_candidate(item) else 1,
+                -int(item.get("final_selection_score", item.get("python_score", 0)) or 0),
                 _source_tier_rank(item.get("source_tier", "C_media")),
                 _quality_rank(item.get("source_quality", "B")),
-                -_date_sort_key(item),
+                (
+                    _date_sort_key(item)
+                    if lookback_int >= 365 and _is_annual_quality_rescue_candidate(item)
+                    else -_date_sort_key(item)
+                ),
             ),
-        ):
+        )
+        for candidate in ordered_eligible:
             if stats["attempted_count"] >= limit:
                 candidate["prefetch_status"] = "skipped_limit"
                 stats["skipped_limit_count"] += 1
@@ -1742,6 +1794,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate["prefetch_attempted"] = True
             candidate["rescue_enrichment_attempted"] = True
             stats["rescue_enrichment_attempted_count"] += 1
+            if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
+                annual_rescue_buckets_attempted.add(_annual_rescue_bucket(candidate))
             result = _prefetch_candidate_article(candidate, session)
             candidate["prefetch_status"] = result.get("status", "")
             candidate["prefetch_reason"] = result.get("reason", "")
@@ -1755,6 +1809,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 stats["success_count"] += 1
                 candidate["rescue_enrichment_success"] = True
                 stats["rescue_enrichment_success_count"] += 1
+                if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
+                    annual_rescue_buckets_succeeded.add(_annual_rescue_bucket(candidate))
             else:
                 stats["failed_count"] += 1
                 candidate["rescue_enrichment_success"] = False
@@ -1768,6 +1824,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             1 for candidate in forward_candidates
             if candidate.get("track_b_gate_pass_after_enrichment")
         )
+        stats["annual_rescue_buckets_attempted"] = sorted(filter(None, annual_rescue_buckets_attempted))
+        stats["annual_rescue_buckets_succeeded"] = sorted(filter(None, annual_rescue_buckets_succeeded))
         stats["elapsed_seconds"] = round(time.perf_counter() - started, 2)
         return stats
 
@@ -2048,6 +2106,15 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
         has_depot_facility = _contains_positive_term(text, list(DEPOT_FACILITY_TERMS))
         has_specific_vehicle_evidence = _contains_positive_term(text, list(rolling_stock_specific_terms))
+        explicit_rolling_stock_terms = (
+            *rolling_stock_specific_terms,
+            "rolling stock", "vehicle fleet", "trainset", "trainsets",
+            "light rail vehicle", "light rail vehicles", "車輛系統", "車輛設備", "電聯車",
+        )
+        generic_package_without_vehicle_detail = (
+            _contains_any_term(text, ELECTROMECHANICAL_GENERIC_SCOPE_TERMS)
+            and not _contains_any_term(text, list(explicit_rolling_stock_terms))
+        )
         text_lower = text.casefold()
         has_vehicle_event = bool(
             re.search(
@@ -2068,11 +2135,16 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             )
         )
         if (
+            not generic_package_without_vehicle_detail
+            and (
             (has_specific_vehicle_evidence or has_vehicle_event)
             and "電聯車" not in systems
             and (not has_depot_facility or has_specific_vehicle_evidence)
+            )
         ):
             systems.append("電聯車")
+        if generic_package_without_vehicle_detail:
+            systems = [system for system in systems if system != "電聯車"]
         if (
             "號誌" in systems
             and "電聯車" in systems
@@ -5493,6 +5565,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_candidate_page_type": _candidate_page_type,
         "_prefetch_limit_for_period": _prefetch_limit_for_period,
         "_candidate_prefetch_signal": _candidate_prefetch_signal,
+        "_is_annual_quality_rescue_candidate": _is_annual_quality_rescue_candidate,
         "_is_high_priority_rescue_candidate": _is_high_priority_rescue_candidate,
         "_is_short_snippet_rescue_candidate": _is_short_snippet_rescue_candidate,
         "_is_procurement_rescue_candidate": _is_procurement_rescue_candidate,

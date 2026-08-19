@@ -350,10 +350,17 @@ def build_search_queries(
     context.forward_technology_fallback_query_count = 0
 
     annual_bucket_queries = []
+    annual_family_specs: list[tuple[str, dict]] = []
     if context.lookback_int >= 365 and context.news_scope != "domestic":
         annual_bucket_families = ["technology"]
         if "major_accident" in content_families or include_official:
             annual_bucket_families.append("major_accident")
+        for family in ("policy", "dispute"):
+            if family in content_families:
+                annual_bucket_families.append(family)
+                family_spec = next(iter(_active_query_specs(family)), None)
+                if family_spec:
+                    annual_family_specs.append((family, family_spec))
         if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY in content_families:
             annual_bucket_families.append(ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY)
         if include_forward_technology:
@@ -422,6 +429,7 @@ def build_search_queries(
             specs = _regional_query_spec_sequence(content_families, "en")
             annual_supplement_reserve = (
                 len(annual_bucket_queries)
+                + len(annual_family_specs)
                 + min(3, len(annual_breakthrough_specs))
                 + min(len(forward_specs), 8)
                 + len(global_coverage_specs)
@@ -443,6 +451,16 @@ def build_search_queries(
                     lang=spec.get("lang", "en"),
                     use_news=True,
                     query_region=spec.get("region", "global"),
+                )
+            for family, spec in annual_family_specs:
+                _add(
+                    spec.get("query", ""),
+                    family=family,
+                    lang=spec.get("lang", "en"),
+                    use_news=bool(spec.get("use_news", True)),
+                    query_region="global",
+                    date_bucket="annual",
+                    annual_bucket_families=[family],
                 )
             for query, bucket in annual_bucket_queries:
                 _add(
@@ -503,12 +521,25 @@ def build_search_queries(
         regions = list(dict.fromkeys(context.active_regions))
         official_reserve = 1 if include_official else 0
         bucket_reserve = len(annual_bucket_queries) if annual_bucket_queries else 0
+        annual_family_reserve = len(annual_family_specs)
         breakthrough_reserve = min(3, len(annual_breakthrough_specs))
         forward_reserve = min(len(forward_specs), 8)
         country_budget = max(
             0,
-            query_limit - official_reserve - bucket_reserve - breakthrough_reserve - forward_reserve - len(queries),
+            query_limit - official_reserve - bucket_reserve - breakthrough_reserve - forward_reserve - annual_family_reserve - len(queries),
         )
+        if annual_family_specs:
+            preferred_region = regions[0]
+            for family, spec in annual_family_specs:
+                _add(
+                    f"{REGION_SEARCH_TERMS.get(preferred_region, preferred_region)} {spec.get('query', '')}",
+                    family=family,
+                    lang=spec.get("lang", "en"),
+                    use_news=bool(spec.get("use_news", True)),
+                    query_region=preferred_region,
+                    date_bucket="annual",
+                    annual_bucket_families=[family],
+                )
         max_per_country = min(8, max(2, len(content_families)))
         allocations = {region: min(2, country_budget // max(1, len(regions))) for region in regions}
         remaining = country_budget - sum(allocations.values())

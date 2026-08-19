@@ -12,6 +12,7 @@ from article_processor import (
     _canonical_candidate_region,
     _clean_text,
     _contains_any_term,
+    build_formal_report_source,
     _domain_from_url,
     _effective_source_url,
     _extract_complete_url,
@@ -199,17 +200,32 @@ def normalize_source_line(line: str) -> str:
     for value in urls:
         content_without_urls = content_without_urls.replace(value, "")
     domain_hint = _extract_domain_hint(content_without_urls)
+    if not domain_hint and google_news_article_url:
+        domain_hint = _extract_domain_hint(google_news_article_url)
+    if not domain_hint and google_news_article_url:
+        domain_hint = _domain_from_url(google_news_article_url)
     if not url and urls:
         url = urls[0]
     host = _domain_from_url(url)
-    source_ref = url or domain_hint
+    source_ref = original_article_url or domain_hint
     source_label = _clean_source_label(content, source_ref, domain_hint or host)
-    if not source_label and not url and date_text == "日期未知":
+    formal_source = build_formal_report_source(
+        {
+            "source": source_label or content,
+            "source_display": source_label,
+            "source_domain": domain_hint or host,
+            "source_href": original_article_url,
+            "url": url,
+        }
+    )
+    if not source_label and not formal_source["display_url"] and date_text == "日期未知":
         return "• 資料來源："
-    parts = [_source_label_with_link(source_label, url)]
+    parts = [f"• 資料來源：{formal_source['display_name']}" if formal_source["display_name"] else "• 資料來源："]
+    if formal_source["display_url"]:
+        parts.append(formal_source["display_url"])
     if date_text and date_text != "日期未知":
-        parts.append(date_text)
-    return f"• 資料來源：{'，'.join(part for part in parts if part)}。"
+        parts.append(f"發布日期：{date_text}")
+    return "\n".join(part for part in parts if part)
 
 
 def _protect_journal_sections(text: str) -> tuple[str, list[str]]:
@@ -244,6 +260,8 @@ def compact_report_urls(text: str) -> str:
 
     def _compact_line(line: str) -> str:
         if "資料來源" in line:
+            return line
+        if re.fullmatch(r"\s*https?://\S+\s*", line or ""):
             return line
         placeholders: list[str] = []
 
@@ -1410,6 +1428,11 @@ def normalize_report_title_line(line: str) -> str:
 def normalize_final_report_md(md: str) -> str:
     text = clean_internal_report_language(md or "")
     text, protected_journal_sections = _protect_journal_sections(text)
+    text = re.sub(
+        r"(?m)^\s*>?\s*(?:報導範圍|範圍)\s*[：:]\s*國內\s*[＋+]\s*國際\s*$\n?",
+        "",
+        text,
+    )
     text = re.sub(r"(?m)^\s*[-*]\s*\*\*(發布/事件日期|國家/地區|相關機電系統|事件摘要|臺北捷運局啟示|資料來源)\*\*\s*[：:]", r"• \1：", text)
     text = re.sub(r"(?m)^\s*[-*]\s*\*\*【臺北捷運局啟示】\*\*\s*[：:]", "• 臺北捷運局啟示：", text)
     text = re.sub(r"(?m)^\s*•\s*【臺北捷運局啟示】\s*[：:]", "• 臺北捷運局啟示：", text)
@@ -1715,6 +1738,20 @@ _GENERIC_SOURCE_FALLBACKS = (
 _SOURCE_ATTRIBUTION_PREFIX = re.compile(
     r"^\s*[^。！？\n]{1,80}?(?:報導|指出|表示|稱|提到)\s*[，,:：,]\s*"
 )
+_UNTRANSLATED_COMMON_ENGLISH_PHRASES = (
+    "passenger service",
+    "railway station",
+    "junction",
+)
+
+
+def _untranslated_common_english_phrases(value: str) -> list[str]:
+    text = str(value or "")
+    return [
+        phrase
+        for phrase in _UNTRANSLATED_COMMON_ENGLISH_PHRASES
+        if re.search(rf"(?<![A-Za-z]){re.escape(phrase)}(?![A-Za-z])", text, flags=re.IGNORECASE)
+    ]
 
 
 def _authoritative_block_field_values(lines: list[str]) -> dict[str, str]:
@@ -1947,6 +1984,7 @@ def validate_authoritative_report(
     for status in block_field_status:
         fields = status.get("field_values", {})
         summary = str(fields.get("summary", "") or "").strip()
+        insight = str(fields.get("insight", "") or "").strip()
         source = str(fields.get("source", "") or "").strip()
         for candidate_id in status.get("candidate_ids", []):
             candidate = selected_map.get(candidate_id, {})
@@ -1962,6 +2000,16 @@ def validate_authoritative_report(
                     "candidate_id": candidate_id,
                     "code": "source_prefixed_summary",
                     "detail": "事件摘要不可由來源名稱加報導、指出或表示開頭",
+                })
+            untranslated_phrases = sorted(
+                set(_untranslated_common_english_phrases(summary) + _untranslated_common_english_phrases(insight))
+            )
+            if untranslated_phrases:
+                content_quality_issues.append({
+                    "candidate_id": candidate_id,
+                    "code": "untranslated_common_english_phrase",
+                    "detail": "正式摘要或啟示含未中文化的普通英文片語",
+                    "phrases": untranslated_phrases,
                 })
             candidate_source = str(
                 candidate.get("source_display") or candidate.get("source_domain") or ""
@@ -2119,18 +2167,35 @@ def _iter_calendar_months(start_date: datetime.date, end_date: datetime.date, *,
             month += 1
     return months
 
-def build_final_report_coverage_warning(final_report_md: str, report_days: int, report_end: datetime.date | None=None, *, context: ReportPostprocessContext) -> dict:
+def build_final_report_coverage_warning(
+    final_report_md: str,
+    report_days: int,
+    report_end: datetime.date | None = None,
+    *,
+    structured_candidates: list[dict] | None = None,
+    context: ReportPostprocessContext,
+) -> dict:
     """Measure long-term coverage from formal news only, never journal entries."""
     days = int(report_days or 0)
     if days not in {90, 180, 365}:
         return {'long_term_coverage_warning': False, 'reason': ''}
     end_date = report_end or context.today
     start_date = end_date - datetime.timedelta(days=days)
-    blocks = _annual_observation_report_blocks(final_report_md, context=context)
     dates: list[datetime.date] = []
-    for block in blocks:
-        match = re.search('發布/事件日期\\s*[：:]\\s*(\\d{4}-\\d{2}-\\d{2})', block)
-        date_obj = _candidate_date_obj(match.group(1)) if match else None
+    if structured_candidates is not None:
+        coverage_date_source = 'structured_final_candidates'
+        date_values = (candidate.get('date', '') for candidate in structured_candidates or [])
+    else:
+        coverage_date_source = 'rendered_markdown_compatibility'
+        blocks = _annual_observation_report_blocks(final_report_md, context=context)
+        date_values = (
+            match.group(1)
+            for block in blocks
+            for match in [re.search('發布/事件日期\\s*[：:]\\s*(\\d{4}-\\d{2}-\\d{2})', block)]
+            if match
+        )
+    for value in date_values:
+        date_obj = _candidate_date_obj(str(value or ''))
         if date_obj and start_date <= date_obj <= end_date + datetime.timedelta(days=1):
             dates.append(date_obj)
     month_keys = _iter_calendar_months(start_date, end_date, context=context)
@@ -2139,7 +2204,7 @@ def build_final_report_coverage_warning(final_report_md: str, report_days: int, 
     for value in dates:
         key = f'{value.year:04d}-Q{(value.month - 1) // 3 + 1}'
         quarter_counts[key] = quarter_counts.get(key, 0) + 1
-    result = {'long_term_coverage_warning': False, 'reason': '', 'formal_news_with_valid_date_count': len(dates), 'coverage_bucket_type': 'quarter' if days == 365 else 'month', 'coverage_buckets': quarter_counts if days == 365 else monthly_counts, 'monthly_coverage_buckets': monthly_counts, 'quarterly_coverage_buckets': quarter_counts}
+    result = {'long_term_coverage_warning': False, 'reason': '', 'formal_news_with_valid_date_count': len(dates), 'coverage_date_source': coverage_date_source, 'coverage_bucket_type': 'quarter' if days == 365 else 'month', 'coverage_buckets': quarter_counts if days == 365 else monthly_counts, 'monthly_coverage_buckets': monthly_counts, 'quarterly_coverage_buckets': quarter_counts}
     if not dates:
         result.update({'long_term_coverage_warning': True, 'reason': '最終正式新聞沒有可解析日期，無法確認長期報告覆蓋。', 'max_consecutive_empty_months': len(month_keys), 'recent_60_day_count': 0, 'recent_60_day_share': 0.0, 'annual_coverage_quality': 'below_threshold' if days == 365 else ''})
         return result
@@ -2495,7 +2560,17 @@ def normalize_journal_section_format(report_md: str, journal_candidates: list[di
                 source_url,
                 _domain_from_url(source_url),
             )
-            return _source_label_with_link(label, source_url)
+            formal_source = build_formal_report_source(
+                {
+                    **candidate,
+                    "source": label or fallback_label,
+                    "source_display": label or fallback_label,
+                    "url": source_url,
+                }
+            )
+            if formal_source["display_url"]:
+                return f"{formal_source['display_name']}\n{formal_source['display_url']}"
+            return formal_source["display_name"]
         return value
 
     def _append_blank_if_needed() -> None:
@@ -2828,11 +2903,23 @@ def _candidate_source_line(candidate: dict, *, context: ReportPostprocessContext
     raw_source = unescape(str(candidate.get('source') or '').strip())
     if raw_source in _GENERIC_SOURCE_FALLBACKS:
         raw_source = ""
-    source_display = raw_source_display or raw_source or _domain_from_url(source_url) or ''
+    report_source = build_formal_report_source(
+        {
+            **candidate,
+            "source": raw_source_display or raw_source,
+            "source_display": raw_source_display or raw_source,
+            "url": source_url or candidate.get("url", ""),
+        }
+    )
     item_date = _normalize_report_date_text(str(candidate.get('date') or ''))
     if item_date == '日期未知':
         item_date = '日期未明'
-    return normalize_source_line(f'• 資料來源：{source_display}，{item_date}，{source_url}')
+    source_line = f"• 資料來源：{report_source['display_name']}"
+    if report_source['display_url']:
+        source_line += f"\n{report_source['display_url']}"
+    if item_date:
+        source_line += f"\n發布日期：{item_date}"
+    return source_line
 
 
 def _fallback_reason(candidate: dict, *, context: ReportPostprocessContext) -> str:
@@ -3149,7 +3236,7 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
             continue
         reason = _fallback_reason(candidate, context=context) or 'missing_model_candidate'
         _fallback_for_candidate(candidate_id, reason, ['model_block'])
-    sections: list[str] = [f'# {context.report_title}', f'> 資料涵蓋期間：{context.date_range}', f'> 報導範圍：{context.report_scope_label}']
+    sections: list[str] = [f'# {context.report_title}', f'> 資料涵蓋期間：{context.date_range}']
     category_groups = [
         ('一、技術新知', {'技術新知'}),
         ('二、重大事故', {'重大事故'}),

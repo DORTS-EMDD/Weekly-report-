@@ -229,9 +229,7 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
         )
         selected_regions = stored_selected_regions.copy()
         global_scope_selected = scope_mode == "全球（安全白名單來源）"
-        if scope_mode == "全球（安全白名單來源）":
-            st.caption("全球模式會自動納入臺灣與國際捷運資料。")
-        else:
+        if scope_mode != "全球（安全白名單來源）":
             st.caption(
                 f"已選 {len(stored_selected_regions)} / "
                 f"{len(context.advanced_regions)} 個國家"
@@ -288,24 +286,6 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             len(values) for values in context.standards_watchlist.values()
         )
         with st.expander("⚙️ 進階設定", expanded=False):
-            standards_enabled = st.checkbox(
-                "標準改版偵測",
-                value=standards_selected_state,
-                key="type_規範更新",
-                help="啟用規範更新監測與規範追蹤清單；預設關閉。",
-            )
-            if standards_enabled:
-                selected_types.append("規範更新")
-                st.markdown("### 📚 規範追蹤")
-                st.caption(f"已啟用，{standard_count} 項標準")
-                with st.expander("查看規範追蹤清單", expanded=False):
-                    for category, standards in context.standards_watchlist.items():
-                        st.markdown(f"**{category}**：{', '.join(standards)}")
-                st.caption(
-                    "規範追蹤僅作為更新監測清單；若未查得明確修訂、公告、"
-                    "草案、徵詢或新版發布，不會列入正式週報。"
-                )
-
             include_research_supplement = st.checkbox(
                 "國際捷運技術期刊",
                 value=bool(
@@ -340,6 +320,23 @@ def render_sidebar(context: SidebarContext) -> SidebarSelection:
             if demo_cache_mode:
                 st.caption(
                     "目前會顯示預先產製展示報告，不是即時搜尋結果。"
+                )
+
+            standards_enabled = st.checkbox(
+                "📚 規範追蹤／標準改版偵測",
+                value=standards_selected_state,
+                key="type_規範更新",
+                help="啟用規範更新監測與規範追蹤清單；預設關閉。",
+            )
+            if standards_enabled:
+                selected_types.append("規範更新")
+                st.caption(f"已啟用，{standard_count} 項標準")
+                with st.expander("查看規範追蹤清單", expanded=False):
+                    for category, standards in context.standards_watchlist.items():
+                        st.markdown(f"**{category}**：{', '.join(standards)}")
+                st.caption(
+                    "規範追蹤僅作為更新監測清單；若未查得明確修訂、公告、"
+                    "草案、徵詢或新版發布，不會列入正式週報。"
                 )
 
         st.session_state["selected_types_state"] = selected_types
