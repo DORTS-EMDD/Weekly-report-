@@ -140,6 +140,18 @@ PREFETCH_LIMIT_BY_PERIOD = {
     "annual": 25,
 }
 
+FORWARD_ENRICHMENT_BUDGET_BY_PERIOD = {
+    "weekly": 2,
+    "monthly": 5,
+    "annual": 12,
+}
+
+GENERAL_RESCUE_BUDGET_BY_PERIOD = {
+    "weekly": 6,
+    "monthly": 10,
+    "annual": 13,
+}
+
 RESEARCH_SUPPLEMENT_LOOKBACK_DAYS = 90
 
 NORMAL_LOOKBACK_OPTIONS = [7, 14, 30]

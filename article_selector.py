@@ -1617,6 +1617,36 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return PREFETCH_LIMIT_BY_PERIOD["weekly"]
 
 
+    def _period_budget(mapping: dict[str, int], days: int) -> int:
+        try:
+            days = int(days)
+        except (TypeError, ValueError):
+            days = 7
+        if days >= 365:
+            period = "annual"
+        elif days >= 30:
+            period = "monthly"
+        else:
+            period = "weekly"
+        return max(0, int(mapping.get(period, 0) or 0))
+
+
+    def _forward_enrichment_budget_for_period(days: int) -> int:
+        return min(
+            _prefetch_limit_for_period(days),
+            _period_budget(FORWARD_ENRICHMENT_BUDGET_BY_PERIOD, days),
+        )
+
+
+    def _general_rescue_budget_for_period(days: int) -> int:
+        total_limit = _prefetch_limit_for_period(days)
+        forward_budget = _forward_enrichment_budget_for_period(days)
+        return min(
+            max(0, total_limit - forward_budget),
+            _period_budget(GENERAL_RESCUE_BUDGET_BY_PERIOD, days),
+        )
+
+
     def _candidate_prefetch_signal(candidate: dict) -> bool:
         if candidate.get("source_tier") not in {"A_official", "B_professional", "C_media"}:
             return False
@@ -1625,6 +1655,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return False
         if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
             return False
+        if candidate.get("search_family") == "forward_technology":
+            return _is_forward_enrichment_candidate(candidate)
         if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
             return True
         if _is_high_priority_rescue_candidate(candidate) or _is_procurement_rescue_candidate(candidate):
@@ -1652,6 +1684,29 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             or _is_short_snippet_rescue_candidate(candidate)
             or _is_procurement_rescue_candidate(candidate)
         )
+
+
+    def _is_forward_enrichment_candidate(candidate: dict) -> bool:
+        """Queue promising forward candidates before the strict gate can reject snippets."""
+        if candidate.get("search_family") != "forward_technology":
+            return False
+        if candidate.get("source_tier") not in {"A_official", "B_professional", "C_media"}:
+            return False
+        if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
+            return False
+        title = str(candidate.get("title", "") or "")
+        text = _candidate_selection_text(candidate)
+        if not _has_clear_urban_rail_context(text, candidate.get("source", "")):
+            return False
+        if _contains_any_term(text, RESCUE_LOW_VALUE_TERMS) or _is_generic_ai_marketing(candidate):
+            return False
+        emerging_terms = FORWARD_TRACK_B_EMERGING_TERMS + [
+            "technology", "technologies", "innovation", "innovative", "engineering",
+            "research", "prototype", "advanced", "intelligent",
+        ]
+        title_signal = _contains_any_term(title, emerging_terms)
+        text_signal = _contains_any_term(text, emerging_terms)
+        return bool(title_signal or text_signal)
 
 
     def _is_annual_quality_rescue_candidate(candidate: dict) -> bool:
@@ -1746,34 +1801,54 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def prefetch_candidates_before_filter(candidates: list[dict]) -> dict:
         limit = _prefetch_limit_for_period(lookback_days)
+        forward_budget = _forward_enrichment_budget_for_period(lookback_days)
+        general_budget = _general_rescue_budget_for_period(lookback_days)
         stats = {
             "limit": limit,
+            "forward_enrichment_budget": forward_budget,
+            "general_rescue_budget": general_budget,
+            "annual_general_rescue_budget": general_budget if lookback_int >= 365 else 0,
             "eligible_count": 0,
             "attempted_count": 0,
             "success_count": 0,
             "failed_count": 0,
             "skipped_limit_count": 0,
+            "forward_enrichment_candidate_count": 0,
+            "forward_enrichment_attempted_count": 0,
+            "forward_enrichment_success_count": 0,
+            "forward_enrichment_skipped_count": 0,
+            "forward_enrichment_failure_reason_counts": {},
             "elapsed_seconds": 0.0,
         }
         started = time.perf_counter()
         eligible = [candidate for candidate in candidates or [] if _candidate_prefetch_signal(candidate)]
+        forward_eligible = [
+            candidate for candidate in eligible
+            if candidate.get("search_family") == "forward_technology"
+        ]
+        general_eligible = [candidate for candidate in eligible if candidate not in forward_eligible]
         for candidate in eligible:
             candidate["rescue_candidate"] = True
             candidate["rescue_type"] = (
-                "procurement_rescue_candidate"
-                if _is_procurement_rescue_candidate(candidate)
+                "forward_enrichment"
+                if candidate.get("search_family") == "forward_technology"
                 else (
-                    "annual_quality_rescue"
-                    if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate)
-                    else "short_snippet_rescue"
+                    "procurement_rescue_candidate"
+                    if _is_procurement_rescue_candidate(candidate)
+                    else (
+                        "annual_quality_rescue"
+                        if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate)
+                        else "short_snippet_rescue"
+                    )
                 )
             )
         stats["eligible_count"] = len(eligible)
         stats["rescue_candidate_count"] = len(eligible)
+        stats["forward_enrichment_candidate_count"] = len(forward_eligible)
         stats["rescue_enrichment_attempted_count"] = 0
         stats["rescue_enrichment_success_count"] = 0
         annual_rescue_candidates = [
-            candidate for candidate in eligible
+            candidate for candidate in general_eligible
             if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate)
         ]
         stats["annual_rescue_candidate_count"] = len(annual_rescue_candidates)
@@ -1823,6 +1898,29 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 -_date_sort_key(item),
             )
 
+        def _forward_rescue_priority(item: dict) -> tuple:
+            title = str(item.get("title", "") or "")
+            text = _candidate_selection_text(item)
+            emerging_count = sum(
+                1 for term in FORWARD_TRACK_B_EMERGING_TERMS
+                if term.casefold() in text.casefold()
+            )
+            title_strength = sum(
+                1 for term in (
+                    "technology", "innovation", "advanced", "prototype", "pilot",
+                    "digital twin", "predictive maintenance", "energy storage",
+                )
+                if term.casefold() in title.casefold()
+            )
+            return (
+                _source_tier_rank(item.get("source_tier", "C_media")),
+                _quality_rank(item.get("source_quality", "B")),
+                -emerging_count,
+                -title_strength,
+                len(str(item.get("snippet", "") or "")),
+                -_date_sort_key(item),
+            )
+
         annual_candidates_by_bucket: dict[str, list[dict]] = {}
         for candidate in annual_rescue_candidates:
             bucket = _annual_rescue_bucket(candidate)
@@ -1831,15 +1929,15 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         for bucket in annual_candidates_by_bucket:
             annual_candidates_by_bucket[bucket].sort(key=_rescue_priority)
 
-        ordered_eligible: list[dict] = []
+        ordered_general: list[dict] = []
         if lookback_int >= 365 and annual_candidates_by_bucket:
             buckets = sorted(annual_candidates_by_bucket)
-            base_budget, remainder = divmod(limit, len(buckets))
+            base_budget, remainder = divmod(general_budget, len(buckets))
             bucket_budgets = {
                 bucket: base_budget + (1 if index < remainder else 0)
                 for index, bucket in enumerate(buckets)
             }
-            while len(ordered_eligible) < min(limit, len(annual_rescue_candidates)):
+            while len(ordered_general) < min(general_budget, len(annual_rescue_candidates)):
                 added = False
                 for bucket in buckets:
                     if bucket_budgets[bucket] <= 0:
@@ -1848,40 +1946,49 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                     if not bucket_candidates:
                         bucket_budgets[bucket] = 0
                         continue
-                    ordered_eligible.append(bucket_candidates.pop(0))
+                    ordered_general.append(bucket_candidates.pop(0))
                     bucket_budgets[bucket] -= 1
                     added = True
-                    if len(ordered_eligible) >= limit:
+                    if len(ordered_general) >= general_budget:
                         break
                 if not added:
                     break
-            if len(ordered_eligible) < limit:
+            if len(ordered_general) < general_budget:
                 remaining_annual = [
                     candidate
                     for candidates_in_bucket in annual_candidates_by_bucket.values()
                     for candidate in candidates_in_bucket
                 ]
-                ordered_eligible.extend(
-                    sorted(remaining_annual, key=_rescue_priority)[: limit - len(ordered_eligible)]
+                ordered_general.extend(
+                    sorted(remaining_annual, key=_rescue_priority)[: general_budget - len(ordered_general)]
                 )
-        ordered_eligible.extend(
+        ordered_general.extend(
             sorted(
-                [candidate for candidate in eligible if candidate not in ordered_eligible],
+                [candidate for candidate in general_eligible if candidate not in ordered_general],
                 key=lambda item: (
                     0 if lookback_int >= 365 and _is_annual_quality_rescue_candidate(item) else 1,
                     _rescue_priority(item),
                 ),
-            )
+            )[: max(0, general_budget - len(ordered_general))]
         )
-        for candidate in ordered_eligible:
-            if stats["attempted_count"] >= limit:
+        ordered_forward = sorted(forward_eligible, key=_forward_rescue_priority)[:forward_budget]
+        ordered_eligible = ordered_forward + ordered_general
+        selected_ids = {id(candidate) for candidate in ordered_eligible}
+        for candidate in forward_eligible:
+            if id(candidate) not in selected_ids:
+                candidate["prefetch_status"] = "skipped_forward_enrichment_budget"
+                stats["forward_enrichment_skipped_count"] += 1
+        for candidate in general_eligible:
+            if id(candidate) not in selected_ids:
                 candidate["prefetch_status"] = "skipped_limit"
                 stats["skipped_limit_count"] += 1
-                continue
+        for candidate in ordered_eligible:
             stats["attempted_count"] += 1
             candidate["prefetch_attempted"] = True
             candidate["rescue_enrichment_attempted"] = True
             stats["rescue_enrichment_attempted_count"] += 1
+            if candidate.get("search_family") == "forward_technology":
+                stats["forward_enrichment_attempted_count"] += 1
             if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
                 bucket = _annual_rescue_bucket(candidate)
                 annual_rescue_buckets_attempted.add(bucket)
@@ -1899,6 +2006,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 stats["success_count"] += 1
                 candidate["rescue_enrichment_success"] = True
                 stats["rescue_enrichment_success_count"] += 1
+                if candidate.get("search_family") == "forward_technology":
+                    stats["forward_enrichment_success_count"] += 1
                 if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
                     bucket = _annual_rescue_bucket(candidate)
                     annual_rescue_buckets_succeeded.add(bucket)
@@ -1906,6 +2015,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             else:
                 stats["failed_count"] += 1
                 candidate["rescue_enrichment_success"] = False
+                if candidate.get("search_family") == "forward_technology":
+                    reason = str(result.get("reason", "unknown") or "unknown")
+                    counts = stats["forward_enrichment_failure_reason_counts"]
+                    counts[reason] = counts.get(reason, 0) + 1
             if candidate.get("search_family") == "forward_technology":
                 after_payload = _compute_cross_system_emerging_technology_gate(candidate)
                 candidate["track_b_gate_pass_after_enrichment"] = bool(after_payload.get("track_b_gate_pass"))
@@ -5792,7 +5905,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_compute_candidate_page_type": _compute_candidate_page_type,
         "_candidate_page_type": _candidate_page_type,
         "_prefetch_limit_for_period": _prefetch_limit_for_period,
+        "_forward_enrichment_budget_for_period": _forward_enrichment_budget_for_period,
+        "_general_rescue_budget_for_period": _general_rescue_budget_for_period,
         "_candidate_prefetch_signal": _candidate_prefetch_signal,
+        "_is_forward_enrichment_candidate": _is_forward_enrichment_candidate,
         "_is_annual_quality_rescue_candidate": _is_annual_quality_rescue_candidate,
         "_is_high_priority_rescue_candidate": _is_high_priority_rescue_candidate,
         "_is_short_snippet_rescue_candidate": _is_short_snippet_rescue_candidate,

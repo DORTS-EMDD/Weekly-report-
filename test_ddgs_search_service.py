@@ -29,21 +29,21 @@ FIXTURE_QUERY = "fixture metro query"
 FIXED_TODAY = datetime.date(2026, 7, 23)
 
 EXPECTED_SCENARIO_SHA256 = {
-    "plan_global": "2974c4ac2f204de7d06fd95c0a5ecf0adb0c62809156a06c9ccc0eb5febb30b7",
+    "plan_global": "ffce6caa36da496f4f3f8b28752d480b6ff039b738fad1fd479c643600d40297",
     "plan_no_selected": "c0eec20ff3111558b6152298874210963286a06cdd4884f5b9ec3438e4e0e0cf",
-    "plan_regions": "69fccda206f49775ec021b2b72e50f1c9b28c5c35efb6ae200aa2bee5ce43b22",
+    "plan_regions": "95f8143ea6c94c6db8bcb59eff0e3db295d9f2105009653f545e0b03a9ec56ca",
     "plan_standards": "cb6b2fe9685384b703768601bfe0794a0c86d0fa32841de68de5cf000991b1cb",
-    "run_no_selected": "df6bdda3d41658aa831a54c59e398b808d0f8d47be0350ca9ae9f9e4edf33aea",
-    "run_success": "dd007470beaf0dfad44aa4a74ca3b7a6e2c713ecfcb1d9ab4f9808bfd9a92086",
-    "run_timeout": "d6c294fb579ce42ec73fd701ff6dd8709b8c7c433f5fa98d0ca1d498caa0b8fb",
-    "run_zero": "277da364a06f1ec316630260c6ed76babb48fa72a2cf9618564fb6723a4c98ae",
-    "run_excluded": "a512fa80d244d7954d793340913448669fa87e6d5644e5fa6bd7478725bf8221",
-    "run_403": "cf2f629106f091f0de26c7cac0708ae849b49802bad9d4fb6cd661c08b1a33e6",
-    "run_429": "d6fbbcd2952e0b51abd968629c638aa2a13558ff02953a65ecc0922be1a7d86f",
-    "run_exception": "50a441dbe2181f839bbd9f95641f7539e1f46b602cb93e117b57b2d1a6b827cb",
-    "run_missing": "14d57cb4343602d65bc6de466f7352cf35a9d758923fa7dbe19722182fdbc656",
+    "run_no_selected": "c0154e3c47b4ab31ed2c0c0da83d0cabda70656ef238bd0425e4274faf6fae5e",
+    "run_success": "cfc546fee77a6349e07065680177b0340ba60cda820565d326de4ed7e500f115",
+    "run_timeout": "960479b32fc46fd1939d320d5b58e55067817370ea21b26baa062d0576f76e66",
+    "run_zero": "64717e6565a3ab40d765bec6df60f907562eec4f1838c343360e0545825a3d77",
+    "run_excluded": "d5b6ecd8819a89b0bbebd88ce69d1379148913711cb55615234b1b813aa8f8d6",
+    "run_403": "638dce41f37b36df8dc309ea9b92403dea8d932295a79842d1edc588baca609e",
+    "run_429": "4023ede256cba4c4a4df1d918e25e7e823d2cb027157b6ef86f8f2d9265287e4",
+    "run_exception": "7ddd514f722e53d0c53dbf0b9623545f6d127879071ece6a03e571a09f815e91",
+    "run_missing": "7af4f7c33915f1cc56a9a479014e56cfdaf880a57c12e451b85d9b589cf25aa9",
 }
-EXPECTED_AGGREGATE_SHA256 = "3b92bf86ee9a1a960ee2c49f5be099456535e515fc176f839d4daca9d93f5b9c"
+EXPECTED_AGGREGATE_SHA256 = "120dece2777ff4258bc972daaafdd7c0fe32a8ab689d4a8839c7917ac6c2825d"
 
 
 class ProgressRecorder:

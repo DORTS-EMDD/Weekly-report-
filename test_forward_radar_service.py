@@ -78,7 +78,7 @@ def run_fixture(rows=None):
 class ForwardRadarServiceTest(unittest.TestCase):
     def test_only_forward_family_and_default_lookback(self):
         result = run_fixture([])
-        self.assertEqual(result["query_count"], 8)
+        self.assertEqual(result["query_count"], 20)
         self.assertEqual(result["query_families"], ["forward_technology"])
         self.assertEqual(result["period"]["lookback_days"], 30)
         self.assertEqual(result["counts"]["raw"], 0)
@@ -86,7 +86,7 @@ class ForwardRadarServiceTest(unittest.TestCase):
     def test_classification_places_candidates_in_a_b_and_c(self):
         result = run_fixture()
         self.assertEqual(result["counts"], {
-            "raw": 32,
+            "raw": 80,
             "deduplicated": 4,
             "urban_rail": 4,
             "report_eligible": 1,

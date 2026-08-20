@@ -1022,6 +1022,30 @@ def build_pipeline_debug_stats(
         item for item in raw_candidates or []
         if item.get("search_family") == "forward_technology"
     ]
+    def _forward_topic(item: dict) -> str:
+        if item.get("forward_topic"):
+            return str(item["forward_topic"])
+        query = item.get("search_query") or item.get("query") or ""
+        metadata = (LAST_DDGS_QUERY_METADATA or {}).get(query, {}) or {}
+        return str(metadata.get("topic") or "unassigned")
+
+    forward_raw_count_by_topic: dict[str, int] = {}
+    for item in forward_raw_candidates:
+        topic = _forward_topic(item)
+        forward_raw_count_by_topic[topic] = forward_raw_count_by_topic.get(topic, 0) + 1
+    forward_deduped_candidates = [
+        item for item in deduped_candidates or []
+        if item.get("search_family") == "forward_technology"
+    ]
+    forward_candidate_count_by_lane: dict[str, int] = {}
+    for item in forward_deduped_candidates:
+        lanes = item.get("retrieval_lanes") or ([item.get("retrieval_lane")] if item.get("retrieval_lane") else ["unassigned"])
+        for lane in lanes:
+            forward_candidate_count_by_lane[str(lane)] = forward_candidate_count_by_lane.get(str(lane), 0) + 1
+    forward_multi_lane_candidates = sum(
+        1 for item in forward_deduped_candidates
+        if len(item.get("retrieval_lanes") or []) > 1
+    )
     forward_gate_pass_count = sum(
         1 for item in filtered_candidates or []
         if (item.get("category_gates") or {}).get("forward_technology")
@@ -1199,6 +1223,20 @@ def build_pipeline_debug_stats(
         "forward_technology_primary_raw_count": search_summary.get("forward_technology_primary_raw_count", 0),
         "forward_technology_fallback_raw_count": search_summary.get("forward_technology_fallback_raw_count", 0),
         "forward_technology_raw_count": len(forward_raw_candidates),
+        "forward_query_calls_total": int(search_summary.get("forward_query_calls_total", 0) or 0),
+        "forward_query_calls_by_lane": dict(search_summary.get("forward_query_calls_by_lane", {}) or {}),
+        "forward_raw_by_lane": dict(search_summary.get("forward_raw_by_lane", {}) or {}),
+        "forward_empty_queries_by_lane": dict(search_summary.get("forward_empty_queries_by_lane", {}) or {}),
+        "forward_domains_by_lane": dict(search_summary.get("forward_domains_by_lane", {}) or {}),
+        "forward_unique_total": len(forward_deduped_candidates),
+        "forward_duplicates_removed": max(0, len(forward_raw_candidates) - len(forward_deduped_candidates)),
+        "forward_candidates_multi_lane_count": forward_multi_lane_candidates,
+        "forward_unique_by_lane": forward_candidate_count_by_lane,
+        "forward_provenance_preserved": all(
+            bool(item.get("retrieval_provenance")) for item in forward_raw_candidates
+        ) if forward_raw_candidates else True,
+        "forward_query_count_by_topic": dict(search_summary.get("forward_query_count_by_topic", {}) or {}),
+        "forward_raw_count_by_topic": forward_raw_count_by_topic,
         "forward_technology_gate_pass_count": forward_gate_pass_count,
         "forward_technology_selected_count": 0,
         "forward_gate_failure_reason_counts": forward_gate_failure_reason_counts,
@@ -1218,6 +1256,21 @@ def build_pipeline_debug_stats(
         "track_b_rescue_candidate_count": sum(1 for item in forward_evaluated_candidates if item.get("rescue_candidate")),
         "track_b_enrichment_attempted_count": sum(1 for item in forward_evaluated_candidates if item.get("rescue_enrichment_attempted")),
         "track_b_enrichment_success_count": sum(1 for item in forward_evaluated_candidates if item.get("rescue_enrichment_success")),
+        "forward_enrichment_candidate_count": int(
+            (prefetch_stats or {}).get("forward_enrichment_candidate_count", 0) or 0
+        ),
+        "forward_enrichment_attempted_count": int(
+            (prefetch_stats or {}).get("forward_enrichment_attempted_count", 0) or 0
+        ),
+        "forward_enrichment_success_count": int(
+            (prefetch_stats or {}).get("forward_enrichment_success_count", 0) or 0
+        ),
+        "forward_enrichment_skipped_count": int(
+            (prefetch_stats or {}).get("forward_enrichment_skipped_count", 0) or 0
+        ),
+        "forward_enrichment_failure_reason_counts": dict(
+            (prefetch_stats or {}).get("forward_enrichment_failure_reason_counts", {}) or {}
+        ),
         "track_b_gate_pass_before_enrichment_count": int(
             (prefetch_stats or {}).get(
                 "track_b_gate_pass_before_enrichment_count",
@@ -1226,6 +1279,20 @@ def build_pipeline_debug_stats(
             or 0
         ),
         "track_b_gate_pass_after_enrichment_count": int(
+            (prefetch_stats or {}).get(
+                "track_b_gate_pass_after_enrichment_count",
+                sum(1 for item in forward_evaluated_candidates if item.get("track_b_gate_pass_after_enrichment")),
+            )
+            or 0
+        ),
+        "forward_gate_pass_count_before_enrichment": int(
+            (prefetch_stats or {}).get(
+                "track_b_gate_pass_before_enrichment_count",
+                sum(1 for item in forward_evaluated_candidates if item.get("track_b_gate_pass_before_enrichment")),
+            )
+            or 0
+        ),
+        "forward_gate_pass_count_after_enrichment": int(
             (prefetch_stats or {}).get(
                 "track_b_gate_pass_after_enrichment_count",
                 sum(1 for item in forward_evaluated_candidates if item.get("track_b_gate_pass_after_enrichment")),
@@ -1258,6 +1325,9 @@ def build_pipeline_debug_stats(
             "annual_coverage": "PENDING",
         },
         "forward_technology_material_candidate_count": sum(
+            1 for item in forward_raw_candidates if _is_forward_material_candidate(item)
+        ),
+        "forward_material_raw_count": sum(
             1 for item in forward_raw_candidates if _is_forward_material_candidate(item)
         ),
     }
@@ -3075,6 +3145,8 @@ if generate_btn:
                 "forward_technology_primary_raw_count": pipeline_debug_stats.get("forward_technology_primary_raw_count", 0),
                 "forward_technology_fallback_raw_count": pipeline_debug_stats.get("forward_technology_fallback_raw_count", 0),
                 "forward_technology_raw_count": pipeline_debug_stats.get("forward_technology_raw_count", 0),
+                "forward_query_count_by_topic": pipeline_debug_stats.get("forward_query_count_by_topic", {}),
+                "forward_raw_count_by_topic": pipeline_debug_stats.get("forward_raw_count_by_topic", {}),
                 "forward_technology_gate_pass_count": pipeline_debug_stats.get("forward_technology_gate_pass_count", 0),
                 "forward_technology_selected_count": pipeline_debug_stats.get("forward_technology_selected_count", 0),
                 "forward_gate_failure_reason_counts": pipeline_debug_stats.get("forward_gate_failure_reason_counts", {}),
@@ -3083,12 +3155,20 @@ if generate_btn:
                 "forward_selected_ids": pipeline_debug_stats.get("forward_selected_ids", []),
                 "forward_selected_titles": pipeline_debug_stats.get("forward_selected_titles", []),
                 "forward_technology_material_candidate_count": pipeline_debug_stats.get("forward_technology_material_candidate_count", 0),
+                "forward_material_raw_count": pipeline_debug_stats.get("forward_material_raw_count", 0),
                 "forward_technology_material_selected_count": pipeline_debug_stats.get("forward_technology_material_selected_count", 0),
                 "track_a_gate_pass_count": pipeline_debug_stats.get("track_a_gate_pass_count", 0),
                 "track_b_gate_pass_count": pipeline_debug_stats.get("track_b_gate_pass_count", 0),
                 "track_a_selected_count": pipeline_debug_stats.get("track_a_selected_count", 0),
                 "track_b_selected_count": pipeline_debug_stats.get("track_b_selected_count", 0),
                 "track_b_exclusion_reason_counts": pipeline_debug_stats.get("track_b_exclusion_reason_counts", {}),
+                "forward_enrichment_candidate_count": pipeline_debug_stats.get("forward_enrichment_candidate_count", 0),
+                "forward_enrichment_attempted_count": pipeline_debug_stats.get("forward_enrichment_attempted_count", 0),
+                "forward_enrichment_success_count": pipeline_debug_stats.get("forward_enrichment_success_count", 0),
+                "forward_enrichment_skipped_count": pipeline_debug_stats.get("forward_enrichment_skipped_count", 0),
+                "forward_enrichment_failure_reason_counts": pipeline_debug_stats.get("forward_enrichment_failure_reason_counts", {}),
+                "forward_gate_pass_count_before_enrichment": pipeline_debug_stats.get("forward_gate_pass_count_before_enrichment", 0),
+                "forward_gate_pass_count_after_enrichment": pipeline_debug_stats.get("forward_gate_pass_count_after_enrichment", 0),
                 "candidate_card_limit": candidate_pool.get("candidate_card_limit", len(candidate_pool["candidate_cards"])),
                 "candidate_card_count": len(candidate_pool["candidate_cards"]),
                 "elapsed_seconds_total": timings["elapsed_seconds_total"],

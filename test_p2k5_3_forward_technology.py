@@ -215,8 +215,8 @@ class P2K53ForwardTechnologyTests(unittest.TestCase):
                 news_query_indices={1},
             )
         self.assertEqual(summary["forward_technology_primary_raw_count"], 1)
-        self.assertEqual(summary["forward_technology_fallback_query_count"], 8)
-        self.assertEqual(summary["forward_technology_fallback_raw_count"], 8)
+        self.assertEqual(summary["forward_technology_fallback_query_count"], 5)
+        self.assertEqual(summary["forward_technology_fallback_raw_count"], 5)
         self.assertTrue(any(row.get("fallback_layer") for row in statuses))
 
 

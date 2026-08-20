@@ -178,26 +178,44 @@ DOMESTIC_ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS = [
     },
 ]
 
+FORWARD_TECHNOLOGY_PRIMARY_QUERY_BUDGET = 20
+FORWARD_TECHNOLOGY_FALLBACK_QUERY_BUDGET = 5
+FORWARD_TECHNOLOGY_LANE_BUDGETS = {
+    "BROAD_DISCOVERY": 7,
+    "DUAL_ANCHOR": 7,
+    "SOURCE_AWARE": 4,
+    "QUOTED_ASSIST": 2,
+}
+
 FORWARD_TECHNOLOGY_QUERY_SPECS = [
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail light rail tram novel material prototype tested reduce vehicle weight energy consumption"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail track new coating pilot trial reduce friction wear extend service life"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail AI machine learning computer vision sensor pilot automated inspection reduce inspection time"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail predictive maintenance condition monitoring pilot improve reliability reduce maintenance"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail traction energy optimization regenerative energy storage demonstration reduce energy consumption improve efficiency"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail new fire resistant composite insulation material prototype tested improve safety reduce emissions"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail digital twin cybersecurity anomaly detection control network pilot improve reliability"},
-    {"family": "forward_technology", "lang": "en", "query": "metro subway urban rail advanced signalling virtual coupling RAMS verification validation field test improve capacity"},
+    {"family": "forward_technology", "topic": "energy", "retrieval_lane": "BROAD_DISCOVERY", "lang": "en", "query": "metro energy storage"},
+    {"family": "forward_technology", "topic": "energy", "retrieval_lane": "BROAD_DISCOVERY", "lang": "en", "query": "urban rail traction energy"},
+    {"family": "forward_technology", "topic": "materials", "retrieval_lane": "BROAD_DISCOVERY", "lang": "en", "query": "metro advanced materials"},
+    {"family": "forward_technology", "topic": "materials", "retrieval_lane": "BROAD_DISCOVERY", "lang": "en", "query": "light rail composite materials"},
+    {"family": "forward_technology", "topic": "ai_maintenance", "retrieval_lane": "BROAD_DISCOVERY", "lang": "en", "query": "urban rail predictive maintenance"},
+    {"family": "forward_technology", "topic": "digital_twin", "retrieval_lane": "BROAD_DISCOVERY", "lang": "en", "query": "metro digital twin"},
+    {"family": "forward_technology", "topic": "advanced_control", "retrieval_lane": "BROAD_DISCOVERY", "lang": "en", "query": "metro advanced signalling"},
+    {"family": "forward_technology", "topic": "energy", "retrieval_lane": "DUAL_ANCHOR", "lang": "en", "query": "metro traction power energy storage"},
+    {"family": "forward_technology", "topic": "materials", "retrieval_lane": "DUAL_ANCHOR", "lang": "en", "query": "metro rolling stock composite materials"},
+    {"family": "forward_technology", "topic": "ai_maintenance", "retrieval_lane": "DUAL_ANCHOR", "lang": "en", "query": "metro maintenance condition monitoring"},
+    {"family": "forward_technology", "topic": "ai_maintenance", "retrieval_lane": "DUAL_ANCHOR", "lang": "en", "query": "urban rail inspection machine learning"},
+    {"family": "forward_technology", "topic": "digital_twin", "retrieval_lane": "DUAL_ANCHOR", "lang": "en", "query": "metro asset digital twin"},
+    {"family": "forward_technology", "topic": "digital_twin", "retrieval_lane": "DUAL_ANCHOR", "lang": "en", "query": "urban rail infrastructure digital twin"},
+    {"family": "forward_technology", "topic": "advanced_control", "retrieval_lane": "DUAL_ANCHOR", "lang": "en", "query": "metro signalling train control"},
+    {"family": "forward_technology", "topic": "energy", "retrieval_lane": "SOURCE_AWARE", "lang": "en", "query": "metro railway technology publication energy"},
+    {"family": "forward_technology", "topic": "materials", "retrieval_lane": "SOURCE_AWARE", "lang": "en", "query": "urban rail advanced materials publication"},
+    {"family": "forward_technology", "topic": "ai_maintenance", "retrieval_lane": "SOURCE_AWARE", "lang": "en", "query": "metro predictive maintenance research institute"},
+    {"family": "forward_technology", "topic": "advanced_control", "retrieval_lane": "SOURCE_AWARE", "lang": "en", "query": "metro manufacturer vehicle control"},
+    {"family": "forward_technology", "topic": "digital_twin", "retrieval_lane": "QUOTED_ASSIST", "lang": "en", "query": '"urban rail" digital twin'},
+    {"family": "forward_technology", "topic": "advanced_control", "retrieval_lane": "QUOTED_ASSIST", "lang": "en", "query": '"metro system" train control'},
 ]
 
 FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS = [
-    {"family": "forward_technology", "lang": "en", "query": "metro AI maintenance"},
-    {"family": "forward_technology", "lang": "en", "query": "subway predictive maintenance"},
-    {"family": "forward_technology", "lang": "en", "query": "metro digital twin"},
-    {"family": "forward_technology", "lang": "en", "query": "urban rail cybersecurity"},
-    {"family": "forward_technology", "lang": "en", "query": "metro energy storage"},
-    {"family": "forward_technology", "lang": "en", "query": "subway energy technology"},
-    {"family": "forward_technology", "lang": "en", "query": "light rail new materials"},
-    {"family": "forward_technology", "lang": "en", "query": "metro smart maintenance"},
+    {"family": "forward_technology", "topic": "energy", "retrieval_lane": "SOURCE_AWARE", "lang": "en", "query": "metro energy recovery transit authority"},
+    {"family": "forward_technology", "topic": "materials", "retrieval_lane": "SOURCE_AWARE", "lang": "en", "query": "urban rail lightweight materials manufacturer"},
+    {"family": "forward_technology", "topic": "ai_maintenance", "retrieval_lane": "SOURCE_AWARE", "lang": "en", "query": "metro intelligent maintenance research institute"},
+    {"family": "forward_technology", "topic": "digital_twin", "retrieval_lane": "SOURCE_AWARE", "lang": "en", "query": "light rail digital maintenance publication"},
+    {"family": "forward_technology", "topic": "advanced_control", "retrieval_lane": "SOURCE_AWARE", "lang": "en", "query": "urban rail train automation operator"},
 ]
 
 GLOBAL_REGIONAL_COVERAGE_QUERY_SPECS = [

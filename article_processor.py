@@ -1022,6 +1022,21 @@ def _make_news_candidate(
         candidate["date_bucket"] = query_metadata["date_bucket"]
     if query_metadata.get("annual_bucket_families"):
         candidate["annual_bucket_families"] = list(query_metadata["annual_bucket_families"])
+    if query_metadata.get("topic"):
+        candidate["forward_topic"] = query_metadata["topic"]
+    retrieval_lane = str(query_metadata.get("retrieval_lane", "") or "").strip()
+    if retrieval_lane:
+        candidate["retrieval_lane"] = retrieval_lane
+        candidate["retrieval_lanes"] = [retrieval_lane]
+        candidate["retrieval_provenance"] = [{
+            "retrieval_lane": retrieval_lane,
+            "query_family": search_family,
+            "query": _clean_text(query),
+            "source_domain": raw_domain,
+            "timelimit": query_metadata.get("timelimit", ""),
+        }]
+    if query_metadata.get("forward_subtopic"):
+        candidate["forward_subtopic"] = query_metadata["forward_subtopic"]
     candidate["region"] = _region_guess_from_candidate(candidate)
     return candidate
 
@@ -1308,8 +1323,51 @@ def _is_same_event_duplicate(candidate: dict, existing: dict, max_days: int = 3)
     return True
 
 
+def _merge_retrieval_provenance(existing: dict, duplicate: dict) -> bool:
+    existing_lanes = list(existing.get("retrieval_lanes") or ([existing.get("retrieval_lane")] if existing.get("retrieval_lane") else []))
+    duplicate_lanes = list(duplicate.get("retrieval_lanes") or ([duplicate.get("retrieval_lane")] if duplicate.get("retrieval_lane") else []))
+    before_lanes = set(existing_lanes)
+    for lane in duplicate_lanes:
+        if lane and lane not in existing_lanes:
+            existing_lanes.append(lane)
+    if existing_lanes:
+        existing["retrieval_lane"] = existing_lanes[0]
+        existing["retrieval_lanes"] = existing_lanes
+    existing_provenance = list(existing.get("retrieval_provenance") or [])
+    duplicate_provenance = list(duplicate.get("retrieval_provenance") or [])
+    seen_provenance = {
+        (
+            row.get("retrieval_lane", ""),
+            row.get("query", ""),
+            row.get("source_domain", ""),
+        )
+        for row in existing_provenance
+        if isinstance(row, dict)
+    }
+    for row in duplicate_provenance:
+        if not isinstance(row, dict):
+            continue
+        signature = (
+            row.get("retrieval_lane", ""),
+            row.get("query", ""),
+            row.get("source_domain", ""),
+        )
+        if signature not in seen_provenance:
+            existing_provenance.append(row)
+            seen_provenance.add(signature)
+    if existing_provenance:
+        existing["retrieval_provenance"] = existing_provenance
+    return len(existing_lanes) > 1 and len(before_lanes) < 2
+
+
 def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[dict], dict[str, int]]:
-    stats = {"URL 重複": 0, "標題正規化重複": 0, "標題相似重複": 0, "同事件重複": 0}
+    stats = {
+        "URL 重複": 0,
+        "標題正規化重複": 0,
+        "標題相似重複": 0,
+        "同事件重複": 0,
+        "multi_lane_candidates": 0,
+    }
     seen_urls: set[str] = set()
     seen_title_keys: set[str] = set()
     title_entries: list[dict] = []
@@ -1330,15 +1388,37 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
         url_key = _dedupe_url(candidate.get("url", ""))
         title_key = _normalize_title(candidate.get("title", ""))
         if url_key and url_key in seen_urls:
+            existing = next((item for item in deduped if _dedupe_url(item.get("url", "")) == url_key), None)
+            if existing and _merge_retrieval_provenance(existing, candidate):
+                stats["multi_lane_candidates"] += 1
             stats["URL 重複"] += 1
             continue
         if title_key and title_key in seen_title_keys:
+            existing = next((item for item in title_entries if _normalize_title(item.get("title", "")) == title_key), None)
+            if existing and _merge_retrieval_provenance(existing, candidate):
+                stats["multi_lane_candidates"] += 1
             stats["標題正規化重複"] += 1
             continue
-        if title_key and any(_is_similar_title_duplicate(candidate, existing, similarity_threshold) for existing in title_entries):
+        similar_existing = next(
+            (
+                existing
+                for existing in title_entries
+                if _is_similar_title_duplicate(candidate, existing, similarity_threshold)
+            ),
+            None,
+        )
+        if title_key and similar_existing:
+            if _merge_retrieval_provenance(similar_existing, candidate):
+                stats["multi_lane_candidates"] += 1
             stats["標題相似重複"] += 1
             continue
-        if any(_is_same_event_duplicate(candidate, existing) for existing in deduped):
+        same_event_existing = next(
+            (existing for existing in deduped if _is_same_event_duplicate(candidate, existing)),
+            None,
+        )
+        if same_event_existing:
+            if _merge_retrieval_provenance(same_event_existing, candidate):
+                stats["multi_lane_candidates"] += 1
             stats["同事件重複"] += 1
             continue
         if url_key:

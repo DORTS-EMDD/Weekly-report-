@@ -222,7 +222,24 @@ def build_developer_debug_payload(
         or latest_stats.get("source_health_summary")
         or context.source_health_summary_builder(source_health)
     )
-    return _json_safe({
+    pipeline_debug_stats = debug_info.get("pipeline_debug_stats", {}) if debug_info else {}
+    forward_debug_keys = (
+        "forward_query_count_by_topic",
+        "forward_raw_count_by_topic",
+        "forward_material_raw_count",
+        "forward_enrichment_candidate_count",
+        "forward_enrichment_attempted_count",
+        "forward_enrichment_success_count",
+        "forward_enrichment_skipped_count",
+        "forward_enrichment_failure_reason_counts",
+        "forward_gate_pass_count_before_enrichment",
+        "forward_gate_pass_count_after_enrichment",
+    )
+    has_forward_debug = any(
+        key in latest_stats or key in pipeline_debug_stats
+        for key in forward_debug_keys
+    )
+    payload = {
         "run_info": {
             "generated_at": context.now_provider().isoformat(timespec="seconds"),
             "report_date": run_config.get("report_date"),
@@ -505,4 +522,22 @@ def build_developer_debug_payload(
             debug_info.get("latest_report_md", context.latest_report_md)
             if debug_info else context.latest_report_md
         ),
-    })
+    }
+    if has_forward_debug:
+        forward_debug_defaults = {
+            "forward_query_count_by_topic": {},
+            "forward_raw_count_by_topic": {},
+            "forward_material_raw_count": 0,
+            "forward_enrichment_candidate_count": 0,
+            "forward_enrichment_attempted_count": 0,
+            "forward_enrichment_success_count": 0,
+            "forward_enrichment_skipped_count": 0,
+            "forward_enrichment_failure_reason_counts": {},
+            "forward_gate_pass_count_before_enrichment": 0,
+            "forward_gate_pass_count_after_enrichment": 0,
+        }
+        payload["stats"].update({
+            key: latest_stats.get(key, pipeline_debug_stats.get(key, default))
+            for key, default in forward_debug_defaults.items()
+        })
+    return _json_safe(payload)

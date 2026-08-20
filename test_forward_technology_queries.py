@@ -50,63 +50,54 @@ class ForwardTechnologyQueryTests(unittest.TestCase):
             if context.query_metadata[query].get("family") == "forward_technology"
         ]
 
-        self.assertGreaterEqual(len(forward_queries), 5)
-        self.assertLessEqual(len(forward_queries), 10)
+        self.assertGreaterEqual(len(forward_queries), 15)
+        self.assertLessEqual(len(forward_queries), 30)
         self.assertEqual(len(forward_queries), len(search_queries.FORWARD_TECHNOLOGY_QUERY_SPECS))
-        self.assertEqual(len(queries), 40)
+        self.assertEqual(
+            {context.query_metadata[query].get("topic") for query in forward_queries},
+            {"energy", "materials", "ai_maintenance", "digital_twin", "advanced_control"},
+        )
 
-    def test_forward_queries_are_effect_oriented_and_urban_rail_contextual(self):
-        forward_queries = [
-            spec["query"].casefold()
-            for spec in search_queries.FORWARD_TECHNOLOGY_QUERY_SPECS
-        ]
+    def test_forward_queries_are_short_generic_and_urban_rail_contextual(self):
         urban_rail_terms = ("metro", "subway", "urban rail", "light rail", "tram")
-        novelty_terms = ("novel", "new method", "newly developed", "prototype", "emerging technology")
-        application_terms = ("tested", "trial", "pilot", "demonstration", "deployed", "field test")
-        effect_terms = (
-            "reduce",
-            "improve",
-            "extend service life",
-            "energy saving",
-            "energy consumption",
-        )
+        topic_terms = {
+            "energy": ("energy", "power"),
+            "materials": ("material",),
+            "ai_maintenance": ("maintenance", "inspection", "diagnosis"),
+            "digital_twin": ("digital", "asset", "geospatial"),
+            "advanced_control": ("signalling", "control", "automation", "inspection"),
+        }
 
-        for query in forward_queries:
+        for spec in search_queries.FORWARD_TECHNOLOGY_QUERY_SPECS:
+            query = spec["query"].casefold()
+            self.assertLessEqual(len(query.split()), 5, msg=query)
             self.assertTrue(any(term in query for term in urban_rail_terms), msg=query)
-            self.assertTrue(
-                any(term in query for term in novelty_terms)
-                or any(term in query for term in application_terms)
-                or any(term in query for term in effect_terms),
-                msg=query,
-            )
-            self.assertNotIn(query.strip(), {"ai", "energy", "material", "innovation"})
+            self.assertTrue(any(term in query for term in topic_terms[spec["topic"]]), msg=query)
 
-    def test_forward_family_covers_requested_effects_without_named_materials(self):
-        all_queries = " ".join(
+    def test_forward_queries_do_not_embed_benchmark_combinations(self):
+        queries = [
             spec["query"].casefold()
-            for spec in search_queries.FORWARD_TECHNOLOGY_QUERY_SPECS
+            for spec in (
+                search_queries.FORWARD_TECHNOLOGY_QUERY_SPECS
+                + search_queries.FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS
+            )
+        ]
+        forbidden_combinations = (
+            ("hydrogen", "superconducting", "battery"),
+            ("low-floor", "composite"),
+            ("webgis", "digital twin"),
+            ("generative ai", "digital twin", "emergency maintenance"),
         )
-        required_effects = (
-            ("energy",),
-            ("weight",),
-            ("friction", "wear"),
-            ("maintenance", "service life"),
-            ("reliability",),
-            ("safety",),
-            ("inspection", "sensor"),
-        )
-
-        for effect_group in required_effects:
-            self.assertTrue(any(term in all_queries for term in effect_group), msg=effect_group)
-        self.assertIn("novel material", all_queries)
-        self.assertIn("reduce vehicle weight", all_queries)
-        self.assertIn("energy consumption", all_queries)
-        self.assertNotIn("carbon fiber", all_queries)
-        self.assertNotIn("specific alloy", all_queries)
-        self.assertNotIn("specific coating product", all_queries)
+        for combination in forbidden_combinations:
+            self.assertFalse(
+                any(all(term in query for term in combination) for query in queries),
+                combination,
+            )
 
     def test_forward_queries_fit_existing_search_budget(self):
-        self.assertLessEqual(len(search_queries.FORWARD_TECHNOLOGY_QUERY_SPECS), 10)
+        self.assertGreaterEqual(len(search_queries.FORWARD_TECHNOLOGY_QUERY_SPECS), 15)
+        self.assertLessEqual(len(search_queries.FORWARD_TECHNOLOGY_QUERY_SPECS), 30)
+        self.assertLessEqual(len(search_queries.FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS), 5)
         self.assertLessEqual(
             len(search_queries.FORWARD_TECHNOLOGY_QUERY_SPECS),
             config.DDGS_GLOBAL_QUERY_LIMIT,

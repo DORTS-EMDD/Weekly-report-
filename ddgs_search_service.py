@@ -41,6 +41,8 @@ from search_queries import (
     ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS,
     FORWARD_TECHNOLOGY_QUERY_SPECS,
     FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS,
+    FORWARD_TECHNOLOGY_PRIMARY_QUERY_BUDGET,
+    FORWARD_TECHNOLOGY_FALLBACK_QUERY_BUDGET,
     GLOBAL_REGIONAL_COVERAGE_QUERY_SPECS,
     QUERY_FAMILY_BY_TYPE_INDEX,
     REGION_QUERY_LANGUAGES,
@@ -244,7 +246,7 @@ def _query_metadata_for(query: str, *, context: DdgsSearchContext) -> dict:
     metadata = context.query_metadata.get(query or "", {}) or {}
     if metadata:
         return metadata
-    return {
+    status_row = {
         "family": _search_family_from_query(query, query_metadata=context.query_metadata),
         "lang": _search_language_from_query(query, query_metadata=context.query_metadata),
         "query_region": "unplanned",
@@ -252,6 +254,7 @@ def _query_metadata_for(query: str, *, context: DdgsSearchContext) -> dict:
         "timelimit": _ddgs_timelimit_for_lookback(context.lookback_int),
         "requested_max_results": DDGS_RESULTS_PER_QUERY,
     }
+    return status_row
 
 
 def _regional_query_spec_sequence(families: list[str], preferred_lang: str) -> list[dict]:
@@ -327,6 +330,9 @@ def build_search_queries(
         use_news: bool = True,
         query_region: str = "global",
         domestic_topic: str = "",
+        topic: str = "",
+        retrieval_lane: str = "",
+        forward_subtopic: str = "",
         date_bucket: str = "",
         annual_bucket_families: list[str] | None = None,
     ) -> bool:
@@ -348,6 +354,12 @@ def build_search_queries(
         }
         if domestic_topic:
             context.query_metadata[final_query]["domestic_topic"] = domestic_topic
+        if topic:
+            context.query_metadata[final_query]["topic"] = topic
+        if retrieval_lane:
+            context.query_metadata[final_query]["retrieval_lane"] = retrieval_lane
+        if forward_subtopic:
+            context.query_metadata[final_query]["forward_subtopic"] = forward_subtopic
         if date_bucket:
             context.query_metadata[final_query]["date_bucket"] = date_bucket
         if annual_bucket_families:
@@ -361,9 +373,11 @@ def build_search_queries(
     include_official = "official_investigation" in selected_families
     content_families = [family for family in selected_families if family != "official_investigation"]
     if include_forward_technology:
-        forward_specs = _active_query_specs("forward_technology")
+        forward_specs = _active_query_specs("forward_technology")[:FORWARD_TECHNOLOGY_PRIMARY_QUERY_BUDGET]
+        forward_fallback_specs = FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS[:FORWARD_TECHNOLOGY_FALLBACK_QUERY_BUDGET]
     else:
         forward_specs = []
+        forward_fallback_specs = []
 
     annual_breakthrough_specs = (
         ANNUAL_TECHNOLOGY_BREAKTHROUGH_QUERY_SPECS
@@ -466,7 +480,8 @@ def build_search_queries(
                 len(annual_bucket_queries)
                 + len(annual_family_specs)
                 + min(3, len(annual_breakthrough_specs))
-                + min(len(forward_specs), 8)
+                + len(forward_specs)
+                + len(forward_fallback_specs)
                 + len(global_coverage_specs)
             )
             core_query_limit = max(0, query_limit - annual_supplement_reserve)
@@ -508,7 +523,7 @@ def build_search_queries(
                     annual_bucket_families=annual_bucket_families,
                 )
         else:
-            forward_reserve = min(len(forward_specs), 8)
+            forward_reserve = len(forward_specs) + len(forward_fallback_specs)
             core_query_limit = max(0, query_limit - forward_reserve - len(global_coverage_specs))
             for family in content_families:
                 for spec in _active_query_specs(family):
@@ -534,6 +549,9 @@ def build_search_queries(
                 family="forward_technology",
                 lang=spec.get("lang", "en"),
                 use_news=bool(spec.get("use_news", True)),
+                topic=spec.get("topic", ""),
+                retrieval_lane=spec.get("retrieval_lane", "BROAD_DISCOVERY"),
+                forward_subtopic=spec.get("forward_subtopic", ""),
             ):
                 context.forward_technology_query_count += 1
         for spec in annual_breakthrough_specs[:3]:
@@ -558,7 +576,7 @@ def build_search_queries(
         bucket_reserve = len(annual_bucket_queries) if annual_bucket_queries else 0
         annual_family_reserve = len(annual_family_specs)
         breakthrough_reserve = min(3, len(annual_breakthrough_specs))
-        forward_reserve = min(len(forward_specs), 8)
+        forward_reserve = len(forward_specs) + len(forward_fallback_specs)
         country_budget = max(
             0,
             query_limit - official_reserve - bucket_reserve - breakthrough_reserve - forward_reserve - annual_family_reserve - len(queries),
@@ -613,13 +631,22 @@ def build_search_queries(
                     date_bucket=bucket,
                     annual_bucket_families=annual_bucket_families,
                 )
+        forward_region = regions[0] if len(regions) == 1 else "selected_regions"
+        forward_prefix = (
+            f"{REGION_SEARCH_TERMS.get(regions[0], regions[0])} "
+            if len(regions) == 1
+            else ""
+        )
         for spec in forward_specs:
             if _add(
-                f"{REGION_SEARCH_TERMS.get(regions[0], regions[0])} {spec.get('query', '')}",
+                f"{forward_prefix}{spec.get('query', '')}",
                 family="forward_technology",
                 lang=REGION_QUERY_LANGUAGES.get(regions[0], "en"),
                 use_news=bool(spec.get("use_news", True)),
-                query_region=regions[0],
+                query_region=forward_region,
+                topic=spec.get("topic", ""),
+                retrieval_lane=spec.get("retrieval_lane", "BROAD_DISCOVERY"),
+                forward_subtopic=spec.get("forward_subtopic", ""),
             ):
                 context.forward_technology_query_count += 1
         for spec in annual_breakthrough_specs[:3]:
@@ -687,7 +714,7 @@ def _ddgs_query_status_template(
     family = metadata.get("family", "general")
     language = metadata.get("lang", "en")
     requested = int(metadata.get("requested_max_results", DDGS_RESULTS_PER_QUERY) or DDGS_RESULTS_PER_QUERY)
-    return {
+    status_row = {
         "search_family": family,
         "search_language": language,
         "query": query,
@@ -709,11 +736,16 @@ def _ddgs_query_status_template(
         "date_bucket": metadata.get("date_bucket", ""),
         "annual_bucket_families": list(metadata.get("annual_bucket_families", ()) or ()),
         "fallback_layer": metadata.get("fallback_layer", ""),
+        "retrieval_lane": metadata.get("retrieval_lane", ""),
+        "forward_subtopic": metadata.get("forward_subtopic", ""),
         # Backward-compatible aliases retained for existing developer tooling.
         "family": family,
         "lang": language,
         "requested": requested,
     }
+    if metadata.get("topic"):
+        status_row["forward_topic"] = metadata["topic"]
+    return status_row
 
 
 def ddgs_queries_by_outcome(statuses: list[dict], outcome: str) -> list[dict]:
@@ -870,6 +902,58 @@ def build_ddgs_search_summary(
     summary["forward_technology_raw_count"] = sum(
         int(row.get("added_to_raw_count", 0) or 0) for row in forward_rows
     )
+    summary["forward_query_calls_total"] = len(forward_rows)
+    summary["forward_query_calls_by_lane"] = {
+        lane: sum(
+            1
+            for row in forward_rows
+            if (row.get("retrieval_lane") or "unassigned") == lane
+        )
+        for lane in sorted(
+            {str(row.get("retrieval_lane") or "unassigned") for row in forward_rows}
+        )
+    }
+    summary["forward_raw_by_lane"] = {
+        lane: sum(
+            int(row.get("added_to_raw_count", 0) or 0)
+            for row in forward_rows
+            if (row.get("retrieval_lane") or "unassigned") == lane
+        )
+        for lane in sorted({str(row.get("retrieval_lane") or "unassigned") for row in forward_rows})
+    }
+    summary["forward_empty_queries_by_lane"] = {
+        lane: sum(
+            1
+            for row in forward_rows
+            if (row.get("retrieval_lane") or "unassigned") == lane
+            and int(row.get("added_to_raw_count", 0) or 0) == 0
+        )
+        for lane in sorted({str(row.get("retrieval_lane") or "unassigned") for row in forward_rows})
+    }
+    summary["forward_domains_by_lane"] = {
+        lane: sorted({
+            domain
+            for row in forward_rows
+            if (row.get("retrieval_lane") or "unassigned") == lane
+            for domain in (row.get("result_domains") or [])
+            if domain
+        })
+        for lane in sorted({str(row.get("retrieval_lane") or "unassigned") for row in forward_rows})
+    }
+    if forward_rows:
+        forward_topics = sorted({str(row.get("forward_topic") or "unassigned") for row in forward_rows})
+        summary["forward_query_count_by_topic"] = {
+            topic: sum(1 for row in forward_rows if (row.get("forward_topic") or "unassigned") == topic)
+            for topic in forward_topics
+        }
+        summary["forward_raw_count_by_topic"] = {
+            topic: sum(
+                int(row.get("added_to_raw_count", 0) or 0)
+                for row in forward_rows
+                if (row.get("forward_topic") or "unassigned") == topic
+            )
+            for topic in forward_topics
+        }
     if any(row.get("date_bucket") for row in rows):
         summary["query_count_by_date_bucket"] = _count_by("date_bucket")
         annual_bucket_family_coverage: dict[str, dict[str, int]] = {}
@@ -917,6 +1001,7 @@ def _run_single_query(
         status_row["date_bucket"] = metadata["date_bucket"]
     context.sleep(context.random_uniform(0.1, 0.4))
     result_items: list[dict] = []
+    result_domains: set[str] = set()
     final_backend = ""
     last_exception: Exception | None = None
     errors: list[str] = []
@@ -968,6 +1053,9 @@ def _run_single_query(
                         continue
                     if _candidate_date_obj(item_date):
                         status_row["date_valid_count"] += 1
+                    result_domain = urlparse(href).netloc.casefold()
+                    if result_domain:
+                        result_domains.add(result_domain)
                     result_items.append({
                         "title": title,
                         "summary": body,
@@ -994,6 +1082,7 @@ def _run_single_query(
 
     status_row["basic_excluded_count"] = sum(status_row["excluded_counts_by_reason"].values())
     status_row["added_to_raw_count"] = len(result_items)
+    status_row["result_domains"] = sorted(result_domains)
     status_row["backend"] = final_backend
     if status_row["returned_count"] > 0 and result_items:
         execution_status = "success"
@@ -1117,7 +1206,7 @@ def run_duckduckgo_searches(
             ]
         else:
             region_groups = [[]]
-        for spec_index, spec in enumerate(FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS):
+        for spec_index, spec in enumerate(FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS[:FORWARD_TECHNOLOGY_FALLBACK_QUERY_BUDGET]):
             region_group = region_groups[spec_index % len(region_groups)]
             region_prefix = " ".join(
                 " ".join(REGION_SEARCH_TERMS.get(region, region).split()[:6])
@@ -1139,6 +1228,8 @@ def run_duckduckgo_searches(
                 "requested_max_results": DDGS_RESULTS_PER_QUERY,
                 "planned_index": total + len(fallback_queries),
                 "fallback_layer": "forward_technology_urban_rail_constrained",
+                "topic": spec.get("topic", ""),
+                "retrieval_lane": spec.get("retrieval_lane", "SOURCE_AWARE"),
             }
         if fallback_queries:
             fallback_workers = max(1, min(6, len(fallback_queries)))
@@ -1175,7 +1266,7 @@ def run_duckduckgo_searches(
     )
     summary = build_ddgs_search_summary(
         statuses,
-        total,
+        len(statuses),
         planned_required_families=context.planned_required_families,
         annual_breakthrough_query_count=context.annual_breakthrough_query_count,
     )
