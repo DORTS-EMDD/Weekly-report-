@@ -181,6 +181,11 @@ from streamlit_report_ui import (
     render_report_display,
 )
 from streamlit_debug_ui import DebugUiContext, render_developer_debug_ui
+from diagnostics.p2_k5_12r_global_category import (
+    build_major_accident_diagnostic,
+    build_operational_diagnostic,
+    build_procurement_retrieval_diagnostic,
+)
 from report_prompt_service import (
     ReportPromptContext,
     build_report_prompt as service_build_report_prompt,
@@ -1107,6 +1112,52 @@ def build_pipeline_debug_stats(
         bucket = _annual_bucket(item)
         if bucket and any((item.get("category_gates") or {}).values()):
             annual_gate_pass_by_bucket[bucket] = annual_gate_pass_by_bucket.get(bucket, 0) + 1
+    raw_incident_candidates = [
+        item for item in raw_candidates or []
+        if item.get("search_family") in {"major_accident", "official_investigation"}
+    ]
+    evaluated_incident_candidates = [
+        item for item in gate_evaluated_candidates
+        if item.get("search_family") in {"major_accident", "official_investigation"}
+    ]
+    major_accident_diagnostic = build_major_accident_diagnostic(
+        evaluated_incident_candidates,
+        limit=30,
+    )
+    major_accident_diagnostic["raw_count"] = len(raw_incident_candidates)
+    raw_operational_candidates = [
+        item for item in raw_candidates or []
+        if item.get("search_family") in {"policy", "dispute", "service_opening"}
+    ]
+    evaluated_operational_candidates = [
+        item for item in gate_evaluated_candidates
+        if item.get("search_family") in {"policy", "dispute", "service_opening"}
+    ]
+    operational_diagnostic = build_operational_diagnostic(
+        evaluated_operational_candidates,
+        limit=30,
+    )
+    operational_diagnostic["raw_count"] = len(raw_operational_candidates)
+    raw_procurement_candidates = [
+        item for item in raw_candidates or []
+        if item.get("search_family") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY
+    ]
+    evaluated_procurement_candidates = [
+        item for item in gate_evaluated_candidates
+        if item.get("search_family") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY
+    ]
+    procurement_diagnostic = build_procurement_retrieval_diagnostic(
+        LAST_DDGS_QUERY_STATUSES,
+        evaluated_procurement_candidates,
+        active_regions=active_regions,
+        is_global_scope=is_global_scope,
+    )
+    procurement_diagnostic["raw_candidate_count"] = len(raw_procurement_candidates)
+    category_coverage_diagnostic = {
+        "major_accident": major_accident_diagnostic,
+        "operational": operational_diagnostic,
+        "procurement": procurement_diagnostic,
+    }
     final_source_tier_counts = _count_by(filtered_candidates, "source_tier")
     official_count = final_source_tier_counts.get("A_official", 0)
     official_ratio = round(official_count / len(filtered_candidates), 4) if filtered_candidates else 0.0
@@ -1307,6 +1358,7 @@ def build_pipeline_debug_stats(
         ),
         "annual_raw_by_bucket": annual_raw_by_bucket,
         "annual_gate_pass_by_bucket": annual_gate_pass_by_bucket,
+        "category_coverage_diagnostic": category_coverage_diagnostic,
         "annual_selected_by_bucket": {},
         "annual_coverage_target": 12,
         "annual_rescue_candidate_count": int((prefetch_stats or {}).get("annual_rescue_candidate_count", 0) or 0),

@@ -27,6 +27,7 @@ from config import (
     DEFAULT_NEWS_SCOPE,
     ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
     ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+    INTERNATIONAL_ELECTROMECHANICAL_PROCUREMENT_QUERY_BUDGET,
     SERVICE_OPENING_CATEGORY_KEY,
     LOW_VALUE_EXCLUDED_HOSTS,
     PORTAL_SOCIAL_LOW_VALUE_DOMAINS,
@@ -384,6 +385,18 @@ def build_search_queries(
         if context.lookback_int >= 365 and "technology" in content_families
         else []
     )
+    international_procurement_specs = (
+        ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS[
+            :INTERNATIONAL_ELECTROMECHANICAL_PROCUREMENT_QUERY_BUDGET
+        ]
+        if (
+            context.lookback_int >= 365
+            and context.news_scope != "domestic"
+            and context.is_global_scope
+            and ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY in content_families
+        )
+        else []
+    )
     required_families = list(content_families)
     if include_forward_technology and context.lookback_int >= 365:
         required_families.append("forward_technology")
@@ -483,11 +496,14 @@ def build_search_queries(
                 + len(forward_specs)
                 + len(forward_fallback_specs)
                 + len(global_coverage_specs)
+                + len(international_procurement_specs)
             )
             core_query_limit = max(0, query_limit - annual_supplement_reserve)
             for spec in specs:
                 if len(queries) >= core_query_limit:
                     break
+                if spec.get("family") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY:
+                    continue
                 _add(
                     spec.get("query", ""),
                     family=spec.get("family", "general"),
@@ -501,6 +517,15 @@ def build_search_queries(
                     lang=spec.get("lang", "en"),
                     use_news=True,
                     query_region=spec.get("region", "global"),
+                )
+            for spec in international_procurement_specs:
+                _add(
+                    spec.get("query", ""),
+                    family=ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+                    lang=spec.get("lang", "en"),
+                    use_news=bool(spec.get("use_news", True)),
+                    query_region="global",
+                    retrieval_lane="international_procurement",
                 )
             for family, spec in annual_family_specs:
                 _add(
@@ -534,6 +559,11 @@ def build_search_queries(
                         family=spec.get("family", family),
                         lang=spec.get("lang", "en"),
                         use_news=bool(spec.get("use_news", True)),
+                        retrieval_lane=(
+                            "international_procurement"
+                            if spec.get("family", family) == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY
+                            else ""
+                        ),
                     )
             for spec in global_coverage_specs:
                 _add(
@@ -618,6 +648,11 @@ def build_search_queries(
                     lang=spec.get("lang", preferred_lang),
                     use_news=bool(spec.get("use_news", True)),
                     query_region=region,
+                    retrieval_lane=(
+                        "international_procurement"
+                        if spec.get("family") == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY
+                        else ""
+                    ),
                 )
         if annual_bucket_queries:
             preferred_lang = REGION_QUERY_LANGUAGES.get(regions[0], "en")

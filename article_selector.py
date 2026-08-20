@@ -138,6 +138,20 @@ NON_ACCIDENT_CONTEXT_TERMS = [
     "一般測試進度", "工程里程碑", "隧道鑽掘機告別", "潛盾機告別", "潛盾機撤場",
 ]
 
+ACADEMIC_ACCIDENT_NON_EVENT_TERMS = [
+    "accident simulation", "accident simulations", "simulation study", "simulation model",
+    "simulated collision", "simulated derailment", "numerical simulation", "scenario analysis",
+    "research paper", "academic paper", "literature review", "risk assessment model",
+    "事故模擬", "事故模擬研究", "模擬事故", "數值模擬", "情境分析", "研究論文",
+]
+
+OPERATIONAL_EVENT_TERMS = [
+    "emergency inspection", "emergency checks", "temporary suspension", "temporary closure",
+    "special service adjustment", "capacity adjustment", "line closure", "service adjustment",
+    "緊急檢查", "緊急檢修", "臨時停駛", "臨時封站", "特殊服務調整", "容量調整",
+    "路線封閉", "服務調整",
+]
+
 URBAN_RAIL_INCIDENT_CONTEXT_TERMS = [
     "metro", "subway", "underground", "tram", "light rail", "lrt", "mrt",
     "urban rail", "funicular", "station", "platform", "train", "track", "railcar",
@@ -3188,6 +3202,14 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return False
         if _contains_any_term(text, NON_ACCIDENT_CONTEXT_TERMS):
             return False
+        if _contains_any_term(text, ACADEMIC_ACCIDENT_NON_EVENT_TERMS) and not _contains_any_term(
+            text,
+            [
+                "actual accident", "real-world incident", "incident occurred", "accident occurred",
+                "事故發生", "實際事故", "事件發生",
+            ],
+        ):
+            return False
         if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
             return False
         for fragment in _candidate_event_fragments(candidate):
@@ -3325,28 +3347,54 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "system failure", "system fault", "mechanical failure", "rolling stock failure",
             "train failure", "equipment malfunction", "設備異常", "系統故障", "機械故障",
         ] + ENVIRONMENTAL_OPERATION_ABNORMALITY_TERMS
+        has_operational_event = _contains_any_term(text, OPERATIONAL_EVENT_TERMS)
         has_equipment_failure = _contains_any_term(text, equipment_terms)
-        has_impact = _contains_any_term(text, TECHNICAL_OPERATION_IMPACT_TERMS)
+        has_impact = _contains_any_term(text, TECHNICAL_OPERATION_IMPACT_TERMS) or has_operational_event
         has_system = _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS) or _contains_any_term(
             text,
             [term for term in equipment_terms if term not in {"equipment failure", "equipment malfunction"}],
         )
+        if not has_system and has_operational_event:
+            has_system = _contains_any_term(
+                text,
+                ["line", "station", "track", "platform", "路線", "車站", "軌道", "月臺", "月台"],
+            )
         minor_only = _contains_any_term(text, [
             "minor delay", "brief delay", "passenger dispute", "personnel issue",
             "schedule change", "輕微延誤", "旅客糾紛", "人事問題", "班表調整",
         ]) and not has_impact
+        planned_only = _contains_any_term(
+            text,
+            [
+                "planned weekend closure", "weekend closure", "scheduled maintenance",
+                "routine maintenance", "service advisory", "預定週末封閉", "週末封閉",
+                "例行維修", "維修公告",
+            ],
+        ) and not has_operational_event and not _contains_any_term(
+            text,
+            ["major disruption", "severe delays", "大幅延誤", "嚴重延誤", "大範圍停駛"],
+        )
         signals = {
             "urban_rail": _candidate_urban_rail_gate(candidate),
             "equipment_failure": has_equipment_failure,
+            "operational_event": has_operational_event,
             "system_evidence": has_system,
             "major_operational_impact": has_impact,
             "minor_only_clear": not minor_only,
+            "planned_only_clear": not planned_only,
             "metadata": _has_valid_operational_metadata(candidate),
         }
         failures = [
-            key for key, enabled in signals.items()
+            key
+            for key, enabled in signals.items()
             if not enabled
+            and key != "operational_event"
+            and not (key == "equipment_failure" and has_operational_event)
         ]
+        if planned_only:
+            failures.append("planned_or_routine_only")
+        if _contains_any_term(text, LOW_REPORT_VALUE_TERMS + LOW_QUALITY_CONTENT_TERMS):
+            failures.append("low_value_content")
         passed = not failures
         return {
             "technical_operation_incident": passed,
