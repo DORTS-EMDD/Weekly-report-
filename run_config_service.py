@@ -53,6 +53,7 @@ class RunSettings:
     selected_report_topic: str
     report_title: str
     is_global_scope: bool
+    region_filter_enabled: bool
     active_regions: list[str]
     report_scope_label: str
     news_scope: str
@@ -147,10 +148,8 @@ def build_run_settings(context: RunSettingsContext) -> RunSettings:
         f"【{context.today.strftime('%Y/%m/%d')}】"
         f"{report_title_scope}{selected_report_topic}{report_period_label}"
     )
-    is_global_scope = (
-        context.scope_mode == "全球（安全白名單來源）"
-        or news_scope == "domestic"
-    )
+    is_global_scope = context.scope_mode == "全球（安全白名單來源）"
+    region_filter_enabled = not is_global_scope
     active_regions = [] if is_global_scope else context.selected_regions
     if news_scope == "domestic":
         report_scope_label = "國內捷運"
@@ -180,6 +179,7 @@ def build_run_settings(context: RunSettingsContext) -> RunSettings:
         selected_report_topic=selected_report_topic,
         report_title=report_title,
         is_global_scope=is_global_scope,
+        region_filter_enabled=region_filter_enabled,
         active_regions=active_regions,
         report_scope_label=report_scope_label,
         news_scope=news_scope,
@@ -207,6 +207,7 @@ class RunConfigContext:
     demo_cache_mode_enabled: bool
     current_app_hash: str
     news_scope: str = DEFAULT_NEWS_SCOPE
+    region_filter_enabled: bool | None = None
 
 
 def build_current_run_config(context: RunConfigContext) -> dict:
@@ -223,6 +224,13 @@ def build_current_run_config(context: RunConfigContext) -> dict:
         "scope_mode": context.scope_mode,
         "selected_regions": (
             ["全球"] if context.is_global_scope else context.active_regions.copy()
+        ),
+        "active_regions": context.active_regions.copy(),
+        "is_global_scope": bool(context.is_global_scope),
+        "region_filter_enabled": (
+            bool(context.region_filter_enabled)
+            if context.region_filter_enabled is not None
+            else not bool(context.is_global_scope)
         ),
         "report_scope_label": context.report_scope_label,
         "news_scope": context.news_scope,

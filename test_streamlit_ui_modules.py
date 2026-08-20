@@ -17,7 +17,7 @@ EXPECTED_SIDEBAR_SHA256 = (
     "943a7335e97ddf84a1c5155d5b3cadb7272c7bb477d3a1126f143c3a9d01a9df"
 )
 EXPECTED_DASHBOARD_SHA256 = (
-    "c85a178cf93a166c291426e5a20210899f50c3151943d1040c280d864905caf4"
+    "360a44823e3701510200ad38cd16cc4e2dfc04e05587750875e917ad79241a7f"
 )
 EXPECTED_REPORT_SHA256 = (
     "4dd2e5ffa5d148c99a246d79f429aee533b539390ecfef8152374dd46ec0e5e8"
@@ -316,6 +316,9 @@ class StreamlitUiModuleTests(unittest.TestCase):
             "selected_types": ["技術新知", "營運政策", "營運爭議"],
             "scope_mode": "指定先進國家",
             "selected_regions": ["美國", "日本"],
+            "active_regions": ["美國", "日本"],
+            "is_global_scope": False,
+            "region_filter_enabled": True,
             "report_scope_label": "美國、日本",
             "news_scope": "international",
             "include_standards": False,

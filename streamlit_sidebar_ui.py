@@ -374,7 +374,4 @@ def _render_sidebar_fragment(context: SidebarContext) -> SidebarSelection:
     return render_sidebar(context, _inside_sidebar=True)
 
 
-if hasattr(st, "fragment"):
-    render_sidebar_fragment = st.fragment(_render_sidebar_fragment)
-else:
-    render_sidebar_fragment = _render_sidebar_fragment
+render_sidebar_fragment = _render_sidebar_fragment

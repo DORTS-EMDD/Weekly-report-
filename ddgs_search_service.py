@@ -1220,7 +1220,13 @@ def run_duckduckgo_searches(
             context.query_metadata[fallback_query] = {
                 "family": "forward_technology",
                 "lang": spec.get("lang", "en"),
-                "query_region": region_group[0] if len(region_group) == 1 else "selected_regions",
+                "query_region": (
+                    region_group[0]
+                    if len(region_group) == 1
+                    else "global"
+                    if not region_group
+                    else "selected_regions"
+                ),
                 "selected_regions": list(selected_regions),
                 "region_group": list(region_group),
                 "use_news": True,

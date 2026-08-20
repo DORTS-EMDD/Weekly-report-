@@ -519,6 +519,7 @@ report_shortfall_summary_line = run_settings.report_shortfall_summary_line
 selected_report_topic = run_settings.selected_report_topic
 report_title = run_settings.report_title
 is_global_scope = run_settings.is_global_scope
+region_filter_enabled = run_settings.region_filter_enabled
 active_regions = run_settings.active_regions
 report_scope_label = run_settings.report_scope_label
 
@@ -563,6 +564,7 @@ def _run_config_context() -> RunConfigContext:
         selected_types=selected_types,
         scope_mode=scope_mode,
         is_global_scope=is_global_scope,
+        region_filter_enabled=region_filter_enabled,
         active_regions=active_regions,
         report_scope_label=report_scope_label,
         standards_enabled=standards_enabled,
@@ -587,11 +589,12 @@ def _build_run_snapshot() -> dict:
     return {
         "lookback_days": int(lookback_days),
         "selected_types": list(selected_types),
-        "selected_regions": list(selected_regions),
+        "selected_regions": list(current_run_config.get("selected_regions", [])),
         "active_regions": list(active_regions),
         "scope_mode": scope_mode,
         "news_scope": news_scope,
         "is_global_scope": bool(is_global_scope),
+        "region_filter_enabled": bool(region_filter_enabled),
         "include_research_supplement": bool(include_research_supplement),
         "standards_enabled": bool(standards_enabled),
         "send_after_generate": bool(send_after_generate),
@@ -1056,26 +1059,22 @@ def build_pipeline_debug_stats(
         for item in (filtered_candidates or []) + (excluded_candidates or [])
         if item.get("search_family") == "forward_technology"
     ]
-    selected_region_values = list(dict.fromkeys(
-        list(selected_regions or [])
-        + [
-            region
-            for item in forward_evaluated_candidates
-            for region in (item.get("query_selected_regions") or [])
-            if region
-        ]
-    ))
+    selected_region_values = list(dict.fromkeys(active_regions)) if region_filter_enabled else []
     forward_candidates_by_region: dict[str, int] = {}
     for item in forward_evaluated_candidates:
         region = item.get("country") or normalize_country(item.get("resolved_region") or item.get("region", "")) or "未判定"
         forward_candidates_by_region[region] = forward_candidates_by_region.get(region, 0) + 1
-    forward_candidates_in_selected_regions = sum(
-        1
-        for item in forward_evaluated_candidates
-        if selected_region_values and region_matches_selected_regions(
-            item.get("country") or normalize_country(item.get("resolved_region") or item.get("region", "")),
-            selected_region_values,
+    forward_candidates_in_selected_regions = (
+        sum(
+            1
+            for item in forward_evaluated_candidates
+            if region_matches_selected_regions(
+                item.get("country") or normalize_country(item.get("resolved_region") or item.get("region", "")),
+                selected_region_values,
+            )
         )
+        if region_filter_enabled
+        else 0
     )
     track_b_exclusion_reason_counts: dict[str, int] = {}
     for item in forward_evaluated_candidates:
@@ -1300,6 +1299,7 @@ def build_pipeline_debug_stats(
             or 0
         ),
         "forward_candidates_by_region": forward_candidates_by_region,
+        "region_filter_enabled": bool(region_filter_enabled),
         "forward_candidates_in_selected_regions": forward_candidates_in_selected_regions,
         "forward_candidates_outside_selected_regions": (
             len(forward_evaluated_candidates) - forward_candidates_in_selected_regions

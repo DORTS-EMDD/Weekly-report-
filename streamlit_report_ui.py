@@ -38,7 +38,6 @@ def render_main_dashboard(
             <div class="hero-meta">
             <span class="hero-pill">今日日期：{context.today.strftime('%Y/%m/%d')}</span>
             <span class="hero-pill">資料涵蓋：{context.week_start.strftime('%Y/%m/%d')} - {context.today.strftime('%Y/%m/%d')}</span>
-            <span class="hero-pill">範圍：{context.scope_mode}</span>
           </div>
         </div>
         """,

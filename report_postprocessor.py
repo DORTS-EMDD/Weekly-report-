@@ -1429,7 +1429,7 @@ def normalize_final_report_md(md: str) -> str:
     text = clean_internal_report_language(md or "")
     text, protected_journal_sections = _protect_journal_sections(text)
     text = re.sub(
-        r"(?m)^\s*>?\s*(?:報導範圍|範圍)\s*[：:]\s*國內\s*[＋+]\s*國際\s*$\n?",
+        r"(?m)^\s*>?\s*(?:報導範圍|範圍)\s*[：:].*$\n?",
         "",
         text,
     )

@@ -535,7 +535,6 @@ def build_report_prompt(
 本次是第二階段正式報告撰寫任務。
 報告標題：{context.report_title}
 資料涵蓋期間：{context.date_range}
-報導範圍：{context.report_scope_label}
 勾選類型：{selected_types_str}
 正式報告章節：
 {selected_sections}
@@ -545,7 +544,6 @@ def build_report_prompt(
 正式報告開頭固定：
 # {context.report_title}
 > 資料涵蓋期間：{context.date_range}
-> 報導範圍：{context.report_scope_label}
 
 正式報告每則新聞請使用以下格式，不得改成表格、簡報式卡片或多層條列，不得新增「技術關鍵字」欄位，不得把「臺北捷運局啟示」拆成子欄位。候選資料中的 country 是正式國家欄位；若 payload 未提供 country，僅可依候選證據判斷，仍無法判斷時省略「國家」欄位；core_systems 為空時，完全省略「相關機電系統」欄位，不得自行補上通用名稱：
 🔹 [新聞類型] 繁體中文新聞標題
