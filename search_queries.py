@@ -137,27 +137,27 @@ ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS = [
     {
         "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
         "lang": "en",
-        "query": "urban rail metro signalling CBTC train control contract tender award",
+        "query": '"urban rail" signalling CBTC contract tender award',
     },
     {
         "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
         "lang": "en",
-        "query": "metro traction power substation electrical system contract procurement",
+        "query": '"metro rail" traction power substation contract procurement',
     },
     {
         "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
         "lang": "en",
-        "query": "metro telecommunications AFC platform screen doors contract tender",
+        "query": 'subway telecommunications AFC platform screen doors contract tender',
     },
     {
         "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
         "lang": "en",
-        "query": "metro rolling stock trains contract order procurement",
+        "query": 'site:railwaygazette.com "urban rail" rolling stock contract order',
     },
     {
         "family": ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
         "lang": "en",
-        "query": "metro station MEP electromechanical systems contract tender",
+        "query": 'site:railwaygazette.com "urban rail" station electromechanical MEP contract',
     },
 ]
 

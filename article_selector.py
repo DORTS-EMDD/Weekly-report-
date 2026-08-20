@@ -152,6 +152,38 @@ OPERATIONAL_EVENT_TERMS = [
     "路線封閉", "服務調整",
 ]
 
+MAJOR_SERVICE_ADJUSTMENT_TERMS = [
+    "timetable change", "timetable changes", "schedule change", "schedule changes",
+    "service frequency", "frequency increase", "increased frequency", "additional trains",
+    "extra services", "headway", "capacity increase", "service resumed",
+    "service suspension", "partial line closure", "significant delays",
+    "ダイヤ改正", "増発", "大増発", "運転間隔", "運休", "運転見合わせ", "運転再開",
+    "班距調整", "增班", "加班車", "增加班次", "恢復營運", "停駛", "暫停營運", "重大延誤",
+]
+
+MAJOR_SERVICE_ADJUSTMENT_SUBSTANTIVE_TERMS = [
+    "frequency", "headway", "increased", "increase", "additional trains", "extra services",
+    "capacity", "major", "significant", "substantial", "service resumed",
+    "partial line closure", "significant delays", "大增", "增發", "増発", "運転間隔",
+    "班距", "增班", "加班車", "增加班次", "重大", "大幅",
+]
+
+SYSTEM_DISRUPTION_TERMS = [
+    "flooded control room", "water flooded the control room", "control room flooding",
+    "water floods control room", "water floods the control room", "flooded the train control room",
+    "water intrusion in control room", "control room flood",
+    "pipe broke", "pipe burst", "signals impacted", "signals affected", "signal impact",
+    "control room affected", "control centre flooded", "control center flooded",
+    "系統中斷", "控制室淹水", "號誌受影響", "信號受影響", "供電中斷", "通訊中斷",
+]
+
+SYSTEM_DISRUPTION_IMPACT_TERMS = [
+    "significant delays", "significant delay", "substantial delays", "major delays",
+    "severe delays", "service suspension", "service suspended", "line disruption",
+    "stations affected", "operations interrupted", "service disruption", "major disruption",
+    "大幅延誤", "嚴重延誤", "停駛", "營運中斷", "路線中斷", "車站受影響",
+]
+
 URBAN_RAIL_INCIDENT_CONTEXT_TERMS = [
     "metro", "subway", "underground", "tram", "light rail", "lrt", "mrt",
     "urban rail", "funicular", "station", "platform", "train", "track", "railcar",
@@ -251,10 +283,19 @@ ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS: dict[str, list[str]] = {
         "places order", "placed order", "orders", "ordered", "order for", "訂購", "下訂",
     ],
     "maintenance_services": [
-        "maintenance services", "rolling stock maintenance", "vehicle maintenance contract",
+        "maintenance service", "maintenance services", "rolling stock maintenance",
+        "vehicle maintenance contract", "maintenance services contract",
         "維修服務", "車輛維修服務",
     ],
 }
+
+PROCUREMENT_URBAN_RAIL_ANCHOR_TERMS = [
+    "urban rail", "urban railway", "metro rail", "metro system", "metro line", "metro station",
+    "subway", "subway system", "subway line", "light rail", "light-rail", "tram", "tramway",
+    "streetcar", "rapid transit", "mass rapid transit", "sydney metro", "tokyo metro",
+    "london underground", "washington metro", "seoul metro", "singapore mrt", "mta subway",
+    "都市軌道", "捷運", "地鐵", "輕軌", "路面電車", "地下鉄",
+]
 
 ELECTROMECHANICAL_GENERIC_SCOPE_TERMS = [
     "e&m package", "e & m package", "electromechanical package",
@@ -1792,20 +1833,50 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return snippet_tokens < 24 or len(snippet.strip()) < 180
 
 
+    def _procurement_urban_rail_context(candidate: dict) -> bool:
+        """Use a stronger rail anchor for the international procurement lane."""
+        text = _candidate_selection_text(candidate)
+        source = str(candidate.get("source", "") or "")
+        topic_text = _strip_source_name_noise(f"{source} {text}")
+        if _contains_any_term(topic_text, CIVIC_METRO_NAME_ONLY_TERMS) and not _contains_any_term(
+            topic_text, PROCUREMENT_URBAN_RAIL_ANCHOR_TERMS
+        ):
+            return False
+        if _contains_any_term(topic_text, NON_URBAN_HARD_EXCLUDE_TERMS) and not _contains_any_term(
+            topic_text, PROCUREMENT_URBAN_RAIL_ANCHOR_TERMS
+        ):
+            return False
+        has_explicit_anchor = _contains_any_term(topic_text, PROCUREMENT_URBAN_RAIL_ANCHOR_TERMS)
+        has_metro_system_anchor = (
+            _contains_any_term(topic_text, ["metro"])
+            and _contains_any_term(
+                topic_text,
+                METRO_RAIL_CONTEXT_TERMS
+                + [term for terms in ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS.values() for term in terms],
+            )
+        )
+        if not _is_urban_rail_candidate(text, source) and not (
+            has_explicit_anchor or has_metro_system_anchor
+        ):
+            return False
+        return has_explicit_anchor or has_metro_system_anchor
+
+
     def _is_procurement_rescue_candidate(candidate: dict) -> bool:
-        text = f"{candidate.get('title', '')} {candidate.get('snippet', '')}"
+        text = _candidate_selection_text(candidate)
         source_tier = candidate.get("source_tier", "")
         source_domain = str(candidate.get("source_domain", "") or "").casefold()
-        official_source = source_tier == "A_official" or source_domain.endswith((".gov", ".gov.uk", ".gov.au", ".gov.sg"))
+        professional_source = source_tier in {"A_official", "B_professional"}
+        official_source = professional_source or source_domain.endswith((".gov", ".gov.uk", ".gov.au", ".gov.sg"))
         action_terms = [term for terms in ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS.values() for term in terms]
         system_terms = [term for terms in ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS.values() for term in terms]
         return bool(
             official_source
             and _candidate_date_obj(candidate.get("date", ""))
             and _has_source_reference(candidate)
-            and _candidate_urban_rail_gate(candidate)
+            and _procurement_urban_rail_context(candidate)
             and _contains_any_term(text, action_terms)
-            and _contains_any_term(text, system_terms)
+            and not _contains_any_term(text, system_terms)
         )
 
 
@@ -1817,10 +1888,15 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         limit = _prefetch_limit_for_period(lookback_days)
         forward_budget = _forward_enrichment_budget_for_period(lookback_days)
         general_budget = _general_rescue_budget_for_period(lookback_days)
+        procurement_budget = min(
+            general_budget,
+            _period_budget(PROCUREMENT_RESCUE_BUDGET_BY_PERIOD, lookback_days),
+        )
         stats = {
             "limit": limit,
             "forward_enrichment_budget": forward_budget,
             "general_rescue_budget": general_budget,
+            "procurement_rescue_budget": procurement_budget,
             "annual_general_rescue_budget": general_budget if lookback_int >= 365 else 0,
             "eligible_count": 0,
             "attempted_count": 0,
@@ -1832,6 +1908,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "forward_enrichment_success_count": 0,
             "forward_enrichment_skipped_count": 0,
             "forward_enrichment_failure_reason_counts": {},
+            "procurement_rescue_candidate_count": 0,
+            "procurement_rescue_attempted_count": 0,
+            "procurement_rescue_success_count": 0,
             "elapsed_seconds": 0.0,
         }
         started = time.perf_counter()
@@ -1841,6 +1920,14 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             if candidate.get("search_family") == "forward_technology"
         ]
         general_eligible = [candidate for candidate in eligible if candidate not in forward_eligible]
+        procurement_eligible = [
+            candidate for candidate in general_eligible
+            if _is_procurement_rescue_candidate(candidate)
+        ]
+        non_procurement_general_eligible = [
+            candidate for candidate in general_eligible
+            if candidate not in procurement_eligible
+        ]
         for candidate in eligible:
             candidate["rescue_candidate"] = True
             candidate["rescue_type"] = (
@@ -1859,10 +1946,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         stats["eligible_count"] = len(eligible)
         stats["rescue_candidate_count"] = len(eligible)
         stats["forward_enrichment_candidate_count"] = len(forward_eligible)
+        stats["procurement_rescue_candidate_count"] = len(procurement_eligible)
         stats["rescue_enrichment_attempted_count"] = 0
         stats["rescue_enrichment_success_count"] = 0
         annual_rescue_candidates = [
-            candidate for candidate in general_eligible
+            candidate for candidate in non_procurement_general_eligible
             if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate)
         ]
         stats["annual_rescue_candidate_count"] = len(annual_rescue_candidates)
@@ -1943,15 +2031,19 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         for bucket in annual_candidates_by_bucket:
             annual_candidates_by_bucket[bucket].sort(key=_rescue_priority)
 
-        ordered_general: list[dict] = []
+        ordered_general: list[dict] = sorted(
+            procurement_eligible,
+            key=_rescue_priority,
+        )[:procurement_budget]
+        remaining_general_budget = max(0, general_budget - len(ordered_general))
         if lookback_int >= 365 and annual_candidates_by_bucket:
             buckets = sorted(annual_candidates_by_bucket)
-            base_budget, remainder = divmod(general_budget, len(buckets))
+            base_budget, remainder = divmod(remaining_general_budget, len(buckets))
             bucket_budgets = {
                 bucket: base_budget + (1 if index < remainder else 0)
                 for index, bucket in enumerate(buckets)
             }
-            while len(ordered_general) < min(general_budget, len(annual_rescue_candidates)):
+            while len(ordered_general) < general_budget and any(bucket_budgets.values()):
                 added = False
                 for bucket in buckets:
                     if bucket_budgets[bucket] <= 0:
@@ -1978,7 +2070,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 )
         ordered_general.extend(
             sorted(
-                [candidate for candidate in general_eligible if candidate not in ordered_general],
+                [candidate for candidate in non_procurement_general_eligible if candidate not in ordered_general],
                 key=lambda item: (
                     0 if lookback_int >= 365 and _is_annual_quality_rescue_candidate(item) else 1,
                     _rescue_priority(item),
@@ -2001,6 +2093,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate["prefetch_attempted"] = True
             candidate["rescue_enrichment_attempted"] = True
             stats["rescue_enrichment_attempted_count"] += 1
+            is_procurement_rescue = candidate.get("rescue_type") == "procurement_rescue_candidate"
+            if is_procurement_rescue:
+                stats["procurement_rescue_attempted_count"] += 1
             if candidate.get("search_family") == "forward_technology":
                 stats["forward_enrichment_attempted_count"] += 1
             if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
@@ -2020,6 +2115,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 stats["success_count"] += 1
                 candidate["rescue_enrichment_success"] = True
                 stats["rescue_enrichment_success_count"] += 1
+                if is_procurement_rescue:
+                    stats["procurement_rescue_success_count"] += 1
                 if candidate.get("search_family") == "forward_technology":
                     stats["forward_enrichment_success_count"] += 1
                 if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
@@ -2975,6 +3072,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         ) and "contract_award" not in actions:
             actions.append("contract_award")
 
+        scope = candidate.get("news_scope") or news_scope
         topic_text = _strip_source_name_noise(title_snippet)
         has_metro_system_context = bool(
             systems
@@ -2983,11 +3081,14 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             and not _contains_any_term(topic_text, NON_URBAN_HARD_EXCLUDE_TERMS)
         )
         urban_rail = (
-            _is_urban_rail_candidate(title_snippet, candidate.get("source", ""))
-            or has_metro_system_context
+            _procurement_urban_rail_context(candidate)
+            if scope == "international"
+            else (
+                _is_urban_rail_candidate(title_snippet, candidate.get("source", ""))
+                or has_metro_system_context
+            )
         )
 
-        scope = candidate.get("news_scope") or news_scope
         domestic_info: dict[str, object] = {}
         has_taiwan_reference = _contains_taiwan_reference(scope_text)
         scope_valid = True
@@ -3094,6 +3195,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "procurement_civil_signals": civil_hits,
             "procurement_planning_signals": planning_hits,
             "procurement_scope": scope,
+            "procurement_urban_rail_context": urban_rail,
+            "procurement_rescue_candidate": bool(candidate.get("rescue_type") == "procurement_rescue_candidate"),
             "procurement_domestic_system": domestic_info.get("domestic_system", ""),
             "procurement_generic_electromechanical_scope": generic_electromechanical_scope,
         }
@@ -3347,13 +3450,40 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "system failure", "system fault", "mechanical failure", "rolling stock failure",
             "train failure", "equipment malfunction", "設備異常", "系統故障", "機械故障",
         ] + ENVIRONMENTAL_OPERATION_ABNORMALITY_TERMS
-        has_operational_event = _contains_any_term(text, OPERATIONAL_EVENT_TERMS)
+        planned_signal = _contains_any_term(
+            text,
+            [
+                "planned weekend closure", "weekend closure", "scheduled maintenance",
+                "routine maintenance", "service advisory", "預定週末封閉", "週末封閉",
+                "例行維修", "維修公告",
+            ],
+        )
+        substantial_impact_signal = _contains_any_term(
+            text,
+            ["major disruption", "severe delays", "significant delays", "大幅延誤", "嚴重延誤", "大範圍停駛"],
+        )
+        has_operational_event = _contains_any_term(text, OPERATIONAL_EVENT_TERMS) and not (
+            planned_signal and not substantial_impact_signal
+        )
         has_equipment_failure = _contains_any_term(text, equipment_terms)
-        has_impact = _contains_any_term(text, TECHNICAL_OPERATION_IMPACT_TERMS) or has_operational_event
+        has_system_disruption = _contains_any_term(text, SYSTEM_DISRUPTION_TERMS)
+        has_system_disruption_impact = has_system_disruption and _contains_any_term(
+            text, SYSTEM_DISRUPTION_IMPACT_TERMS
+        )
+        has_impact = (
+            _contains_any_term(text, TECHNICAL_OPERATION_IMPACT_TERMS)
+            or has_operational_event
+            or has_system_disruption_impact
+        )
         has_system = _contains_any_term(text, CORE_METRO_TECHNICAL_TERMS) or _contains_any_term(
             text,
             [term for term in equipment_terms if term not in {"equipment failure", "equipment malfunction"}],
         )
+        if not has_system and has_system_disruption:
+            has_system = _contains_any_term(
+                text,
+                ["control room", "control centre", "control center", "signal", "signals", "號誌", "信號"],
+            )
         if not has_system and has_operational_event:
             has_system = _contains_any_term(
                 text,
@@ -3378,6 +3508,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "urban_rail": _candidate_urban_rail_gate(candidate),
             "equipment_failure": has_equipment_failure,
             "operational_event": has_operational_event,
+            "system_disruption": has_system_disruption,
+            "system_disruption_impact": (
+                not has_system_disruption or has_system_disruption_impact
+            ),
             "system_evidence": has_system,
             "major_operational_impact": has_impact,
             "minor_only_clear": not minor_only,
@@ -3389,7 +3523,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             for key, enabled in signals.items()
             if not enabled
             and key != "operational_event"
-            and not (key == "equipment_failure" and has_operational_event)
+            and not (key == "equipment_failure" and (has_operational_event or has_system_disruption))
+            and not (key == "system_disruption" and (has_equipment_failure or has_operational_event))
+            and not (key == "system_disruption_impact" and has_operational_event)
         ]
         if planned_only:
             failures.append("planned_or_routine_only")
@@ -3401,6 +3537,66 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "technical_operation_incident_signals": signals,
             "technical_operation_incident_failure_reasons": failures,
         }
+
+
+    def _compute_major_service_adjustment(candidate: dict) -> dict:
+        text = _candidate_selection_text(candidate)
+        urban_rail = _candidate_urban_rail_gate(candidate)
+        metadata = _has_valid_operational_metadata(candidate)
+        adjustment_signal = _contains_any_term(text, MAJOR_SERVICE_ADJUSTMENT_TERMS)
+        substantive_signal = _contains_any_term(text, MAJOR_SERVICE_ADJUSTMENT_SUBSTANTIVE_TERMS)
+        quantified_signal = bool(
+            re.search(
+                r"(?:\d+\s*(?:%|percent|minutes?|mins?|trains?|services?|車次|班次|分間隔|分間隔))",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+        substantial_impact = substantive_signal or quantified_signal
+        routine_only = _contains_any_term(
+            text,
+            [
+                "routine weekend", "weekend service notice", "routine timetable notice",
+                "planned weekend closure", "weekend closure", "minor temporary closure",
+                "例行週末", "週末服務公告", "預定週末封閉", "週末封閉", "小幅臨時封閉",
+            ],
+        ) and not substantial_impact
+        if routine_only:
+            substantial_impact = False
+        failures: list[str] = []
+        signals: list[str] = []
+        if urban_rail:
+            signals.append("urban_rail")
+        else:
+            failures.append("urban_rail_missing")
+        if metadata:
+            signals.append("source_and_date")
+        else:
+            failures.append("source_or_date_missing")
+        if adjustment_signal:
+            signals.append("service_adjustment")
+        else:
+            failures.append("service_adjustment_signal_missing")
+        if substantial_impact:
+            signals.append("substantial_service_impact")
+        else:
+            failures.append("substantial_impact_missing")
+        if routine_only:
+            failures.append("routine_or_minor_notice")
+        passed = not failures
+        return {
+            "major_service_adjustment": passed,
+            "major_service_adjustment_signals": signals,
+            "major_service_adjustment_failure_reasons": list(dict.fromkeys(failures)),
+        }
+
+
+    def _passes_major_service_adjustment(candidate: dict) -> bool:
+        return _cached_candidate_bool(
+            candidate,
+            "major_service_adjustment",
+            lambda item: bool(_compute_major_service_adjustment(item).get("major_service_adjustment")),
+        )
 
 
     def _passes_technical_operation_incident(candidate: dict) -> bool:
@@ -3454,6 +3650,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return False
         if _passes_major_accident_gate(candidate) or _is_dispute_dominant(candidate):
             return False
+        if _passes_major_service_adjustment(candidate):
+            return True
         if _passes_technical_triad(candidate) and not _is_policy_dominant(candidate):
             return False
         if _contains_any_term(text, LOW_REPORT_VALUE_TERMS + LOW_QUALITY_CONTENT_TERMS):
@@ -3544,6 +3742,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         procurement_gate_payload = _compute_electromechanical_procurement_gate(candidate)
         service_opening_payload = _compute_service_opening_gate(candidate)
         technical_operation_incident_payload = _compute_technical_operation_incident(candidate)
+        major_service_adjustment_payload = _compute_major_service_adjustment(candidate)
         major_accident_pass = _passes_major_accident_gate(candidate)
         major_accident_signals: list[str] = []
         major_accident_failure_reasons: list[str] = []
@@ -3567,11 +3766,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         policy_signal = _contains_any_term(
             text,
             HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS,
-        )
+        ) or bool(major_service_adjustment_payload.get("major_service_adjustment"))
         policy_signals = {
             "urban_rail": _candidate_urban_rail_gate(candidate),
             "source_and_date": _has_valid_operational_metadata(candidate),
             "policy_signal": policy_signal,
+            "major_service_adjustment": bool(major_service_adjustment_payload.get("major_service_adjustment")),
         }
         policy_failure_reasons = [key for key, enabled in policy_signals.items() if not enabled]
         if _passes_major_accident_gate(candidate):
@@ -3594,7 +3794,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "operational_dispute": _passes_operational_dispute_gate(candidate),
             "operational_policy": _passes_high_value_policy_gate(candidate) or bool(
                 technical_operation_incident_payload.get("technical_operation_incident")
-            ),
+            ) or bool(major_service_adjustment_payload.get("major_service_adjustment")),
             SERVICE_OPENING_CATEGORY_KEY: bool(service_opening_payload.get("service_opening_gate_pass")),
             ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY: bool(
                 procurement_category_selected
@@ -3628,6 +3828,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             reasons["operational_policy"] = (
                 "設備或系統故障造成重大營運影響，列入營運動態。"
                 if technical_operation_incident_payload.get("technical_operation_incident")
+                else "班距、增班或重大服務調整具實質營運影響，列入營運動態。"
+                if major_service_adjustment_payload.get("major_service_adjustment")
                 else "具系統、路線、容量或制度層級營運影響。"
             )
         elif _contains_any_term(text, HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS):
@@ -3725,6 +3927,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 if gates.get(SERVICE_OPENING_CATEGORY_KEY)
                 else "technical_operation_incident"
                 if technical_operation_incident_payload.get("technical_operation_incident")
+                else "major_service_adjustment"
+                if major_service_adjustment_payload.get("major_service_adjustment")
                 else "dispute"
                 if gates.get("operational_dispute")
                 else "policy"
@@ -3735,6 +3939,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "category_reclassification": category_reclassification,
             **service_opening_payload,
             **technical_operation_incident_payload,
+            **major_service_adjustment_payload,
             **procurement_gate_payload,
             "major_accident_signals": list(dict.fromkeys(major_accident_signals)),
             "major_accident_failure_reasons": list(dict.fromkeys(major_accident_failure_reasons)),
@@ -5960,6 +6165,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_is_annual_quality_rescue_candidate": _is_annual_quality_rescue_candidate,
         "_is_high_priority_rescue_candidate": _is_high_priority_rescue_candidate,
         "_is_short_snippet_rescue_candidate": _is_short_snippet_rescue_candidate,
+        "_procurement_urban_rail_context": _procurement_urban_rail_context,
         "_is_procurement_rescue_candidate": _is_procurement_rescue_candidate,
         "_is_pre_gate_rescue_candidate": _is_pre_gate_rescue_candidate,
         "prefetch_candidates_before_filter": prefetch_candidates_before_filter,
@@ -6012,6 +6218,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_passes_operational_dispute_gate": _passes_operational_dispute_gate,
         "_compute_technical_operation_incident": _compute_technical_operation_incident,
         "_passes_technical_operation_incident": _passes_technical_operation_incident,
+        "_compute_major_service_adjustment": _compute_major_service_adjustment,
+        "_passes_major_service_adjustment": _passes_major_service_adjustment,
         "_is_dispute_dominant": _is_dispute_dominant,
         "_is_policy_dominant": _is_policy_dominant,
         "_is_short_term_service_notice": _is_short_term_service_notice,

@@ -185,6 +185,8 @@ from diagnostics.p2_k5_12r_global_category import (
     build_major_accident_diagnostic,
     build_operational_diagnostic,
     build_procurement_retrieval_diagnostic,
+    is_major_accident_provenance,
+    is_operational_provenance,
 )
 from report_prompt_service import (
     ReportPromptContext,
@@ -1113,12 +1115,10 @@ def build_pipeline_debug_stats(
         if bucket and any((item.get("category_gates") or {}).values()):
             annual_gate_pass_by_bucket[bucket] = annual_gate_pass_by_bucket.get(bucket, 0) + 1
     raw_incident_candidates = [
-        item for item in raw_candidates or []
-        if item.get("search_family") in {"major_accident", "official_investigation"}
+        item for item in raw_candidates or [] if is_major_accident_provenance(item)
     ]
     evaluated_incident_candidates = [
-        item for item in gate_evaluated_candidates
-        if item.get("search_family") in {"major_accident", "official_investigation"}
+        item for item in gate_evaluated_candidates if is_major_accident_provenance(item)
     ]
     major_accident_diagnostic = build_major_accident_diagnostic(
         evaluated_incident_candidates,
@@ -1126,12 +1126,10 @@ def build_pipeline_debug_stats(
     )
     major_accident_diagnostic["raw_count"] = len(raw_incident_candidates)
     raw_operational_candidates = [
-        item for item in raw_candidates or []
-        if item.get("search_family") in {"policy", "dispute", "service_opening"}
+        item for item in raw_candidates or [] if is_operational_provenance(item)
     ]
     evaluated_operational_candidates = [
-        item for item in gate_evaluated_candidates
-        if item.get("search_family") in {"policy", "dispute", "service_opening"}
+        item for item in gate_evaluated_candidates if is_operational_provenance(item)
     ]
     operational_diagnostic = build_operational_diagnostic(
         evaluated_operational_candidates,
@@ -1151,6 +1149,7 @@ def build_pipeline_debug_stats(
         evaluated_procurement_candidates,
         active_regions=active_regions,
         is_global_scope=is_global_scope,
+        prefetch_stats=prefetch_stats,
     )
     procurement_diagnostic["raw_candidate_count"] = len(raw_procurement_candidates)
     category_coverage_diagnostic = {
@@ -1214,14 +1213,7 @@ def build_pipeline_debug_stats(
             and item.get("source_domain_normalized")
             and _normalize_source_domain(item.get("source_domain_raw", "")) != item.get("source_domain_normalized")
         ),
-        "incident_search_raw_count": sum(
-            1 for item in raw_candidates or []
-            if item.get("search_family") in {"major_accident", "official_investigation"}
-            or _contains_any_term(
-                _candidate_selection_text(item),
-                selector_service.ACCIDENT_SIGNAL_TERMS + selector_service.SAFETY_INCIDENT_DETAIL_TERMS,
-            )
-        ),
+        "incident_search_raw_count": len(raw_incident_candidates),
         "incident_gate_pass_count": sum(
             1 for item in filtered_candidates or []
             if (item.get("category_gates") or {}).get("major_accident")
@@ -1359,6 +1351,20 @@ def build_pipeline_debug_stats(
         "annual_raw_by_bucket": annual_raw_by_bucket,
         "annual_gate_pass_by_bucket": annual_gate_pass_by_bucket,
         "category_coverage_diagnostic": category_coverage_diagnostic,
+        "major_accident_diagnostic_raw_count": int(major_accident_diagnostic.get("raw_count", 0) or 0),
+        "major_accident_true_candidate_count": int(major_accident_diagnostic.get("true_major_candidate_count", 0) or 0),
+        "major_accident_gate_pass_count": int(major_accident_diagnostic.get("major_accident_gate_pass_count", 0) or 0),
+        "operational_high_value_candidate_count": int(operational_diagnostic.get("operational_high_value_candidate_count", 0) or 0),
+        "major_service_adjustment_gate_pass_count": int(operational_diagnostic.get("major_service_adjustment_gate_pass_count", 0) or 0),
+        "technical_operation_incident_gate_pass_count": int(operational_diagnostic.get("technical_operation_incident_gate_pass_count", 0) or 0),
+        "international_operational_gate_pass_count": int(operational_diagnostic.get("international_operational_gate_pass_count", 0) or 0),
+        "japan_operational_gate_pass_count": int(operational_diagnostic.get("japan_operational_gate_pass_count", 0) or 0),
+        "international_procurement_raw_count": int(procurement_diagnostic.get("international_procurement_raw_count", 0) or 0),
+        "international_procurement_urban_rail_count": int(procurement_diagnostic.get("international_procurement_urban_rail_count", 0) or 0),
+        "international_procurement_gate_pass_count": int(procurement_diagnostic.get("international_procurement_gate_pass_count", 0) or 0),
+        "international_procurement_near_miss_count": int(procurement_diagnostic.get("international_procurement_near_miss_count", 0) or 0),
+        "international_procurement_enrichment_attempted": int(procurement_diagnostic.get("international_procurement_enrichment_attempted", 0) or 0),
+        "international_procurement_enrichment_success": int(procurement_diagnostic.get("international_procurement_enrichment_success", 0) or 0),
         "annual_selected_by_bucket": {},
         "annual_coverage_target": 12,
         "annual_rescue_candidate_count": int((prefetch_stats or {}).get("annual_rescue_candidate_count", 0) or 0),

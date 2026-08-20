@@ -20,7 +20,48 @@ OPERATIONAL_MARKERS = (
     "service suspension", "service suspended", "temporary suspension", "line closure",
     "emergency inspection", "special service adjustment", "service adjustment",
     "停駛", "臨時停駛", "緊急檢查", "服務調整", "路線封閉", "運休",
+    "timetable change", "schedule change", "increased frequency", "additional trains",
+    "headway", "capacity increase", "ダイヤ改正", "増発", "運転間隔", "增班", "班距",
 )
+
+OPERATIONAL_FAMILIES = {"policy", "dispute", "service_opening"}
+ACCIDENT_FAMILIES = {"major_accident", "official_investigation"}
+PROCUREMENT_FAMILY = "electromechanical_procurement"
+
+
+def _candidate_families(candidate: dict) -> set[str]:
+    families = {
+        str(candidate.get("search_family", "") or ""),
+        *(str(value or "") for value in candidate.get("annual_bucket_families", []) or []),
+    }
+    for provenance in candidate.get("retrieval_provenance", []) or []:
+        if isinstance(provenance, dict):
+            families.add(str(provenance.get("query_family", "") or ""))
+    return {family for family in families if family}
+
+
+def is_major_accident_provenance(candidate: dict) -> bool:
+    text = _text(candidate)
+    accident_signals = [
+        signal for signal in candidate.get("major_accident_signals", []) or []
+        if signal not in {"urban_rail", "source_and_date"}
+    ]
+    return bool(
+        _candidate_families(candidate) & ACCIDENT_FAMILIES
+        or accident_signals
+        or (candidate.get("category_gates") or {}).get("major_accident")
+        or _has_any(text, ACCIDENT_MARKERS + ("signal failure", "power outage", "service disruption", "故障", "異常"))
+    )
+
+
+def is_operational_provenance(candidate: dict) -> bool:
+    text = _text(candidate)
+    return bool(
+        _candidate_families(candidate) & OPERATIONAL_FAMILIES
+        or candidate.get("operational_subtype")
+        or candidate.get("technical_operation_incident")
+        or _has_any(text, OPERATIONAL_MARKERS)
+    )
 
 
 def _text(candidate: dict) -> str:
@@ -37,7 +78,11 @@ def _has_any(text: str, terms: Iterable[str]) -> bool:
 
 def _evaluation(candidate: dict, evaluator: Callable[[dict], dict] | None) -> dict:
     if evaluator is None:
-        return dict(candidate.get("category_gate_debug") or {})
+        return dict(
+            candidate.get("category_gate_debug")
+            or candidate.get("gate_debug")
+            or candidate
+        )
     result = evaluator(dict(candidate)) or {}
     return result if isinstance(result, dict) else {}
 
@@ -58,6 +103,8 @@ def _major_accident_classification(candidate: dict, evaluation: dict) -> str:
         candidate.get("urban_rail")
         if "urban_rail" in candidate
         else gates.get("urban_rail")
+        or "urban_rail" in (candidate.get("major_accident_signals") or [])
+        or "urban_rail" in (candidate.get("procurement_signals") or [])
     )
     if academic_context and not _has_any(text, ("actual accident", "事故發生", "實際事故")):
         return "FALSE_POSITIVE"
@@ -80,9 +127,12 @@ def build_major_accident_diagnostic(
     selected_ids: Iterable[object] = (),
 ) -> dict:
     selected = {str(value) for value in selected_ids}
+    evaluated = [
+        (candidate, _evaluation(candidate, evaluator))
+        for candidate in list(raw_candidates or [])
+    ]
     rows: list[dict] = []
-    for candidate in list(raw_candidates or [])[: max(0, int(limit))]:
-        evaluation = _evaluation(candidate, evaluator)
+    for candidate, evaluation in evaluated[: max(0, int(limit))]:
         gates = evaluation.get("category_gates") or evaluation
         major_payload = _gate_payload(evaluation, "major_accident")
         text = _text(candidate)
@@ -93,6 +143,9 @@ def build_major_accident_diagnostic(
                 "date": candidate.get("date", ""),
                 "country": candidate.get("country", candidate.get("region", "")),
                 "source": candidate.get("source", ""),
+                "search_family": candidate.get("search_family", ""),
+                "query_region": candidate.get("query_region", ""),
+                "resolved_region_method": candidate.get("region_resolution_method", ""),
                 "urban_rail": bool(candidate.get("urban_rail", gates.get("urban_rail", False))),
                 "accident_signals": candidate.get("accident_signals") or [
                     term for term in ACCIDENT_MARKERS if term.casefold() in text.casefold()
@@ -119,7 +172,19 @@ def build_major_accident_diagnostic(
     return {
         "raw_count": len(raw_candidates or []),
         "listed_count": len(rows),
-        "gate_pass_count": sum(1 for row in rows if row["gate_pass"]),
+        "gate_pass_count": sum(
+            1 for candidate, evaluation in evaluated
+            if bool((evaluation.get("category_gates") or evaluation).get("major_accident"))
+        ),
+        "major_accident_gate_pass_count": sum(
+            1 for candidate, evaluation in evaluated
+            if bool((evaluation.get("category_gates") or evaluation).get("major_accident"))
+        ),
+        "true_major_candidate_count": sum(
+            1
+            for candidate, evaluation in evaluated
+            if _major_accident_classification(candidate, evaluation) == "TRUE_MAJOR_ACCIDENT"
+        ),
         "classification_counts": dict(Counter(row["final_classification"] for row in rows)),
         "candidates": rows,
     }
@@ -133,9 +198,12 @@ def build_operational_diagnostic(
     selected_ids: Iterable[object] = (),
 ) -> dict:
     selected = {str(value) for value in selected_ids}
+    evaluated = [
+        (candidate, _evaluation(candidate, evaluator))
+        for candidate in list(raw_candidates or [])
+    ]
     rows: list[dict] = []
-    for candidate in list(raw_candidates or [])[: max(0, int(limit))]:
-        evaluation = _evaluation(candidate, evaluator)
+    for candidate, evaluation in evaluated[: max(0, int(limit))]:
         gates = evaluation.get("category_gates") or evaluation
         technical = _gate_payload(evaluation, "technical_operation_incident")
         if not technical:
@@ -157,6 +225,10 @@ def build_operational_diagnostic(
                 "title": candidate.get("title", ""),
                 "date": candidate.get("date", ""),
                 "country": candidate.get("country", candidate.get("region", "")),
+                "source": candidate.get("source", ""),
+                "search_family": candidate.get("search_family", ""),
+                "query_region": candidate.get("query_region", ""),
+                "resolved_region_method": candidate.get("region_resolution_method", ""),
                 "classification": candidate.get(
                     "classification", evaluation.get("primary_category", "")
                 ),
@@ -193,7 +265,42 @@ def build_operational_diagnostic(
         "raw_count": len(raw_candidates or []),
         "listed_count": len(rows),
         "gate_pass_count": sum(
-            1 for row in rows if row["operational_policy"] or row["service_opening"]
+            1
+            for candidate, evaluation in evaluated
+            if (evaluation.get("category_gates") or evaluation).get("operational_policy")
+            or (evaluation.get("category_gates") or evaluation).get("service_opening")
+        ),
+        "operational_high_value_candidate_count": sum(
+            1
+            for candidate, evaluation in evaluated
+            if (evaluation.get("category_gates") or evaluation).get("operational_policy")
+            or (evaluation.get("category_gates") or evaluation).get("service_opening")
+            or bool(evaluation.get("technical_operation_incident"))
+            or bool(evaluation.get("major_service_adjustment"))
+        ),
+        "major_service_adjustment_gate_pass_count": sum(
+            1 for candidate, evaluation in evaluated if bool(evaluation.get("major_service_adjustment"))
+        ),
+        "technical_operation_incident_gate_pass_count": sum(
+            1 for candidate, evaluation in evaluated if bool(evaluation.get("technical_operation_incident"))
+        ),
+        "international_operational_gate_pass_count": sum(
+            1
+            for candidate, evaluation in evaluated
+            if candidate.get("country", candidate.get("region", "")) not in {"", "臺灣", "台灣"}
+            and (
+                (evaluation.get("category_gates") or evaluation).get("operational_policy")
+                or (evaluation.get("category_gates") or evaluation).get("service_opening")
+            )
+        ),
+        "japan_operational_gate_pass_count": sum(
+            1
+            for candidate, evaluation in evaluated
+            if candidate.get("country", candidate.get("region", "")) in {"日本", "Japan"}
+            and (
+                (evaluation.get("category_gates") or evaluation).get("operational_policy")
+                or (evaluation.get("category_gates") or evaluation).get("service_opening")
+            )
         ),
         "candidates": rows,
     }
@@ -205,6 +312,7 @@ def build_procurement_retrieval_diagnostic(
     *,
     active_regions: list[str] | None = None,
     is_global_scope: bool = False,
+    prefetch_stats: dict | None = None,
 ) -> dict:
     rows = [
         row for row in query_statuses or []
@@ -224,6 +332,33 @@ def build_procurement_retrieval_diagnostic(
             if candidate.get("region") in set(active_regions)
             or candidate.get("country") in set(active_regions)
         ]
+    urban_rail_candidates = [
+        candidate for candidate in scoped_candidates
+        if candidate.get("procurement_urban_rail_context")
+        or "urban_rail" in (candidate.get("procurement_signals") or [])
+        or (candidate.get("category_gates") or {}).get(PROCUREMENT_FAMILY)
+    ]
+    gate_pass_candidates = [
+        candidate for candidate in scoped_candidates
+        if candidate.get("procurement_gate_pass")
+        or (candidate.get("category_gates") or {}).get(PROCUREMENT_FAMILY)
+    ]
+    near_miss_candidates = [
+        candidate for candidate in scoped_candidates
+        if candidate.get("procurement_rescue_candidate")
+        or candidate.get("rescue_type") == "procurement_rescue_candidate"
+        or (
+            "electromechanical_system_missing" in (candidate.get("procurement_failure_reasons") or [])
+            and candidate.get("source_tier") in {"A_official", "B_professional"}
+        )
+    ]
+    prefetch_stats = prefetch_stats or {}
+    enrichment_attempted = int(
+        prefetch_stats.get("procurement_rescue_attempted_count", 0) or 0
+    )
+    enrichment_success = int(
+        prefetch_stats.get("procurement_rescue_success_count", 0) or 0
+    )
     return {
         "is_global_scope": bool(is_global_scope),
         "region_filter_enabled": not bool(is_global_scope),
@@ -233,8 +368,16 @@ def build_procurement_retrieval_diagnostic(
         "international_raw_count": sum(
             int(row.get("added_to_raw_count", 0) or 0) for row in international_rows
         ),
+        "international_procurement_raw_count": sum(
+            int(row.get("added_to_raw_count", 0) or 0) for row in international_rows
+        ),
         "international_query_rows": international_rows,
         "international_candidate_count": len(scoped_candidates),
+        "international_procurement_urban_rail_count": len(urban_rail_candidates),
+        "international_procurement_gate_pass_count": len(gate_pass_candidates),
+        "international_procurement_near_miss_count": len(near_miss_candidates),
+        "international_procurement_enrichment_attempted": enrichment_attempted,
+        "international_procurement_enrichment_success": enrichment_success,
         "non_taiwan_candidate_count": sum(
             1 for candidate in scoped_candidates
             if candidate.get("country", candidate.get("region", "")) not in {"", "臺灣"}

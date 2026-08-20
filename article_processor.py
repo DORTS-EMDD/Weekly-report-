@@ -827,7 +827,7 @@ def _explicit_event_region_hint(text: str) -> str:
     # query or publisher hints are considered.
     explicit_hints = [
         ("英國", ["translink northern ireland", "translink ni", "belfast", "northern ireland", "manchester", "manchester piccadilly", "metrolink"]),
-        ("美國", ["austin transit partnership", "austin light rail", "wmata", "washington metro", "new york subway", "nyct", "mta"]),
+        ("美國", ["austin transit partnership", "austin light rail", "wmata", "washington metro", "washington dc", "district of columbia", "van ness", "new york subway", "nyct", "mta"]),
         ("加拿大", ["ttc", "toronto subway", "toronto", "translink vancouver", "vancouver translink", "vancouver", "skytrain"]),
         ("德國", ["bvg", "berlin", "berlin tram"]),
         ("印度", ["chennai", "chennai metro", "chennai metro rail", "cmrl"]),
