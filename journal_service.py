@@ -52,6 +52,53 @@ class JournalServiceContext:
     status_callback: Callable[[str], None] | None = None
 
 
+JOURNAL_SOURCE_DOMAIN_HINTS = {
+    "Springer": ("springer.com", "link.springer.com"),
+    "ScienceDirect": ("sciencedirect.com", "elsevier.com"),
+    "MDPI": ("mdpi.com",),
+    "IEEE Xplore": ("ieee.org", "ieeexplore.ieee.org"),
+    "Taylor & Francis": ("tandfonline.com",),
+}
+
+
+def _extract_doi(text: str) -> str:
+    match = re.search(
+        r"(?:https?://(?:dx\.)?doi\.org/|\bdoi\s*[:：]\s*)?"
+        r"(10\.\d{4,9}/[-._;()/:A-Z0-9]+)",
+        text or "",
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    return match.group(1).rstrip(".,;)]}")
+
+
+def _extract_pii(text: str) -> str:
+    match = re.search(r"(?:/pii/|\bpii\s*[:=]\s*)([A-Z0-9]{8,})", text or "", flags=re.IGNORECASE)
+    return match.group(1).upper() if match else ""
+
+
+def _journal_source_domain_matches(url: str, source_family: str = "") -> bool:
+    host = _domain_from_url(url)
+    if not host:
+        return False
+    hints = JOURNAL_SOURCE_DOMAIN_HINTS.get(source_family)
+    if hints:
+        return any(_host_matches(host, domain) for domain in hints)
+    return any(_host_matches(host, domain) for domain in JOURNAL_ALLOWED_SOURCE_DOMAINS)
+
+
+def _journal_pipeline_counts() -> dict[str, int]:
+    return {
+        "backend_raw_count": 0,
+        "domain_match_count": 0,
+        "metadata_resolved_count": 0,
+        "urban_rail_pass_count": 0,
+        "journal_score_pass_count": 0,
+        "accepted_count": 0,
+    }
+
+
 def _journal_year(item: dict) -> str:
     for value in (item.get("date", ""), item.get("title", ""), item.get("snippet", "")):
         match = re.search(r"\b(20\d{2}|19\d{2})\b", value or "")
@@ -100,20 +147,38 @@ def _research_date_info(
     context: JournalServiceContext,
 ) -> dict:
     date_fields = [
-        "published_date", "publication_date", "online_publication_date",
-        "article_date", "release_date", "published", "date",
+        ("citation_publication_date", "publisher_citation_meta"),
+        ("citation_online_date", "publisher_citation_meta"),
+        ("citation_date", "publisher_citation_meta"),
+        ("datePublished", "publisher_jsonld"),
+        ("publication_date", "search_result"),
+        ("online_publication_date", "search_result"),
+        ("article_date", "search_result"),
+        ("release_date", "search_result"),
+        ("published", "search_result"),
+        ("published_date", "search_result"),
+        ("date", "search_result"),
     ]
-    for key in date_fields:
-        value = result.get(key) or result.get(key.replace("_", ""))
-        date_obj = _parse_full_research_date(str(value or ""))
-        if date_obj:
-            cutoff_date = context.today - datetime.timedelta(days=context.research_supplement_lookback_days)
-            return {
-                "published_date": date_obj.isoformat(),
-                "date_confidence": "high",
-                "date_reason": f"{key} 提供完整日期",
-                "is_within_research_period": cutoff_date <= date_obj <= context.today,
-            }
+    metadata = result.get("journal_metadata") if isinstance(result.get("journal_metadata"), dict) else {}
+    metadata_sources = [result, metadata]
+    for key, default_source in date_fields:
+        for source in metadata_sources:
+            value = source.get(key) or source.get(key.replace("_", ""))
+            date_obj = _parse_full_research_date(str(value or ""))
+            if date_obj:
+                cutoff_date = context.today - datetime.timedelta(days=context.research_supplement_lookback_days)
+                metadata_source = str(
+                    source.get("metadata_source")
+                    or (default_source if source is result else "publisher_metadata")
+                )
+                return {
+                    "published_date": date_obj.isoformat(),
+                    "date_confidence": "high",
+                    "date_reason": f"{key} 提供完整日期",
+                    "metadata_source": metadata_source,
+                    "metadata_fields_seen": list(source.get("metadata_fields_seen") or [key]),
+                    "is_within_research_period": cutoff_date <= date_obj <= context.today,
+                }
 
     labelled_patterns = [
         r"(?:published date|publication date|online publication date|article date|release date)\s*[:：]\s*([A-Za-z0-9,\-/\s]+)",
@@ -131,6 +196,8 @@ def _research_date_info(
                 "published_date": date_obj.isoformat(),
                 "date_confidence": "high",
                 "date_reason": "摘要提供明確發表/出版/發布日期",
+                "metadata_source": "search_result_text",
+                "metadata_fields_seen": [],
                 "is_within_research_period": cutoff_date <= date_obj <= context.today,
             }
 
@@ -139,6 +206,8 @@ def _research_date_info(
         "published_date": "",
         "date_confidence": "low",
         "date_reason": "只有年份或未提供明確發表日期" if year_only else "未提供明確發表日期",
+        "metadata_source": str(metadata.get("metadata_source") or result.get("metadata_source") or "search_result"),
+        "metadata_fields_seen": list(metadata.get("metadata_fields_seen") or result.get("metadata_fields_seen") or []),
         "is_within_research_period": False,
     }
 
@@ -190,7 +259,8 @@ def _html_unescape_clean(text: str) -> str:
     return _clean_text(unescape(re.sub(r"<[^>]+>", " ", text or "")))
 
 
-def _first_meta_content(html: str, names: list[str]) -> str:
+def _meta_content_entries(html: str, names: list[str]) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
     for name in names:
         patterns = [
             rf'<meta[^>]+(?:name|property)=["\\\']{re.escape(name)}["\\\'][^>]+content=["\\\']([^"\\\']+)["\\\']',
@@ -199,8 +269,14 @@ def _first_meta_content(html: str, names: list[str]) -> str:
         for pattern in patterns:
             match = re.search(pattern, html or "", flags=re.IGNORECASE | re.DOTALL)
             if match:
-                return _html_unescape_clean(match.group(1))
-    return ""
+                entries.append((name, _html_unescape_clean(match.group(1))))
+                break
+    return entries
+
+
+def _first_meta_content(html: str, names: list[str]) -> str:
+    entries = _meta_content_entries(html, names)
+    return entries[0][1] if entries else ""
 
 
 def _jsonld_values(html: str) -> dict:
@@ -228,29 +304,44 @@ def _jsonld_values(html: str) -> dict:
 def fetch_journal_page_metadata(url: str, *, context: JournalServiceContext) -> dict:
     html = _journal_safe_get(url, http_session_factory=context.http_session_factory)
     if not html:
-        return {"metadata_fetch_status": "failed"}
+        return {
+            "metadata_fetch_status": "failed",
+            "metadata_source": "publisher_page",
+            "metadata_fields_seen": [],
+        }
     jsonld = _jsonld_values(html)
+    metadata_entries = _meta_content_entries(
+        html,
+        [
+            "citation_title", "dc.title", "og:title", "twitter:title",
+            "citation_abstract", "description", "dc.description", "og:description", "twitter:description",
+            "citation_publication_date", "citation_online_date", "citation_date", "dc.date",
+            "prism.publicationDate", "article:published_time", "datePublished", "date", "DC.Date",
+            "citation_doi", "dc.identifier", "prism.doi", "citation_pii", "prism.url",
+            "citation_journal_title", "prism.publicationName", "dc.source", "og:site_name",
+        ],
+    )
+    metadata_by_name = dict(metadata_entries)
+    metadata_fields_seen = [name for name, _ in metadata_entries]
     title = (
-        _first_meta_content(html, ["citation_title", "dc.title", "og:title", "twitter:title"])
+        next((metadata_by_name[name] for name in ("citation_title", "dc.title", "og:title", "twitter:title") if metadata_by_name.get(name)), "")
         or _html_unescape_clean(jsonld.get("headline") or jsonld.get("name") or "")
     )
     abstract = (
-        _first_meta_content(html, ["citation_abstract", "description", "dc.description", "og:description", "twitter:description"])
+        next((metadata_by_name[name] for name in ("citation_abstract", "description", "dc.description", "og:description", "twitter:description") if metadata_by_name.get(name)), "")
         or _html_unescape_clean(jsonld.get("description") or "")
     )
-    date_text = (
-        _first_meta_content(html, [
-            "citation_publication_date", "citation_online_date", "dc.date", "prism.publicationDate",
-            "article:published_time", "datePublished", "date", "DC.Date",
-        ])
-        or jsonld.get("datePublished")
-        or jsonld.get("dateCreated")
-    )
-    doi = _first_meta_content(html, ["citation_doi", "dc.identifier", "prism.doi"])
+    date_metadata_name = next((name for name in (
+            "citation_publication_date", "citation_online_date", "citation_date", "dc.date",
+            "prism.publicationDate", "article:published_time", "datePublished", "date", "DC.Date",
+        ) if metadata_by_name.get(name)), "")
+    date_text = metadata_by_name.get(date_metadata_name) or jsonld.get("datePublished") or jsonld.get("dateCreated")
+    doi = next((metadata_by_name[name] for name in ("citation_doi", "dc.identifier", "prism.doi") if metadata_by_name.get(name)), "")
     if not doi:
-        doi_match = re.search(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", html, flags=re.IGNORECASE)
-        doi = doi_match.group(0) if doi_match else ""
-    journal_name = _first_meta_content(html, ["citation_journal_title", "prism.publicationName", "dc.source", "og:site_name"])
+        doi = _extract_doi(html)
+    doi = _extract_doi(doi) or doi
+    pii = metadata_by_name.get("citation_pii") or _extract_pii(f"{url} {html}")
+    journal_name = next((metadata_by_name[name] for name in ("citation_journal_title", "prism.publicationName", "dc.source", "og:site_name") if metadata_by_name.get(name)), "")
     published_date = ""
     date_confidence = "low"
     date_reason = "原始頁未解析到完整發表日期"
@@ -260,8 +351,19 @@ def fetch_journal_page_metadata(url: str, *, context: JournalServiceContext) -> 
         published_date = date_obj.isoformat()
         date_confidence = "high"
         date_reason = "原始文章頁 metadata 提供完整發表日期"
+    metadata_fields_seen.extend(f"jsonld.{key}" for key in jsonld if jsonld.get(key))
+    if date_metadata_name.startswith("citation_"):
+        metadata_source = "publisher_citation_meta"
+    elif date_metadata_name.startswith(("og:", "article:")):
+        metadata_source = "publisher_opengraph"
+    elif date_text and ("datePublished" in jsonld or "dateCreated" in jsonld):
+        metadata_source = "publisher_jsonld"
+    else:
+        metadata_source = "publisher_page"
     return {
         "metadata_fetch_status": "success",
+        "metadata_source": metadata_source,
+        "metadata_fields_seen": metadata_fields_seen,
         "metadata_title": title,
         "metadata_abstract": abstract,
         "metadata_date_text": date_text or "",
@@ -274,8 +376,70 @@ def fetch_journal_page_metadata(url: str, *, context: JournalServiceContext) -> 
             <= context.today
         ),
         "doi": doi,
+        "pii": pii,
         "journal_name": journal_name,
     }
+
+
+def fetch_doi_metadata(doi: str, *, context: JournalServiceContext) -> dict:
+    normalized_doi = _extract_doi(doi)
+    if not normalized_doi:
+        return {"metadata_fetch_status": "not_attempted", "metadata_source": "doi_metadata", "metadata_fields_seen": []}
+    endpoint = f"https://api.crossref.org/works/{urllib.parse.quote(normalized_doi, safe='')}"
+    payload = _journal_safe_get(endpoint, timeout=8, http_session_factory=context.http_session_factory)
+    if not payload:
+        return {"metadata_fetch_status": "failed", "metadata_source": "doi_metadata", "metadata_fields_seen": []}
+    try:
+        message = json.loads(payload).get("message", {})
+    except (TypeError, ValueError):
+        return {"metadata_fetch_status": "failed", "metadata_source": "doi_metadata", "metadata_fields_seen": []}
+    if not isinstance(message, dict):
+        return {"metadata_fetch_status": "failed", "metadata_source": "doi_metadata", "metadata_fields_seen": []}
+    fields_seen = [key for key in ("title", "container-title", "published-online", "published-print", "issued", "created", "DOI") if message.get(key)]
+    date_text = ""
+    for date_key in ("published-online", "published-print", "issued", "created"):
+        parts = ((message.get(date_key) or {}).get("date-parts") or [])
+        if parts and isinstance(parts[0], list) and len(parts[0]) >= 3:
+            date_text = "-".join(str(int(value)).zfill(2) if index else str(int(value)) for index, value in enumerate(parts[0][:3]))
+            break
+    date_obj = _parse_full_research_date(date_text)
+    published_date = date_obj.isoformat() if date_obj else ""
+    return {
+        "metadata_fetch_status": "success",
+        "metadata_source": "doi_metadata",
+        "metadata_fields_seen": fields_seen,
+        "metadata_title": " ".join(str(value) for value in (message.get("title") or [])[:1]),
+        "metadata_date_text": date_text,
+        "published_date": published_date,
+        "date_confidence": "high" if published_date else "low",
+        "date_reason": "DOI metadata 提供完整發表日期" if published_date else "DOI metadata 僅提供年份或日期不完整",
+        "is_within_research_period": bool(published_date) and (
+            context.today - datetime.timedelta(days=context.research_supplement_lookback_days)
+            <= date_obj
+            <= context.today
+        ),
+        "doi": normalized_doi,
+        "journal_name": " ".join(str(value) for value in (message.get("container-title") or [])[:1]),
+    }
+
+
+def resolve_journal_metadata(url: str, *, doi: str = "", context: JournalServiceContext) -> dict:
+    page_metadata = fetch_journal_page_metadata(url, context=context)
+    if _parse_full_research_date(str(page_metadata.get("published_date") or "")):
+        return page_metadata
+    doi_metadata = fetch_doi_metadata(doi or page_metadata.get("doi", ""), context=context)
+    if doi_metadata.get("metadata_fetch_status") != "success":
+        return page_metadata
+    merged = dict(page_metadata)
+    for key, value in doi_metadata.items():
+        if value not in ("", [], None):
+            merged[key] = value
+    merged["metadata_source"] = "doi_metadata"
+    merged["metadata_fields_seen"] = list(dict.fromkeys(
+        list(page_metadata.get("metadata_fields_seen") or [])
+        + list(doi_metadata.get("metadata_fields_seen") or [])
+    ))
+    return merged
 
 
 def _journal_source_page_results(*, context: JournalServiceContext) -> tuple[list[dict], list[dict]]:
@@ -289,7 +453,7 @@ def _journal_source_page_results(*, context: JournalServiceContext) -> tuple[lis
             context.status_callback("正在整理候選資料")
         html = _journal_safe_get(page_url, http_session_factory=context.http_session_factory)
         if not html:
-            statuses.append({"query": source_name, "status": "來源頁讀取失敗", "count": 0, "url": page_url, "elapsed_seconds": round(time.perf_counter() - source_started, 3), "timing_stage": "source_page_fetch"})
+            statuses.append({"query": source_name, "status": "來源頁讀取失敗", "count": 0, "accepted_count": 0, **_journal_pipeline_counts(), "url": page_url, "elapsed_seconds": round(time.perf_counter() - source_started, 3), "timing_stage": "source_page_fetch"})
             continue
         links = []
         for href in re.findall(r'href=["\\\']([^"\\\']*(?:/article/)[^"\\\']+)["\\\']', html, flags=re.IGNORECASE):
@@ -300,11 +464,18 @@ def _journal_source_page_results(*, context: JournalServiceContext) -> tuple[lis
                 links.append(href)
             if len(links) >= JOURNAL_ARTICLE_FETCH_LIMIT:
                 break
+        source_pipeline_counts = _journal_pipeline_counts()
+        source_pipeline_counts["backend_raw_count"] = len(links)
+        source_pipeline_counts["domain_match_count"] = sum(
+            1 for link in links if _journal_source_domain_matches(link, source_name)
+        )
         for link in links:
             if fetched >= JOURNAL_ARTICLE_FETCH_LIMIT:
                 break
-            meta = fetch_journal_page_metadata(link, context=context)
+            meta = resolve_journal_metadata(link, doi=_extract_doi(link), context=context)
             fetched += 1
+            if meta.get("metadata_fetch_status") == "success":
+                source_pipeline_counts["metadata_resolved_count"] += 1
             title = meta.get("metadata_title") or link.rsplit("/", 1)[-1]
             snippet = meta.get("metadata_abstract") or ""
             results.append({
@@ -316,7 +487,7 @@ def _journal_source_page_results(*, context: JournalServiceContext) -> tuple[lis
                 "journal_metadata": meta,
                 "source_page": source_name,
             })
-        statuses.append({"query": source_name, "status": "成功" if links else "無文章連結", "count": len(links), "url": page_url, "elapsed_seconds": round(time.perf_counter() - source_started, 3), "timing_stage": "source_page_fetch"})
+        statuses.append({"query": source_name, "status": "成功" if links else "無文章連結", "count": len(links), "accepted_count": 0, **source_pipeline_counts, "url": page_url, "elapsed_seconds": round(time.perf_counter() - source_started, 3), "timing_stage": "source_page_fetch"})
     return results, statuses
 
 
@@ -396,6 +567,11 @@ def journal_query_source_outcomes(statuses: list[dict]) -> dict[str, dict]:
             {
                 "query_count": 0,
                 "executed_query_count": 0,
+                "backend_raw_count": 0,
+                "domain_match_count": 0,
+                "metadata_resolved_count": 0,
+                "urban_rail_pass_count": 0,
+                "journal_score_pass_count": 0,
                 "accepted_count": 0,
                 "nonzero_result_query_count": 0,
                 "failed_query_count": 0,
@@ -405,7 +581,12 @@ def journal_query_source_outcomes(statuses: list[dict]) -> dict[str, dict]:
         )
         outcome["query_count"] += 1
         outcome["executed_query_count"] += 1
-        accepted_count = int(row.get("count", 0) or 0)
+        accepted_count = int(row.get("accepted_count", row.get("count", 0)) or 0)
+        for key in (
+            "backend_raw_count", "domain_match_count", "metadata_resolved_count",
+            "urban_rail_pass_count", "journal_score_pass_count",
+        ):
+            outcome[key] += int(row.get(key, 0) or 0)
         outcome["accepted_count"] += accepted_count
         status = str(row.get("status") or "")
         if accepted_count or status == "成功":
@@ -447,6 +628,13 @@ def collect_journal_candidates(
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
     metadata_fetch_count = 0
+    metadata_resolution = {
+        "attempted": 0,
+        "success": 0,
+        "failed": 0,
+        "rescued": 0,
+        "year_only_rejected": 0,
+    }
     journal_timings = {
         "source_page_fetch": 0.0,
         "ddgs_search": 0.0,
@@ -468,15 +656,29 @@ def collect_journal_candidates(
                 item.update(extra)
             excluded.append(item)
 
-    def _try_accept_result(result: dict, query: str) -> bool:
+    def _try_accept_result(
+        result: dict,
+        query: str,
+        *,
+        source_family: str = "",
+        pipeline_counts: dict[str, int] | None = None,
+    ) -> bool:
         nonlocal metadata_fetch_count
         title = _clean_text(result.get("title") or "")
         snippet = _clean_text(result.get("body") or result.get("excerpt") or result.get("description") or "")
         url = result.get("href") or result.get("url") or ""
         if not title or not url:
             return False
-        metadata = result.get("journal_metadata") if isinstance(result.get("journal_metadata"), dict) else {}
-        text = f"{title} {snippet} {url} {metadata.get('journal_name', '')} {metadata.get('doi', '')}"
+        metadata = dict(result.get("journal_metadata") or {}) if isinstance(result.get("journal_metadata"), dict) else {}
+        doi = _extract_doi(f"{url} {title} {snippet} {metadata.get('doi', '')}")
+        pii = metadata.get("pii") or _extract_pii(f"{url} {title} {snippet}")
+        if doi:
+            metadata["doi"] = doi
+        if pii:
+            metadata["pii"] = pii
+        text = f"{title} {snippet} {url} {metadata.get('journal_name', '')} {doi} {pii}"
+        if pipeline_counts is not None and _journal_source_domain_matches(url, source_family):
+            pipeline_counts["domain_match_count"] += 1
         if any(term.casefold() in text.casefold() for term in JOURNAL_EXCLUDE_TERMS):
             _exclude(query, title, url, "非都市軌道研究場景或排除運具", snippet)
             return False
@@ -485,28 +687,37 @@ def collect_journal_candidates(
             return False
 
         date_info = _research_date_info(result, title, snippet, context=context)
+        initial_date_info = dict(date_info)
         if (
             date_info["date_confidence"] != "high"
             or not date_info["is_within_research_period"]
         ) and metadata_fetch_count < JOURNAL_ARTICLE_FETCH_LIMIT:
             metadata_started = time.perf_counter()
-            fetched = fetch_journal_page_metadata(url, context=context)
+            metadata_resolution["attempted"] += 1
+            fetched = resolve_journal_metadata(url, doi=doi, context=context)
             journal_timings["metadata_fetch"] += time.perf_counter() - metadata_started
             metadata_fetch_count += 1
             if fetched.get("metadata_fetch_status") == "success":
+                metadata_resolution["success"] += 1
                 metadata.update(fetched)
                 if fetched.get("metadata_title") and len(fetched.get("metadata_title", "")) > len(title):
                     title = fetched["metadata_title"]
                 if fetched.get("metadata_abstract") and len(fetched.get("metadata_abstract", "")) > len(snippet):
                     snippet = fetched["metadata_abstract"]
-                if fetched.get("published_date"):
-                    date_info = {
-                        "published_date": fetched.get("published_date", ""),
-                        "date_confidence": fetched.get("date_confidence", "low"),
-                        "date_reason": fetched.get("date_reason", "原始文章頁 metadata"),
-                        "is_within_research_period": fetched.get("is_within_research_period", False),
-                    }
-                text = f"{title} {snippet} {url} {metadata.get('journal_name', '')} {metadata.get('doi', '')}"
+                result_with_metadata = dict(result)
+                result_with_metadata["journal_metadata"] = metadata
+                date_info = _research_date_info(result_with_metadata, title, snippet, context=context)
+                if initial_date_info["date_confidence"] != "high" and date_info["date_confidence"] == "high":
+                    metadata_resolution["rescued"] += 1
+            else:
+                metadata_resolution["failed"] += 1
+            if date_info["date_confidence"] != "high":
+                metadata_resolution["year_only_rejected"] += 1
+            text = f"{title} {snippet} {url} {metadata.get('journal_name', '')} {metadata.get('doi', doi)} {metadata.get('pii', pii)}"
+        elif date_info["date_confidence"] != "high":
+            metadata_resolution["year_only_rejected"] += 1
+        if pipeline_counts is not None and metadata.get("metadata_fetch_status") == "success":
+            pipeline_counts["metadata_resolved_count"] += 1
 
         if not _contains_any_term(text, JOURNAL_RAIL_CONTEXT_TERMS):
             _exclude(query, title, url, "缺少 railway/metro/urban rail 等明確場景", snippet, metadata)
@@ -517,11 +728,18 @@ def collect_journal_candidates(
         ):
             _exclude(query, title, url, "都市軌道關聯不足", snippet, metadata)
             return False
+        if pipeline_counts is not None:
+            pipeline_counts["urban_rail_pass_count"] += 1
         if date_info["date_confidence"] != "high" or not date_info["is_within_research_period"]:
             if date_info["date_confidence"] == "high" and not date_info["is_within_research_period"]:
                 exclude_reason = f"明確發表日期不在{context.research_supplement_period_label}研究補充期間"
             else:
                 exclude_reason = date_info["date_reason"]
+            metadata["metadata_disposition"] = (
+                "DISCOVERED_BUT_METADATA_REJECTED"
+                if date_info["date_confidence"] != "high"
+                else "DATE_OUT_OF_RESEARCH_PERIOD"
+            )
             _exclude(query, title, url, exclude_reason, snippet, metadata)
             return False
 
@@ -548,8 +766,14 @@ def collect_journal_candidates(
         candidate["published_date"] = date_info["published_date"]
         candidate["date_confidence"] = date_info["date_confidence"]
         candidate["date_reason"] = date_info["date_reason"]
+        candidate["metadata_source"] = date_info.get("metadata_source") or metadata.get("metadata_source", "search_result")
+        candidate["metadata_fields_seen"] = list(dict.fromkeys(
+            list(date_info.get("metadata_fields_seen") or [])
+            + list(metadata.get("metadata_fields_seen") or [])
+        ))
         candidate["is_within_research_period"] = date_info["is_within_research_period"]
-        candidate["doi"] = metadata.get("doi", "")
+        candidate["doi"] = metadata.get("doi", doi)
+        candidate["pii"] = metadata.get("pii", pii)
         candidate["journal_name"] = metadata.get("journal_name", source)
         candidate["metadata_fetch_status"] = metadata.get("metadata_fetch_status", "not_needed")
         scoring_started = time.perf_counter()
@@ -558,17 +782,38 @@ def collect_journal_candidates(
         if candidate["journal_score"] < 60:
             _exclude(query, title, url, "journal_score 低於候補門檻", snippet, candidate)
             return False
+        if pipeline_counts is not None:
+            pipeline_counts["journal_score_pass_count"] += 1
         candidates.append(candidate)
+        if pipeline_counts is not None:
+            pipeline_counts["accepted_count"] += 1
         return True
 
     source_results, source_statuses = _journal_source_page_results(context=context)
     statuses.extend(source_statuses)
     source_accepted = 0
+    source_stage_counts: dict[str, dict[str, int]] = {}
     for result in source_results:
         if len(candidates) >= target_max:
             break
-        if _try_accept_result(result, result.get("source_page", "學術來源頁")):
+        source_name = result.get("source_page", "學術來源頁")
+        result_counts = _journal_pipeline_counts()
+        if _try_accept_result(
+            result,
+            source_name,
+            source_family=source_name,
+            pipeline_counts=result_counts,
+        ):
             source_accepted += 1
+        stage_counts = source_stage_counts.setdefault(source_name, _journal_pipeline_counts())
+        for key in ("urban_rail_pass_count", "journal_score_pass_count", "accepted_count"):
+            stage_counts[key] += result_counts[key]
+    for row in source_statuses:
+        stage_counts = source_stage_counts.get(row.get("query", ""))
+        if not stage_counts:
+            continue
+        for key in ("urban_rail_pass_count", "journal_score_pass_count", "accepted_count"):
+            row[key] = stage_counts[key]
     if source_results:
         statuses.append({"query": "可信學術來源頁彙整", "status": "成功" if source_accepted else "無符合研究", "count": source_accepted})
 
@@ -578,6 +823,8 @@ def collect_journal_candidates(
         if context.status_callback:
             context.status_callback("正在整理候選資料")
         query_text = f'{query} journal OR research OR paper OR IEEE OR "Transportation Research"'
+        source_family = "precision_queries" if idx <= len(JOURNAL_PRECISION_QUERIES) else "exploratory_queries"
+        pipeline_counts = _journal_pipeline_counts()
         query_started = time.perf_counter()
         try:
             with context.ddgs_client_factory() as ddgs:
@@ -585,38 +832,43 @@ def collect_journal_candidates(
         except Exception as exc:
             elapsed = time.perf_counter() - query_started
             journal_timings["ddgs_search"] += elapsed
-            statuses.append({"query": query_text, "source_family": "precision_queries" if idx <= len(JOURNAL_PRECISION_QUERIES) else "exploratory_queries", "status": f"失敗：{exc}", "count": 0, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
+            statuses.append({"query": query_text, "source_family": source_family, "status": f"失敗：{exc}", "count": 0, "accepted_count": 0, **pipeline_counts, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
             continue
 
+        results = list(results or [])
+        pipeline_counts["backend_raw_count"] = len(results)
         accepted = 0
-        for result in results or []:
+        for result in results:
             if len(candidates) >= target_max:
                 break
-            if _try_accept_result(result, query):
+            if _try_accept_result(result, query, source_family=source_family, pipeline_counts=pipeline_counts):
                 accepted += 1
         elapsed = time.perf_counter() - query_started
         journal_timings["ddgs_search"] += elapsed
-        statuses.append({"query": query_text, "source_family": "precision_queries" if idx <= len(JOURNAL_PRECISION_QUERIES) else "exploratory_queries", "status": "成功" if accepted else "無符合研究", "count": accepted, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
+        statuses.append({"query": query_text, "source_family": source_family, "status": "成功" if accepted else "無符合研究", "count": accepted, "accepted_count": accepted, **pipeline_counts, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
 
     for source_name, query in JOURNAL_SOURCE_QUERY_SPECS:
         for _ in range(max(0, int(JOURNAL_SOURCE_QUERY_BUDGET))):
             query_started = time.perf_counter()
             query_text = f"{query} journal research paper"
+            pipeline_counts = _journal_pipeline_counts()
             try:
                 with context.ddgs_client_factory() as ddgs:
                     results = ddgs.text(query_text, max_results=JOURNAL_MAX_RESULTS_PER_QUERY, backend="auto")
             except Exception as exc:
                 elapsed = time.perf_counter() - query_started
                 journal_timings["ddgs_search"] += elapsed
-                statuses.append({"query": query_text, "source_family": source_name, "status": f"失敗：{exc}", "count": 0, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
+                statuses.append({"query": query_text, "source_family": source_name, "status": f"失敗：{exc}", "count": 0, "accepted_count": 0, **pipeline_counts, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
                 continue
+            results = list(results or [])
+            pipeline_counts["backend_raw_count"] = len(results)
             accepted = 0
-            for result in results or []:
-                if _try_accept_result(result, query_text):
+            for result in results:
+                if _try_accept_result(result, query_text, source_family=source_name, pipeline_counts=pipeline_counts):
                     accepted += 1
             elapsed = time.perf_counter() - query_started
             journal_timings["ddgs_search"] += elapsed
-            statuses.append({"query": query_text, "source_family": source_name, "status": "成功" if accepted else "無符合研究", "count": accepted, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
+            statuses.append({"query": query_text, "source_family": source_name, "status": "成功" if accepted else "無符合研究", "count": accepted, "accepted_count": accepted, **pipeline_counts, "elapsed_seconds": round(elapsed, 3), "timing_stage": "ddgs_search"})
 
     high_score = [item for item in candidates if int(item.get("journal_score", 0) or 0) >= 75]
     borderline = [item for item in candidates if 60 <= int(item.get("journal_score", 0) or 0) < 75]
@@ -683,6 +935,7 @@ def collect_journal_candidates(
         for key, value in journal_timings.items()
     }
     journal_timings["total"] = round(time.perf_counter() - total_started, 3)
+    source_pipeline_counts = journal_query_source_outcomes(statuses)
     statuses.append({
         "query": "journal_diagnostics",
         "status": "summary",
@@ -692,7 +945,9 @@ def collect_journal_candidates(
         "journal_selected_count_by_domain": domain_selected_counts,
         "journal_elapsed_by_source": elapsed_by_source,
         "journal_timings": journal_timings,
-        "journal_query_source_outcomes": journal_query_source_outcomes(statuses),
+        "journal_query_source_outcomes": source_pipeline_counts,
+        "journal_source_pipeline_counts": source_pipeline_counts,
+        "journal_metadata_resolution": metadata_resolution,
         "timing_stage": "summary",
     })
     for item in selected:
