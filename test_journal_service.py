@@ -65,7 +65,7 @@ DDGS_RESULTS = [
     },
 ]
 
-PRE_SPLIT_PAYLOAD_SHA256 = "51656f17abf9e8d856c62d1f4f5c2201f427ac051ba5e7b23fb7b1103a877521"
+PRE_SPLIT_PAYLOAD_SHA256 = "30588bf69ccaf8d823e957cb9eca6521466e90aef72ee2487c0be26e9dd2ac76"
 
 
 class FakeResponse:
@@ -82,6 +82,21 @@ class FakeSession:
         }
         if url in pages:
             return FakeResponse(200, pages[url])
+        doi_fixtures = {
+            "10.1000%2Fold-cbtc": ("CBTC safety study for metro", 2024, 1, 1),
+            "10.1000%2Fcrew": ("Urban rail crew scheduling and passenger behavior", 2026, 7, 12),
+            "10.1000%2Fcbtc": ("CBTC cybersecurity and predictive maintenance for urban rail transit", 2026, 7, 14),
+        }
+        for doi_path, (title, year, month, day) in doi_fixtures.items():
+            if doi_path in url:
+                return FakeResponse(200, json.dumps({
+                    "message": {
+                        "DOI": doi_path.replace("%2F", "/"),
+                        "title": [title],
+                        "container-title": ["Transportation Research"],
+                        "published-online": {"date-parts": [[year, month, day]]},
+                    }
+                }))
         return FakeResponse(404, "")
 
 

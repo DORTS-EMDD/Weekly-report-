@@ -734,6 +734,23 @@ JOURNAL_SOURCE_QUERY_SPECS = [
 
 JOURNAL_SOURCE_QUERY_BUDGET = 1
 
+# Keep the broad academic lane generic and bounded.  Each tuple is one
+# taxonomy slice: urban-rail object x technical family x research signal.
+ACADEMIC_BROAD_DISCOVERY_TAXONOMY = [
+    ("urban rail vehicle", "advanced materials lightweighting", "study"),
+    ("urban rail transit", "energy storage traction energy", "research"),
+    ("metro", "artificial intelligence machine learning maintenance", "model"),
+    ("urban rail transit", "digital twin", "framework"),
+    ("rail transit infrastructure", "predictive intelligent maintenance", "validation"),
+    ("metro", "signalling train control", "experimental"),
+    ("urban rail transit", "sensing monitoring", "method"),
+    ("metro", "robotics machine vision", "prototype"),
+    ("rail transit infrastructure", "infrastructure inspection", "review"),
+    ("urban rail transit", "RAMS system assurance", "validation"),
+]
+
+JOURNAL_BROAD_DISCOVERY_QUERY_BUDGET = 10
+
 JOURNAL_EXCLUDE_TERMS = [
     "high-speed rail", "freight railway", "intercity rail", "road traffic",
     "bus", "autonomous vehicle", "air traffic", "pure algorithm",
