@@ -395,7 +395,7 @@ class P2K4RRegressionTests(unittest.TestCase):
         self.assertFalse(validation["event_level_integrity_passed"])
         self.assertFalse(validation["report_validation_passed"])
 
-    def test_internal_operational_category_tag_fails_formal_category_validation(self):
+    def test_operational_alias_is_canonicalized_for_formal_category_validation(self):
         candidate = _candidate(
             1,
             "Nagoya subway odor service suspension",
@@ -413,9 +413,9 @@ class P2K4RRegressionTests(unittest.TestCase):
             selected_types=["營運政策"],
         )
 
-        self.assertFalse(validation["category_consistency_passed"])
-        self.assertEqual(validation["category_mismatches"][0]["actual_category"], "營運政策")
-        self.assertFalse(validation["report_validation_passed"])
+        self.assertTrue(validation["category_consistency_passed"])
+        self.assertEqual(validation["category_mismatches"], [])
+        self.assertTrue(validation["report_validation_passed"])
 
     def test_gold_coast_candidate_keeps_single_formal_source(self):
         candidate = _candidate(

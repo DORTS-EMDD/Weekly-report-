@@ -1399,6 +1399,14 @@ def _canonical_report_category_label(value: str) -> str:
     return (value or "").strip() or "技術新知"
 
 
+def canonical_formal_report_category(value: str) -> str:
+    """Normalize model category labels to the four formal report labels."""
+    return FORMAL_REPORT_CATEGORY_MAP.get(
+        _canonical_report_category_label(value),
+        (value or "").strip() or "技術新知",
+    )
+
+
 def _formal_category_for_candidate(candidate: dict) -> str:
     internal_category = str(
         candidate.get("classification")
@@ -1945,7 +1953,7 @@ def validate_authoritative_report(
         )
         if not category_match:
             continue
-        actual_category = _canonical_report_category_label(category_match.group(1))
+        actual_category = canonical_formal_report_category(category_match.group(1))
         for candidate_id in block.get("candidate_ids", ()):
             candidate = selected_map.get(candidate_id) or {}
             expected_category = _formal_category_for_candidate(candidate)
@@ -3392,7 +3400,7 @@ def has_candidate_section_mismatch(report_md: str, selected_candidates: list[dic
         category_match = re.search(r"(?m)^\s*🔹\s*\[([^\]]+)\]", parsed.get("body", ""))
         if not category_match:
             continue
-        actual = _canonical_report_category_label(category_match.group(1))
+        actual = canonical_formal_report_category(category_match.group(1))
         for candidate_id in parsed.get("candidate_ids", ()):
             candidate = selected_map.get(candidate_id) or {}
             expected = candidate.get("classification") or candidate.get("preliminary_type") or ""

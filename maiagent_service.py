@@ -246,6 +246,7 @@ def build_report_retry_prompt(original_prompt: str, previous_response: str, vali
 - 重複 ID：{validation.get('duplicate_ids', [])}
 - 內容品質問題：{quality_issues}
 請重新輸出完整報告。每個 expected candidate_id 必須且只能出現一次，標記格式必須是 `<!-- candidate_id: N -->`，並緊接在該則正式新聞標題前。不得只補局部段落。
+正式新聞類型標籤只能使用「技術新知」、「重大事故」、「營運動態」或「機電標案」；不得把 Python internal subtype 當成正式標籤，且須依候選資料中的 authoritative classification 放入對應章節。
 
 上一次輸出僅供修正格式參考：
 {previous_response}
