@@ -1428,8 +1428,8 @@ def canonical_formal_report_category(value: str) -> str:
 
 def _formal_category_for_candidate(candidate: dict) -> str:
     internal_category = str(
-        candidate.get("classification")
-        or candidate.get("primary_category")
+        candidate.get("primary_category")
+        or candidate.get("classification")
         or candidate.get("preliminary_type")
         or ""
     ).strip()

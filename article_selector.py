@@ -42,6 +42,7 @@ from electromechanical_taxonomy import (
     CORE_TO_PROCUREMENT_GROUP,
     classify_candidate_electromechanical,
 )
+from category_conflict_resolver import resolve_primary_category
 
 LOW_VALUE_POLICY_TERMS = [
     "holiday service", "weekend service", "weekender", "service advisory",
@@ -3690,6 +3691,49 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return _cached_candidate_bool(candidate, "passes_service_opening_gate", _compute_passes_service_opening_gate)
 
 
+    def _compute_research_innovation_gate(candidate: dict, procurement_payload: dict) -> dict:
+        text = _candidate_selection_text(candidate)
+        research_actions = [
+            term for term in (
+                "research", "researchers", "prototype", "pilot", "trial",
+                "demonstration", "demonstrated", "validate", "validated",
+                "breakthrough", "研究", "原型", "試驗", "示範", "驗證", "突破",
+            )
+            if _contains_any_term(text, [term])
+        ]
+        technical_objects = [
+            term for term in (
+                "cbtc", "signalling", "signaling", "algorithm", "technology",
+                "rail material", "track material", "composite rail", "composite material",
+                "軌道材料", "複合材料", "號誌", "演算法", "技術",
+            )
+            if _contains_any_term(text, [term])
+        ]
+        result_status = [
+            term for term in (
+                "new", "novel", "breakthrough", "prototype", "pilot", "trial",
+                "demonstration", "demonstrated", "validated", "results",
+                "improvement", "reducing", "increase", "新型", "創新", "突破",
+                "原型", "試驗", "示範", "驗證", "成果", "改善", "降低", "提升",
+            )
+            if _contains_any_term(text, [term])
+        ]
+        gate_pass = bool(
+            _candidate_urban_rail_gate(candidate)
+            and _has_valid_operational_metadata(candidate)
+            and research_actions
+            and technical_objects
+            and result_status
+            and not procurement_payload.get("procurement_gate_pass")
+        )
+        return {
+            "research_innovation_gate_pass": gate_pass,
+            "research_innovation_actions": list(dict.fromkeys(research_actions)),
+            "research_innovation_objects": list(dict.fromkeys(technical_objects)),
+            "research_innovation_status": list(dict.fromkeys(result_status)),
+        }
+
+
     def evaluate_category_gates(candidate: dict) -> dict:
         analysis_cache = _candidate_analysis_cache(candidate)
         cached = analysis_cache.get("category_gate_payload")
@@ -3705,6 +3749,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
         passes_forward_gate = bool(forward_gate_payload.get("passes_forward_technology_gate"))
         procurement_gate_payload = _compute_electromechanical_procurement_gate(candidate)
+        research_innovation_payload = _compute_research_innovation_gate(
+            candidate,
+            procurement_gate_payload,
+        )
         service_opening_payload = _compute_service_opening_gate(candidate)
         technical_operation_incident_payload = _compute_technical_operation_incident(candidate)
         major_service_adjustment_payload = _compute_major_service_adjustment(candidate)
@@ -3732,10 +3780,29 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             text,
             HIGH_VALUE_POLICY_GATE_TERMS + SUBSTANTIVE_POLICY_DETAIL_TERMS,
         ) or bool(major_service_adjustment_payload.get("major_service_adjustment"))
+        policy_action = bool(
+            _is_policy_dominant(candidate)
+            or (
+                policy_signal
+                and _contains_any_term(
+                    text,
+                    [
+                        "approved", "approve", "adopted", "announced", "introduced",
+                        "reform", "adjustment", "restructuring", "decision", "changes",
+                        "measures", "improvement plan", "governance measures", "improve",
+                        "核准", "核定", "通過", "採用", "宣布", "改革", "調整", "決定",
+                        "措施", "改善計畫", "治理措施", "改善",
+                    ],
+                )
+            )
+            or technical_operation_incident_payload.get("technical_operation_incident")
+            or major_service_adjustment_payload.get("major_service_adjustment")
+        )
         policy_signals = {
             "urban_rail": _candidate_urban_rail_gate(candidate),
             "source_and_date": _has_valid_operational_metadata(candidate),
             "policy_signal": policy_signal,
+            "policy_action": policy_action,
             "major_service_adjustment": bool(major_service_adjustment_payload.get("major_service_adjustment")),
         }
         policy_failure_reasons = [key for key, enabled in policy_signals.items() if not enabled]
@@ -3755,11 +3822,17 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
         gates = {
             "major_accident": major_accident_pass,
-            "technology": _passes_technical_triad(candidate) or passes_forward_gate,
+            "technology": (
+                _passes_technical_triad(candidate)
+                or passes_forward_gate
+                or bool(research_innovation_payload.get("research_innovation_gate_pass"))
+            ),
             "operational_dispute": _passes_operational_dispute_gate(candidate),
-            "operational_policy": _passes_high_value_policy_gate(candidate) or bool(
-                technical_operation_incident_payload.get("technical_operation_incident")
-            ) or bool(major_service_adjustment_payload.get("major_service_adjustment")),
+            "operational_policy": bool(
+                (_passes_high_value_policy_gate(candidate) and policy_action)
+                or technical_operation_incident_payload.get("technical_operation_incident")
+                or major_service_adjustment_payload.get("major_service_adjustment")
+            ),
             SERVICE_OPENING_CATEGORY_KEY: bool(service_opening_payload.get("service_opening_gate_pass")),
             ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY: bool(
                 procurement_category_selected
@@ -3776,6 +3849,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if gates["technology"]:
             if passes_forward_gate and not _passes_technical_triad(candidate):
                 reasons["technology"] = "forward technology alternate gate 通過，具都市軌道應用、新方法、驗證及明確效益。"
+            elif research_innovation_payload.get("research_innovation_gate_pass") and not _passes_technical_triad(candidate):
+                reasons["technology"] = "具研究／原型／試驗行為、都市軌道技術對象及已驗證的新穎成果，且無採購事件。"
             else:
                 reasons["technology"] = "具都市軌道對象、機電/設備主題及導入/更新/維修行為。"
         elif _is_project_only_technical_candidate(candidate):
@@ -3821,35 +3896,35 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 procurement_gate_payload.get("procurement_failure_reasons", [])
             )
 
-        primary_category = "excluded"
-        for key, label in (
-            ("major_accident", "重大事故"),
-            ("operational_dispute", "營運爭議"),
-            ("operational_policy", "營運政策"),
-            ("technology", "技術新知"),
-            (SERVICE_OPENING_CATEGORY_KEY, "營運政策"),
-            (
-                ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
-                ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
-            ),
+        procurement_objects = list(
+            procurement_gate_payload.get("procurement_systems", [])
+        )
+        if (
+            not procurement_objects
+            and procurement_gate_payload.get("procurement_generic_electromechanical_scope")
         ):
-            if gates.get(key):
-                primary_category = label
-                break
-        alternatives = [
-            label for key, label in (
-                ("major_accident", "重大事故"),
-                ("operational_dispute", "營運爭議"),
-                ("operational_policy", "營運政策"),
-                ("technology", "技術新知"),
-                (SERVICE_OPENING_CATEGORY_KEY, "營運政策"),
-                (
-                    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
-                    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
-                ),
-            )
-            if gates.get(key) and label != primary_category
-        ]
+            procurement_objects.append("generic_electromechanical_scope")
+        category_resolution = resolve_primary_category(
+            gates=gates,
+            procurement_actions=list(procurement_gate_payload.get("procurement_actions", [])),
+            procurement_systems=procurement_objects,
+            service_opening_signals=list(service_opening_payload.get("service_opening_signals", [])),
+            major_accident_signals=list(dict.fromkeys(major_accident_signals)),
+            policy_signals=[key for key, enabled in policy_signals.items() if enabled],
+            dispute_signals=[key for key, enabled in dispute_signals.items() if enabled],
+            technology_signals=(
+                list(canonical_tags)
+                + list(research_innovation_payload.get("research_innovation_actions", []))
+                + list(research_innovation_payload.get("research_innovation_objects", []))
+                + list(research_innovation_payload.get("research_innovation_status", []))
+            ),
+        )
+        primary_category = category_resolution["primary_category"]
+        alternatives = list(dict.fromkeys(
+            rejected["category"]
+            for rejected in category_resolution.get("category_rejected_conflicts", [])
+            if rejected.get("category") != primary_category
+        ))
         if primary_category == "excluded":
             reasons.setdefault(
             "no_category_gate",
@@ -3867,7 +3942,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 reason for key, reason in reasons.items()
                 if key in gates and reason
             ]
-            rule = "category_gate_priority"
+            rule = "event_action_object_status"
             if original_category == "重大事故" and primary_category == "營運政策" and _is_post_incident_policy_response(candidate):
                 rule = "post_incident_policy_response_overrides_accident"
             category_reclassification = {
@@ -3902,10 +3977,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             ),
             "alternative_category_flags": alternatives,
             "category_reclassification": category_reclassification,
+            **category_resolution,
             **service_opening_payload,
             **technical_operation_incident_payload,
             **major_service_adjustment_payload,
             **procurement_gate_payload,
+            **research_innovation_payload,
             "major_accident_signals": list(dict.fromkeys(major_accident_signals)),
             "major_accident_failure_reasons": list(dict.fromkeys(major_accident_failure_reasons)),
             "policy_gate_positive_signals": [key for key, enabled in policy_signals.items() if enabled],

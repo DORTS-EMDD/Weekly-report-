@@ -108,7 +108,7 @@ class ServiceOpeningGateTests(unittest.TestCase):
                 title,
             )
 
-    def test_technology_priority_and_procurement_separation(self):
+    def test_actual_opening_status_and_future_contract_are_separated(self):
         api = _selector(selected_types=["技術新知", "營運政策"])
         technical = _evaluated(
             api,
@@ -127,7 +127,8 @@ class ServiceOpeningGateTests(unittest.TestCase):
             ),
         )
         self.assertTrue(technical["category_gates"][SERVICE_OPENING_CATEGORY_KEY])
-        self.assertEqual(technical["primary_category"], "技術新知")
+        self.assertEqual(technical["primary_category"], "營運政策")
+        self.assertEqual(technical["operational_subtype"], SERVICE_OPENING_CATEGORY_KEY)
         self.assertFalse(procurement["category_gates"][SERVICE_OPENING_CATEGORY_KEY])
 
     def test_service_opening_query_family_is_small_and_contextual(self):

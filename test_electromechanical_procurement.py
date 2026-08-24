@@ -239,7 +239,7 @@ class ElectromechanicalProcurementMixedPriorityTests(unittest.TestCase):
             ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
         )
 
-    def test_mixed_moving_block_cbtc_keeps_technology_primary(self):
+    def test_mixed_moving_block_cbtc_contract_keeps_procurement_primary(self):
         candidate = _evaluate(
             _selector(),
             _candidate(
@@ -249,11 +249,11 @@ class ElectromechanicalProcurementMixedPriorityTests(unittest.TestCase):
         )
         self.assertTrue(candidate["category_gates"]["technology"])
         self.assertTrue(candidate["procurement_gate_pass"])
-        self.assertEqual(candidate["primary_category"], "技術新知")
-        self.assertIn(
+        self.assertEqual(
+            candidate["primary_category"],
             ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
-            candidate["alternative_category_flags"],
         )
+        self.assertIn("技術新知", candidate["alternative_category_flags"])
 
     def test_mixed_pure_train_order_is_procurement_only(self):
         candidate = _evaluate(
@@ -267,7 +267,7 @@ class ElectromechanicalProcurementMixedPriorityTests(unittest.TestCase):
             ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
         )
 
-    def test_mixed_sic_train_order_keeps_technology_primary(self):
+    def test_mixed_sic_train_order_keeps_procurement_primary(self):
         candidate = _evaluate(
             _selector(),
             _candidate(
@@ -278,11 +278,11 @@ class ElectromechanicalProcurementMixedPriorityTests(unittest.TestCase):
         )
         self.assertTrue(candidate["category_gates"]["technology"])
         self.assertTrue(candidate["procurement_gate_pass"])
-        self.assertEqual(candidate["primary_category"], "技術新知")
-        self.assertIn(
+        self.assertEqual(
+            candidate["primary_category"],
             ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
-            candidate["alternative_category_flags"],
         )
+        self.assertIn("技術新知", candidate["alternative_category_flags"])
 
     def test_project_only_regression_stays_excluded_when_category_is_not_selected(self):
         candidate = _evaluate(
