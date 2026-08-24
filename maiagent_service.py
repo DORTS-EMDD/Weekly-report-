@@ -237,6 +237,7 @@ def validate_report_candidate_ids(report_md: str, selected_candidates: list[dict
 
 def build_report_retry_prompt(original_prompt: str, previous_response: str, validation: dict) -> str:
     quality_issues = validation.get("content_quality_issues", [])
+    multi_candidate_blocks = validation.get("multi_candidate_model_blocks", [])
     return f"""{original_prompt}
 
 ## 輸出完整性重試
@@ -244,8 +245,10 @@ def build_report_retry_prompt(original_prompt: str, previous_response: str, vali
 - 缺少 ID：{validation.get('missing_ids', [])}
 - 未知 ID：{validation.get('unknown_ids', [])}
 - 重複 ID：{validation.get('duplicate_ids', [])}
+- 多候選 marker block：{multi_candidate_blocks}
 - 內容品質問題：{quality_issues}
-請重新輸出完整報告。每個 expected candidate_id 必須且只能出現一次，標記格式必須是 `<!-- candidate_id: N -->`，並緊接在該則正式新聞標題前。不得只補局部段落。
+請重新輸出完整報告。每個 expected candidate_id 必須且只能出現一次，標記格式必須是 `<!-- candidate_id: N -->`，並緊接在該則正式新聞標題前。每個正式新聞 block 必須且只能包含一個 candidate marker。
+若「多候選 marker block」不為空，列出的每組 candidate IDs 均為無效 block；請將它們改寫為各自獨立的完整新聞 block。即使描述同一事件也不得合併，不得把任何 candidate ID 靜默省略，所有有效 candidate IDs 必須各出現一次。不得只補局部段落。
 正式新聞類型標籤只能使用「技術新知」、「重大事故」、「營運動態」或「機電標案」；不得把 Python internal subtype 當成正式標籤，且須依候選資料中的 authoritative classification 放入對應章節。
 
 上一次輸出僅供修正格式參考：

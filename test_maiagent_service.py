@@ -8,6 +8,25 @@ import maiagent_service
 
 
 class MaiAgentTimeoutTests(unittest.TestCase):
+    def test_retry_prompt_lists_multi_candidate_blocks_and_requires_split(self):
+        prompt = maiagent_service.build_report_retry_prompt(
+            "original prompt",
+            "previous response",
+            {
+                "missing_ids": [],
+                "unknown_ids": [],
+                "duplicate_ids": [],
+                "multi_candidate_model_blocks": [[9, 12]],
+                "content_quality_issues": [],
+            },
+        )
+
+        self.assertIn("多候選 marker block：[[9, 12]]", prompt)
+        self.assertIn("每個正式新聞 block 必須且只能包含一個 candidate marker", prompt)
+        self.assertIn("各自獨立的完整新聞 block", prompt)
+        self.assertIn("不得合併", prompt)
+        self.assertIn("所有有效 candidate IDs 必須各出現一次", prompt)
+
     def _call(self, http_client):
         return maiagent_service.call_maiagent_cloud(
             "fixture prompt",

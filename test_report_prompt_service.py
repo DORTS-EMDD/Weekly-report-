@@ -18,14 +18,14 @@ EXPECTED_PROMPT_SHA256 = {
         "4930e0434c882b1fc01b3225fa18264228eb50894acae9d33e2239d2d2965925"
     ),
     "formal_with_journal": (
-        "2dc63db3491cfc36fb52a0054bcc0685a95980c89d2482c49a399e4affeca2e5"
+        "adf7ed622c99ae4a42fde0fe9422561838ecbcee9467929f639052e232e60303"
     ),
     "formal_without_research": (
-        "c132a3395d1c421f595036549fdc44d7729c2d18b8746e356007f8c0457aec8a"
+        "07132c86ed77fa1c1f6f3275bc22b24a48cf4e1ef96cf0b0186cefde706ac87c"
     ),
 }
 EXPECTED_PROMPT_AGGREGATE_SHA256 = (
-    "d598a7fe5c731aa22522fd50d9027d0d5db3ad17029854f677c9d518186db223"
+    "380040a401942cf2ed176f06e9fcaf6af0b332e060e5c2bf5765ff8734ea7376"
 )
 EXPECTED_PARSE_AGGREGATE_SHA256 = (
     "ad58f4e90089d1349ff450a675eecf5a8ca65551c0aa5561212843ce76da9bf8"
@@ -179,6 +179,23 @@ def _journal_candidates():
 
 
 class ReportPromptServiceGoldenTests(unittest.TestCase):
+    def test_formal_prompt_enforces_one_candidate_per_block(self):
+        prompt = report_prompt_service.build_report_prompt(
+            _candidates(),
+            [],
+            37,
+            context=dataclasses.replace(
+                _context(),
+                include_research_supplement=False,
+            ),
+        )
+
+        self.assertIn("一個正式新聞 block 只能包含一個 candidate_id marker", prompt)
+        self.assertIn("每個 selected candidate 必須各自輸出一個完整 block", prompt)
+        self.assertNotIn("同一事件若合併多個候選", prompt)
+        self.assertNotIn("同一事件的不同來源必須合併", prompt)
+        self.assertNotIn("同一事件可合併不同來源", prompt)
+
     def test_prompt_strings_match_pre_split_sha256(self):
         context = _context()
         without_research = dataclasses.replace(
