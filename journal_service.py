@@ -204,6 +204,69 @@ def _metadata_route_for_candidate(
     return "Generic Academic"
 
 
+def _metadata_priority_for_result(result: dict, source_family: str = "") -> tuple[int, dict, str]:
+    metadata = result.get("journal_metadata") if isinstance(result.get("journal_metadata"), dict) else {}
+    title = _clean_text(result.get("title") or "")
+    snippet = _clean_text(result.get("body") or result.get("excerpt") or result.get("description") or "")
+    url = _journal_result_url(result)
+    doi = _extract_doi(f"{url} {title} {snippet} {metadata.get('doi', '')}")
+    pii = str(metadata.get("pii") or _extract_pii(f"{url} {title} {snippet}") or "")
+    page_type = classify_academic_page_type(url, title, doi=doi, pii=pii)
+    text = f"{title} {snippet} {url}"
+    components = {
+        "article_page": 40 if page_type == "ARTICLE_PAGE" else 0,
+        "credible_identifier": 20 if doi else (18 if pii else 0),
+        "urban_rail_context": 12 if _contains_any_term(text, JOURNAL_RAIL_CONTEXT_TERMS) else 0,
+        "technical_context": 0,
+        "specific_title": 0 if is_generic_academic_title(title) else 4,
+        "complete_title": 0 if is_truncated_academic_title(title) else 3,
+        "date_hint": 1 if _has_explicit_full_date(_discovery_date_hint(result, title, snippet)) else 0,
+    }
+    if _contains_any_term(text, JOURNAL_CORE_SYSTEM_TERMS):
+        components["technical_context"] = 10
+    elif _contains_any_term(text, JOURNAL_SECONDARY_SYSTEM_TERMS):
+        components["technical_context"] = 7
+    elif _contains_any_term(text, JOURNAL_INSIGHT_TERMS):
+        components["technical_context"] = 5
+    score = sum(components.values())
+    route = _metadata_route_for_candidate(source_family, url, metadata)
+    return score, components, route
+
+
+def _prioritize_metadata_results(results: list[dict], source_family: str = "") -> list[dict]:
+    grouped: dict[str, list[dict]] = {}
+    route_sequence: list[str] = []
+    for index, result in enumerate(results or []):
+        if not isinstance(result, dict):
+            continue
+        score, components, route = _metadata_priority_for_result(result, source_family)
+        enriched = dict(result)
+        enriched["_metadata_priority_score"] = score
+        enriched["_metadata_priority_components"] = components
+        enriched["_metadata_route"] = route
+        enriched["_metadata_discovery_index"] = index
+        grouped.setdefault(route, []).append(enriched)
+        route_sequence.append(route)
+    for route, items in grouped.items():
+        items.sort(
+            key=lambda item: (
+                -int(item.get("_metadata_priority_score", 0) or 0),
+                _normalize_title(item.get("title", "")),
+                _dedupe_url(_journal_result_url(item)),
+                int(item.get("_metadata_discovery_index", 0) or 0),
+            )
+        )
+        for rank, item in enumerate(items, start=1):
+            item["_metadata_route_rank_before"] = rank
+    positions: dict[str, int] = {}
+    prioritized: list[dict] = []
+    for route in route_sequence:
+        position = positions.get(route, 0)
+        prioritized.append(grouped[route][position])
+        positions[route] = position + 1
+    return prioritized
+
+
 def _new_metadata_route_metrics() -> dict:
     return {
         "query_count": 0,
@@ -1309,6 +1372,9 @@ def collect_journal_candidates(
         metadata["discovery_date_hint"] = _discovery_date_hint(result, title, snippet)
         metadata_route = _metadata_route_for_candidate(source_family, url, metadata)
         route_metrics = _route_metrics(metadata_route)
+        metadata["metadata_priority_score"] = int(result.get("_metadata_priority_score", 0) or 0)
+        metadata["metadata_priority_components"] = dict(result.get("_metadata_priority_components") or {})
+        metadata["route_rank_before_metadata"] = int(result.get("_metadata_route_rank_before", 0) or 0)
         text = f"{title} {snippet} {url} {metadata.get('journal_name', '')} {doi} {pii}"
         if pipeline_counts is not None and _journal_source_domain_matches(url, source_family):
             pipeline_counts["domain_match_count"] += 1
@@ -1491,6 +1557,9 @@ def collect_journal_candidates(
         candidate["journal_name"] = metadata.get("journal_name", source)
         candidate["metadata_fetch_status"] = metadata.get("metadata_fetch_status", "not_needed")
         candidate["metadata_route"] = metadata_route
+        candidate["metadata_priority_score"] = metadata.get("metadata_priority_score", 0)
+        candidate["metadata_priority_components"] = dict(metadata.get("metadata_priority_components") or {})
+        candidate["route_rank_before_metadata"] = metadata.get("route_rank_before_metadata", 0)
         candidate["metadata_attempted"] = metadata.get("metadata_resolution_status") in {
             "METADATA_ATTEMPTED",
             "METADATA_RESCUED",
@@ -1526,7 +1595,7 @@ def collect_journal_candidates(
     statuses.extend(source_statuses)
     source_accepted = 0
     source_stage_counts: dict[str, dict[str, int]] = {}
-    for result in source_results:
+    for result in _prioritize_metadata_results(source_results, "source_pages"):
         if len(candidates) >= target_max:
             break
         source_name = result.get("source_page", "學術來源頁")
@@ -1577,7 +1646,7 @@ def collect_journal_candidates(
         pipeline_counts["backend_raw_count"] = len(results)
         pipeline_counts["result_url_count"] = sum(1 for result in results if _journal_result_url(result))
         accepted = 0
-        for result in results:
+        for result in _prioritize_metadata_results(results, source_family):
             if len(candidates) >= target_max:
                 break
             if _try_accept_result(result, query, source_family=source_family, pipeline_counts=pipeline_counts):
@@ -1603,7 +1672,7 @@ def collect_journal_candidates(
             pipeline_counts["backend_raw_count"] = len(results)
             pipeline_counts["result_url_count"] = sum(1 for result in results if _journal_result_url(result))
             accepted = 0
-            for result in results:
+            for result in _prioritize_metadata_results(results, source_name):
                 if _try_accept_result(result, query_text, source_family=source_name, pipeline_counts=pipeline_counts):
                     accepted += 1
             elapsed = time.perf_counter() - query_started

@@ -233,6 +233,45 @@ class AcademicMetadataRoutingTests(unittest.TestCase):
             "Broad Academic",
         )
 
+    def test_sciencedirect_article_with_pii_outranks_landing_candidate(self):
+        results = journal_service._prioritize_metadata_results([
+            {
+                "title": "ScienceDirect",
+                "body": "Urban rail research landing page",
+                "href": "https://www.sciencedirect.com/journal/urban-rail",
+            },
+            {
+                "title": "Urban rail thermal management study",
+                "body": "Metro platform thermal management and energy research",
+                "href": "https://www.sciencedirect.com/science/article/pii/S1234567890123456",
+            },
+        ], "ScienceDirect")
+        self.assertEqual(results[0]["title"], "Urban rail thermal management study")
+        self.assertEqual(results[0]["_metadata_route"], "ScienceDirect")
+        self.assertEqual(results[0]["_metadata_route_rank_before"], 1)
+        self.assertGreater(results[0]["_metadata_priority_score"], results[1]["_metadata_priority_score"])
+
+    def test_ieee_article_outranks_profile_and_taylor_doi_is_article_like(self):
+        ieee_results = journal_service._prioritize_metadata_results([
+            {"title": "IEEE Xplore", "href": "https://ieeexplore.ieee.org/author/fixture"},
+            {"title": "Urban rail signalling research", "href": "https://ieeexplore.ieee.org/document/fixture"},
+        ], "IEEE Xplore")
+        self.assertEqual(ieee_results[0]["title"], "Urban rail signalling research")
+        taylor_results = journal_service._prioritize_metadata_results([
+            {"title": "Urban rail systems research", "href": "https://www.tandfonline.com/doi/full/10.5555/fixture"},
+        ], "Taylor & Francis")
+        self.assertEqual(taylor_results[0]["_metadata_route"], "Taylor & Francis")
+        self.assertEqual(taylor_results[0]["_metadata_priority_components"]["credible_identifier"], 20)
+
+    def test_metadata_priority_order_is_stable_and_total_budget_is_unchanged(self):
+        results = [
+            {"title": "Urban rail paper B", "href": "https://link.springer.com/article/fixture-b"},
+            {"title": "Urban rail paper A", "href": "https://link.springer.com/article/fixture-a"},
+        ]
+        first = journal_service._prioritize_metadata_results(results, "Springer")
+        second = journal_service._prioritize_metadata_results(results, "Springer")
+        self.assertEqual([item["href"] for item in first], [item["href"] for item in second])
+
     def test_metadata_budget_is_bounded_per_route_and_broad_lane_is_not_starved(self):
         def resolved_metadata(url: str, **kwargs):
             return {
@@ -285,6 +324,10 @@ class AcademicMetadataRoutingTests(unittest.TestCase):
             with self.subTest(route=route):
                 self.assertGreater(routes[route]["metadata_attempted_count"], 0)
         self.assertGreater(routes["Broad Academic"]["accepted_count"], 0)
+        self.assertLessEqual(
+            sum(int(metrics["metadata_attempted_count"]) for metrics in routes.values()),
+            18,
+        )
         self.assertTrue(any(item.get("metadata_route") == "Broad Academic" for item in selected))
         for item in selected:
             self.assertTrue(item["metadata_attempted"])
