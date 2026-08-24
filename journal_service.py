@@ -80,6 +80,17 @@ JOURNAL_SOURCE_CANONICAL_DOMAINS = {
     "Taylor & Francis": "tandfonline.com",
 }
 
+JOURNAL_METADATA_ROUTE_NAMES = (
+    "Springer",
+    "ScienceDirect",
+    "MDPI",
+    "IEEE Xplore",
+    "Taylor & Francis",
+    "Broad Academic",
+    "Crossref rescue",
+    "Generic Academic",
+)
+
 
 def build_broad_academic_queries(limit: int | None = None) -> list[str]:
     """Build a small generic academic discovery lane without fixture terms."""
@@ -171,6 +182,43 @@ def _journal_source_label(source_name: str) -> str:
     return str(source_name or "Generic Academic")
 
 
+def _metadata_route_for_candidate(
+    source_family: str = "",
+    url: str = "",
+    metadata: dict | None = None,
+) -> str:
+    publisher_route = _journal_source_family_for_url(url)
+    if publisher_route:
+        return publisher_route
+    source_route = _journal_source_label(source_family)
+    if source_route in JOURNAL_METADATA_ROUTE_NAMES and source_route != "Generic Academic":
+        return source_route
+    publisher_domain = _academic_publisher_domain(url, metadata)
+    for source_name, canonical_domain in JOURNAL_SOURCE_CANONICAL_DOMAINS.items():
+        if publisher_domain == canonical_domain:
+            return source_name
+    if source_route == "Broad Academic":
+        return source_route
+    if _extract_doi(url) or (metadata or {}).get("doi"):
+        return "Crossref rescue"
+    return "Generic Academic"
+
+
+def _new_metadata_route_metrics() -> dict:
+    return {
+        "query_count": 0,
+        "raw_count": 0,
+        "domain_match_count": 0,
+        "metadata_eligible_count": 0,
+        "metadata_attempted_count": 0,
+        "metadata_resolved_count": 0,
+        "urban_rail_pass_count": 0,
+        "accepted_count": 0,
+        "metadata_budget_skipped_count": 0,
+        "metadata_failure_reason_counts": {},
+    }
+
+
 def _journal_result_url(result: dict) -> str:
     """Prefer a publisher/canonical URL over a search redirect when present."""
     values: list[str] = []
@@ -195,6 +243,74 @@ def _journal_result_url(result: dict) -> str:
     return values[0] if values else ""
 
 
+_ACADEMIC_TITLE_STOPWORDS = {
+    "a", "an", "the", "and", "for", "of", "to", "in", "on", "with",
+    "online", "system", "platform", "page",
+}
+_ACADEMIC_GENERIC_TITLE_TOKENS = {
+    "ieee", "xplore", "sciencedirect", "springerlink", "mdpi", "taylor",
+    "francis", "publications", "research", "home", "search", "journal",
+    "journals", "article", "articles", "paper", "papers", "online", "homepage",
+    "results", "landing",
+}
+_ACADEMIC_ARTICLE_PATH_MARKERS = (
+    "/article/", "/articles/", "/science/article/", "/document/", "/doi/",
+    "/full/", "/abstract/", "/abs/", "/view/", "/paper/", "/publication/",
+)
+_ACADEMIC_LANDING_PATH_MARKERS = (
+    "/home", "/search", "/journals", "/journal", "/publications", "/issue",
+    "/issues", "/authors", "/author", "/about",
+)
+
+
+def _academic_meaningful_tokens(text: str) -> list[str]:
+    tokens = re.findall(r"[a-z0-9]+", str(text or "").casefold())
+    return [token for token in tokens if token not in _ACADEMIC_TITLE_STOPWORDS and len(token) > 1]
+
+
+def is_generic_academic_title(title: str) -> bool:
+    tokens = _academic_meaningful_tokens(title)
+    normalized = _normalize_title(title)
+    if not tokens:
+        return True
+    if normalized in {
+        "ieee xplore", "sciencedirect", "springerlink", "mdpi",
+        "taylor francis online", "publications research", "journal homepage",
+        "search results", "home", "search",
+        "journal", "journals", "articles", "article",
+    }:
+        return True
+    return len(tokens) <= 3 and set(tokens).issubset(_ACADEMIC_GENERIC_TITLE_TOKENS)
+
+
+def is_truncated_academic_title(title: str) -> bool:
+    return bool(re.search(r"(?:\.\.\.|…|﹍|︙)\s*$", str(title or "").strip()))
+
+
+def classify_academic_page_type(
+    url: str,
+    title: str = "",
+    *,
+    doi: str = "",
+    pii: str = "",
+) -> str:
+    parsed = urllib.parse.urlparse(str(url or ""))
+    path = parsed.path.casefold()
+    query = urllib.parse.parse_qs(parsed.query)
+    if any(key in query for key in ("q", "query", "search")) or "/search" in path:
+        return "SEARCH_RESULT"
+    if any(marker in path for marker in ("/issue", "/issues")):
+        return "ISSUE_PAGE"
+    if "/journal" in path or "/journals" in path:
+        return "JOURNAL_HOME"
+    has_identifier = bool(_extract_doi(f"{url} {doi}") or pii)
+    if any(marker in path for marker in _ACADEMIC_ARTICLE_PATH_MARKERS) or has_identifier:
+        return "ARTICLE_PAGE"
+    if any(marker in path for marker in _ACADEMIC_LANDING_PATH_MARKERS) or is_generic_academic_title(title):
+        return "GENERIC_LANDING"
+    return "UNKNOWN"
+
+
 def _journal_source_domain_matches(url: str, source_family: str = "") -> bool:
     domain = _academic_domain(url)
     if not domain:
@@ -212,13 +328,20 @@ def _journal_source_domain_matches(url: str, source_family: str = "") -> bool:
     }
 
 
-def _journal_pipeline_counts() -> dict[str, int]:
+def _journal_pipeline_counts() -> dict:
     return {
         "backend_raw_count": 0,
         "result_url_count": 0,
         "domain_match_count": 0,
         "metadata_attempted_count": 0,
         "metadata_resolved_count": 0,
+        "metadata_rescued_count": 0,
+        "metadata_eligible_count": 0,
+        "article_page_count": 0,
+        "metadata_false_match_rejected_count": 0,
+        "metadata_budget_skipped_count": 0,
+        "metadata_failure_reason_counts": {},
+        "date_pass_count": 0,
         "urban_rail_pass_count": 0,
         "journal_score_pass_count": 0,
         "accepted_count": 0,
@@ -289,6 +412,9 @@ def _research_date_info(
             "published_date": date_obj.isoformat(),
             "date_confidence": "high",
             "date_reason": str(metadata.get("date_reason") or f"{key} 提供完整日期"),
+            "date_source": str(metadata.get("metadata_source") or "publisher_metadata"),
+            "date_authoritative": True,
+            "date_resolution_method": key,
             "metadata_source": str(metadata.get("metadata_source") or "publisher_metadata"),
             "metadata_fields_seen": list(metadata.get("metadata_fields_seen") or [key]),
             "discovery_date_hint": _discovery_date_hint(result, title, snippet),
@@ -305,6 +431,9 @@ def _research_date_info(
             if _discovery_date_hint(result, title, snippet)
             else ("只有年份或未提供明確發表日期" if year_only else "未提供明確發表日期")
         ),
+        "date_source": str(metadata.get("metadata_source") or result.get("metadata_source") or "search_result"),
+        "date_authoritative": False,
+        "date_resolution_method": "search_result_hint_only" if _discovery_date_hint(result, title, snippet) else "unresolved",
         "metadata_source": str(metadata.get("metadata_source") or result.get("metadata_source") or "search_result"),
         "metadata_fields_seen": list(metadata.get("metadata_fields_seen") or result.get("metadata_fields_seen") or []),
         "discovery_date_hint": _discovery_date_hint(result, title, snippet),
@@ -544,9 +673,18 @@ def _metadata_has_authoritative_date(metadata: dict) -> bool:
     )
 
 
-def _crossref_publisher_matches(publisher: str, publisher_domain: str) -> bool:
+def _crossref_publisher_matches(
+    publisher: str,
+    publisher_domain: str,
+    expected_publisher: str = "",
+) -> bool:
     publisher_text = str(publisher or "").casefold()
     domain = _academic_domain(publisher_domain)
+    if expected_publisher:
+        expected_tokens = set(_academic_meaningful_tokens(expected_publisher))
+        actual_tokens = set(_academic_meaningful_tokens(publisher_text))
+        if expected_tokens and expected_tokens.intersection(actual_tokens):
+            return True
     publisher_tokens = {
         "springer.com": ("springer",),
         "sciencedirect.com": ("elsevier",),
@@ -561,24 +699,58 @@ def fetch_scholarly_title_metadata(
     title: str,
     *,
     publisher_domain: str = "",
+    publisher_name: str = "",
     discovery_date_hint: str = "",
+    snippet: str = "",
+    url: str = "",
+    doi: str = "",
+    pii: str = "",
+    page_type: str = "",
     context: JournalServiceContext,
 ) -> dict:
-    clean_title = _clean_text(title)
+    raw_title = str(title or "").strip()
+    clean_title = _clean_text(raw_title)
+    lookup_title = re.sub(r"(?:\.\.\.|…|﹍|︙)\s*$", "", clean_title).strip()
+    resolved_page_type = page_type or classify_academic_page_type(url, raw_title, doi=doi, pii=pii)
+    base = {
+        "metadata_source": "scholarly_title_lookup",
+        "page_type": resolved_page_type,
+        "metadata_fields_seen": [],
+        "metadata_lookup_candidate_title": lookup_title,
+        "metadata_lookup_resolved_title": "",
+        "metadata_title_prefix_match": False,
+        "metadata_publisher_match": False,
+        "metadata_year_match": False,
+    }
+    if url and resolved_page_type != "ARTICLE_PAGE" and not (doi or pii):
+        return {
+            **base,
+            "metadata_fetch_status": "skipped",
+            "metadata_lookup_skipped_reason": "generic_landing_page_title",
+            "metadata_match_status": "generic_landing_page",
+        }
+    if is_generic_academic_title(raw_title):
+        return {
+            **base,
+            "metadata_fetch_status": "skipped",
+            "metadata_lookup_skipped_reason": "generic_landing_page_title",
+            "metadata_match_status": "generic_landing_page",
+        }
+    clean_title = lookup_title
     if not clean_title or not publisher_domain:
         return {
+            **base,
             "metadata_fetch_status": "not_attempted",
-            "metadata_source": "scholarly_title_lookup",
-            "metadata_fields_seen": [],
+            "metadata_reject_reason": "缺少可用候選標題或出版者網域",
         }
     params = urllib.parse.urlencode({"query.bibliographic": clean_title, "rows": 5})
     endpoint = f"https://api.crossref.org/works?{params}"
     payload = _journal_safe_get(endpoint, timeout=8, http_session_factory=context.http_session_factory)
     if not payload:
         return {
+            **base,
             "metadata_fetch_status": "failed",
-            "metadata_source": "scholarly_title_lookup",
-            "metadata_fields_seen": [],
+            "metadata_reject_reason": "Crossref lookup 無回應",
         }
     try:
         items = json.loads(payload).get("message", {}).get("items", [])
@@ -589,15 +761,38 @@ def fetch_scholarly_title_metadata(
     normalized_title = _normalize_title(clean_title)
     hint_year_match = re.search(r"\b(20\d{2}|19\d{2})\b", str(discovery_date_hint or ""))
     hint_year = hint_year_match.group(1) if hint_year_match else ""
+    truncated = is_truncated_academic_title(raw_title)
+    prefix_tokens = _academic_meaningful_tokens(clean_title)
+    snippet_tokens = set(_academic_meaningful_tokens(snippet))
+    last_reject_reason = "找不到符合高信度條件的 scholarly metadata"
     for item in items:
         if not isinstance(item, dict):
             continue
         item_title = _clean_text(" ".join(str(value) for value in (item.get("title") or [])[:1]))
         item_normalized = _normalize_title(item_title)
         similarity = difflib.SequenceMatcher(None, normalized_title, item_normalized).ratio()
-        if not item_normalized or (item_normalized != normalized_title and similarity < 0.93):
+        prefix_match = bool(
+            truncated
+            and len(prefix_tokens) >= 4
+            and item_normalized.startswith(normalized_title)
+        )
+        if not item_normalized or (item_normalized != normalized_title and not prefix_match and similarity < 0.93):
+            last_reject_reason = "標題未達 exact/near-exact 或截斷前綴匹配"
             continue
-        if not _crossref_publisher_matches(item.get("publisher", ""), publisher_domain):
+        if is_generic_academic_title(item_title):
+            last_reject_reason = "回傳標題為 generic landing/page title"
+            continue
+        item_type = str(item.get("type") or "").casefold()
+        if item_type and item_type not in {"journal-article", "article", "proceedings-article", "posted-content"}:
+            last_reject_reason = "Crossref item type 不是可接受學術文章"
+            continue
+        publisher_match = _crossref_publisher_matches(
+            item.get("publisher", ""),
+            publisher_domain,
+            publisher_name,
+        )
+        if not publisher_match:
+            last_reject_reason = "出版者與候選 publisher/domain 不一致"
             continue
         date_text = ""
         for date_key in ("published-online", "published-print", "issued", "created"):
@@ -610,15 +805,25 @@ def fetch_scholarly_title_metadata(
                 break
         date_obj = _parse_full_research_date(date_text)
         if not date_obj:
+            last_reject_reason = "Crossref 未提供完整 publication date"
             continue
-        if hint_year and str(date_obj.year) != hint_year:
+        year_match = not hint_year or str(date_obj.year) == hint_year
+        if not year_match:
+            last_reject_reason = "publication year 與 discovery date hint 衝突"
+            continue
+        if truncated and (not snippet_tokens or len(snippet_tokens.intersection(set(_academic_meaningful_tokens(item_title)))) < 2):
+            last_reject_reason = "截斷標題缺少足夠 snippet concept overlap"
             continue
         fields_seen = [key for key in ("title", "publisher", "container-title", "published-online", "published-print", "issued", "DOI") if item.get(key)]
         return {
+            **base,
             "metadata_fetch_status": "success",
-            "metadata_source": "scholarly_title_lookup",
             "metadata_fields_seen": fields_seen,
             "metadata_title": item_title,
+            "metadata_lookup_resolved_title": item_title,
+            "metadata_title_prefix_match": prefix_match,
+            "metadata_publisher_match": publisher_match,
+            "metadata_year_match": year_match,
             "metadata_date_text": date_text,
             "published_date": date_obj.isoformat(),
             "date_confidence": "high",
@@ -634,9 +839,9 @@ def fetch_scholarly_title_metadata(
             "metadata_match_similarity": round(similarity, 4),
         }
     return {
+        **base,
         "metadata_fetch_status": "failed",
-        "metadata_source": "scholarly_title_lookup",
-        "metadata_fields_seen": [],
+        "metadata_reject_reason": last_reject_reason,
         "metadata_match_status": "low_confidence",
     }
 
@@ -645,16 +850,25 @@ def resolve_journal_metadata(
     url: str,
     *,
     doi: str = "",
+    pii: str = "",
     title: str = "",
+    snippet: str = "",
+    publisher_name: str = "",
     discovery_date_hint: str = "",
+    page_type: str = "",
     context: JournalServiceContext,
 ) -> dict:
+    resolved_page_type = page_type or classify_academic_page_type(url, title, doi=doi, pii=pii)
     page_metadata = fetch_journal_page_metadata(url, context=context)
+    page_metadata.setdefault("page_type", resolved_page_type)
+    attempt_methods = ["publisher_page"]
     if _metadata_has_authoritative_date(page_metadata):
+        page_metadata["metadata_attempt_method"] = "publisher_page"
         return page_metadata
     doi_metadata = fetch_doi_metadata(doi or page_metadata.get("doi", ""), context=context)
     merged = dict(page_metadata)
     if doi_metadata.get("metadata_fetch_status") == "success":
+        attempt_methods.append("doi_metadata")
         for key, value in doi_metadata.items():
             if value not in ("", [], None):
                 merged[key] = value
@@ -664,13 +878,23 @@ def resolve_journal_metadata(
             + list(doi_metadata.get("metadata_fields_seen") or [])
         ))
         if _metadata_has_authoritative_date(merged):
+            merged["metadata_attempt_method"] = " -> ".join(attempt_methods)
             return merged
+    elif doi or page_metadata.get("doi"):
+        attempt_methods.append("doi_metadata")
     title_metadata = fetch_scholarly_title_metadata(
         title,
-        publisher_domain=_academic_domain(url),
+        publisher_domain=_academic_publisher_domain(url, {**page_metadata, **doi_metadata}),
+        publisher_name=publisher_name or str(page_metadata.get("publisher") or page_metadata.get("journal_name") or ""),
         discovery_date_hint=discovery_date_hint,
+        snippet=snippet,
+        url=url,
+        doi=doi or page_metadata.get("doi", ""),
+        pii=pii or page_metadata.get("pii", ""),
+        page_type=resolved_page_type,
         context=context,
     )
+    attempt_methods.append("scholarly_title_lookup")
     if title_metadata.get("metadata_fetch_status") == "success":
         for key, value in title_metadata.items():
             if value not in ("", [], None):
@@ -680,11 +904,26 @@ def resolve_journal_metadata(
             list(merged.get("metadata_fields_seen") or [])
             + list(title_metadata.get("metadata_fields_seen") or [])
         ))
-    elif merged.get("metadata_fetch_status") != "success":
-        merged["metadata_fetch_status"] = title_metadata.get("metadata_fetch_status", "failed")
-        merged["metadata_source"] = title_metadata.get("metadata_source", "scholarly_title_lookup")
-        if title_metadata.get("metadata_match_status"):
-            merged["metadata_match_status"] = title_metadata["metadata_match_status"]
+    else:
+        if title_metadata.get("metadata_lookup_skipped_reason"):
+            merged["metadata_lookup_skipped_reason"] = title_metadata["metadata_lookup_skipped_reason"]
+            merged["metadata_match_status"] = title_metadata.get("metadata_match_status", "generic_landing_page")
+            merged["metadata_fetch_status"] = "skipped"
+        elif merged.get("metadata_fetch_status") != "success":
+            merged["metadata_fetch_status"] = title_metadata.get("metadata_fetch_status", "failed")
+            merged["metadata_source"] = title_metadata.get("metadata_source", "scholarly_title_lookup")
+        if title_metadata.get("metadata_reject_reason"):
+            merged["metadata_reject_reason"] = title_metadata["metadata_reject_reason"]
+        for key in (
+            "metadata_lookup_candidate_title", "metadata_lookup_resolved_title",
+            "metadata_title_prefix_match", "metadata_publisher_match", "metadata_year_match",
+        ):
+            if key in title_metadata:
+                merged[key] = title_metadata[key]
+    if title_metadata.get("metadata_fetch_status") == "success":
+        merged["metadata_attempt_method"] = " -> ".join(attempt_methods)
+    else:
+        merged["metadata_attempt_method"] = " -> ".join(attempt_methods)
     return merged
 
 
@@ -824,8 +1063,11 @@ def journal_query_source_outcomes(statuses: list[dict]) -> dict[str, dict]:
                 "backend_raw_count": 0,
                 "result_url_count": 0,
                 "domain_match_count": 0,
+                "metadata_eligible_count": 0,
                 "metadata_attempted_count": 0,
                 "metadata_resolved_count": 0,
+                "metadata_budget_skipped_count": 0,
+                "metadata_failure_reason_counts": {},
                 "urban_rail_pass_count": 0,
                 "journal_score_pass_count": 0,
                 "accepted_count": 0,
@@ -840,10 +1082,14 @@ def journal_query_source_outcomes(statuses: list[dict]) -> dict[str, dict]:
         accepted_count = int(row.get("accepted_count", row.get("count", 0)) or 0)
         for key in (
             "backend_raw_count", "result_url_count", "domain_match_count",
-            "metadata_attempted_count", "metadata_resolved_count",
+            "metadata_eligible_count", "metadata_attempted_count", "metadata_resolved_count",
+            "metadata_budget_skipped_count",
             "urban_rail_pass_count", "journal_score_pass_count",
         ):
             outcome[key] += int(row.get(key, 0) or 0)
+        for reason, count in (row.get("metadata_failure_reason_counts") or {}).items():
+            reasons = outcome.setdefault("metadata_failure_reason_counts", {})
+            reasons[reason] = int(reasons.get(reason, 0) or 0) + int(count or 0)
         outcome["accepted_count"] += accepted_count
         status = str(row.get("status") or "")
         if accepted_count or status == "成功":
@@ -876,8 +1122,11 @@ def academic_source_diagnostics(
             "backend_raw_count": 0,
             "result_url_count": 0,
             "normalized_domain_match_count": 0,
+            "metadata_eligible_count": 0,
             "metadata_attempted_count": 0,
             "metadata_resolved_count": 0,
+            "metadata_budget_skipped_count": 0,
+            "metadata_failure_reason_counts": {},
             "urban_rail_pass_count": 0,
             "journal_score_pass_count": 0,
             "accepted_count": 0,
@@ -887,8 +1136,13 @@ def academic_source_diagnostics(
         metrics["backend_raw_count"] += int(row.get("backend_raw_count", 0) or 0)
         metrics["result_url_count"] += int(row.get("result_url_count", 0) or 0)
         metrics["normalized_domain_match_count"] += int(row.get("domain_match_count", 0) or 0)
+        metrics["metadata_eligible_count"] += int(row.get("metadata_eligible_count", 0) or 0)
         metrics["metadata_attempted_count"] += int(row.get("metadata_attempted_count", 0) or 0)
         metrics["metadata_resolved_count"] += int(row.get("metadata_resolved_count", 0) or 0)
+        metrics["metadata_budget_skipped_count"] += int(row.get("metadata_budget_skipped_count", 0) or 0)
+        for reason, count in (row.get("metadata_failure_reason_counts") or {}).items():
+            reasons = metrics.setdefault("metadata_failure_reason_counts", {})
+            reasons[reason] = int(reasons.get(reason, 0) or 0) + int(count or 0)
         metrics["urban_rail_pass_count"] += int(row.get("urban_rail_pass_count", 0) or 0)
         metrics["journal_score_pass_count"] += int(row.get("journal_score_pass_count", 0) or 0)
         metrics["accepted_count"] += int(row.get("accepted_count", row.get("count", 0)) or 0)
@@ -914,8 +1168,11 @@ def academic_source_diagnostics(
             "backend_raw_count": 0,
             "result_url_count": 0,
             "normalized_domain_match_count": 0,
+            "metadata_eligible_count": 0,
             "metadata_attempted_count": 0,
             "metadata_resolved_count": 0,
+            "metadata_budget_skipped_count": 0,
+            "metadata_failure_reason_counts": {},
             "urban_rail_pass_count": 0,
             "journal_score_pass_count": 0,
             "accepted_count": 0,
@@ -973,7 +1230,11 @@ def collect_journal_candidates(
     excluded: list[dict] = []
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
+    metadata_cache: dict[str, dict] = {}
     metadata_fetch_count = 0
+    metadata_route_attempts: dict[str, int] = {}
+    metadata_route_stats: dict[str, dict] = {}
+    metadata_route_cap = max(1, int(JOURNAL_ARTICLE_FETCH_LIMIT) // len(JOURNAL_METADATA_ROUTE_NAMES))
     metadata_resolution = {
         "attempted": 0,
         "success": 0,
@@ -988,6 +1249,22 @@ def collect_journal_candidates(
         "candidate_scoring": 0.0,
         "dedupe_and_selection": 0.0,
     }
+
+    def _route_metrics(route: str) -> dict:
+        return metadata_route_stats.setdefault(route, _new_metadata_route_metrics())
+
+    def _record_route_failure(route: str, reason: str) -> None:
+        if not reason:
+            return
+        metrics = _route_metrics(route)
+        reasons = metrics.setdefault("metadata_failure_reason_counts", {})
+        reasons[reason] = int(reasons.get(reason, 0) or 0) + 1
+
+    def _record_pipeline_failure(pipeline_counts: dict | None, reason: str) -> None:
+        if pipeline_counts is None or not reason:
+            return
+        reasons = pipeline_counts.setdefault("metadata_failure_reason_counts", {})
+        reasons[reason] = int(reasons.get(reason, 0) or 0) + 1
 
     def _exclude(query: str, title: str, url: str, reason: str, snippet: str = "", extra: dict | None = None) -> None:
         if len(excluded) < 120:
@@ -1030,9 +1307,12 @@ def collect_journal_candidates(
             or "generic_academic"
         )
         metadata["discovery_date_hint"] = _discovery_date_hint(result, title, snippet)
+        metadata_route = _metadata_route_for_candidate(source_family, url, metadata)
+        route_metrics = _route_metrics(metadata_route)
         text = f"{title} {snippet} {url} {metadata.get('journal_name', '')} {doi} {pii}"
         if pipeline_counts is not None and _journal_source_domain_matches(url, source_family):
             pipeline_counts["domain_match_count"] += 1
+            route_metrics["domain_match_count"] += 1
         if any(term.casefold() in text.casefold() for term in JOURNAL_EXCLUDE_TERMS):
             _exclude(query, title, url, "非都市軌道研究場景或排除運具", snippet)
             return False
@@ -1040,47 +1320,15 @@ def collect_journal_candidates(
             _exclude(query, title, url, "缺少 DOI 或正式期刊 URL", snippet)
             return False
 
-        date_info = _research_date_info(result, title, snippet, context=context)
-        initial_date_info = dict(date_info)
-        if (
-            date_info["date_confidence"] != "high"
-            or not date_info["is_within_research_period"]
-        ) and metadata_fetch_count < JOURNAL_ARTICLE_FETCH_LIMIT:
-            metadata_started = time.perf_counter()
-            metadata_resolution["attempted"] += 1
-            if pipeline_counts is not None:
-                pipeline_counts["metadata_attempted_count"] += 1
-            fetched = resolve_journal_metadata(
-                url,
-                doi=doi,
-                title=title,
-                discovery_date_hint=date_info.get("discovery_date_hint", ""),
-                context=context,
-            )
-            journal_timings["metadata_fetch"] += time.perf_counter() - metadata_started
-            metadata_fetch_count += 1
-            if fetched.get("metadata_fetch_status") == "success":
-                metadata_resolution["success"] += 1
-                metadata.update(fetched)
-                metadata["publisher_domain"] = _academic_publisher_domain(url, metadata)
-                if fetched.get("metadata_title") and len(fetched.get("metadata_title", "")) > len(title):
-                    title = fetched["metadata_title"]
-                if fetched.get("metadata_abstract") and len(fetched.get("metadata_abstract", "")) > len(snippet):
-                    snippet = fetched["metadata_abstract"]
-                result_with_metadata = dict(result)
-                result_with_metadata["journal_metadata"] = metadata
-                date_info = _research_date_info(result_with_metadata, title, snippet, context=context)
-                if initial_date_info["date_confidence"] != "high" and date_info["date_confidence"] == "high":
-                    metadata_resolution["rescued"] += 1
-                if pipeline_counts is not None and _metadata_has_authoritative_date(metadata):
-                    pipeline_counts["metadata_resolved_count"] += 1
-            else:
-                metadata_resolution["failed"] += 1
-            if date_info["date_confidence"] != "high":
-                metadata_resolution["year_only_rejected"] += 1
-            text = f"{title} {snippet} {url} {metadata.get('journal_name', '')} {metadata.get('doi', doi)} {metadata.get('pii', pii)}"
-        elif date_info["date_confidence"] != "high":
-            metadata_resolution["year_only_rejected"] += 1
+        page_type = classify_academic_page_type(url, title, doi=doi, pii=pii)
+        if pipeline_counts is not None:
+            if page_type == "ARTICLE_PAGE":
+                pipeline_counts["article_page_count"] += 1
+            if page_type == "ARTICLE_PAGE" or doi or pii:
+                pipeline_counts["metadata_eligible_count"] += 1
+        if page_type == "ARTICLE_PAGE" or doi or pii:
+            route_metrics["metadata_eligible_count"] += 1
+
         if not _contains_any_term(text, JOURNAL_RAIL_CONTEXT_TERMS):
             _exclude(query, title, url, "缺少 railway/metro/urban rail 等明確場景", snippet, metadata)
             return False
@@ -1092,6 +1340,104 @@ def collect_journal_candidates(
             return False
         if pipeline_counts is not None:
             pipeline_counts["urban_rail_pass_count"] += 1
+        route_metrics["urban_rail_pass_count"] += 1
+
+        date_info = _research_date_info(result, title, snippet, context=context)
+        initial_date_info = dict(date_info)
+        if date_info["date_confidence"] == "high" and date_info["is_within_research_period"]:
+            metadata["metadata_resolution_status"] = "METADATA_NOT_NEEDED"
+        elif page_type != "ARTICLE_PAGE" and not (doi or pii):
+            metadata["metadata_resolution_status"] = "METADATA_SKIPPED_GENERIC_PAGE"
+            metadata["metadata_lookup_skipped_reason"] = "generic_landing_page_title"
+            if pipeline_counts is not None:
+                pipeline_counts["metadata_false_match_rejected_count"] += 1
+        else:
+            cache_key = _dedupe_url(url)
+            fetched = metadata_cache.get(cache_key)
+            if fetched is None and metadata_fetch_count < JOURNAL_ARTICLE_FETCH_LIMIT and metadata_route_attempts.get(metadata_route, 0) < metadata_route_cap:
+                metadata_started = time.perf_counter()
+                metadata_resolution["attempted"] += 1
+                metadata_route_attempts[metadata_route] = metadata_route_attempts.get(metadata_route, 0) + 1
+                route_metrics["metadata_attempted_count"] += 1
+                if pipeline_counts is not None:
+                    pipeline_counts["metadata_attempted_count"] += 1
+                fetched = resolve_journal_metadata(
+                    url,
+                    doi=doi,
+                    pii=pii,
+                    title=title,
+                    snippet=snippet,
+                    discovery_date_hint=date_info.get("discovery_date_hint", ""),
+                    page_type=page_type,
+                    context=context,
+                )
+                metadata_cache[cache_key] = dict(fetched)
+                journal_timings["metadata_fetch"] += time.perf_counter() - metadata_started
+                metadata_fetch_count += 1
+            elif fetched is None:
+                fetched = {
+                    "metadata_fetch_status": "budget_skipped",
+                    "metadata_source": "metadata_budget",
+                    "metadata_reject_reason": (
+                        "已達 metadata route budget"
+                        if metadata_route_attempts.get(metadata_route, 0) >= metadata_route_cap
+                        else "已達 metadata fetch budget"
+                    ),
+                }
+                metadata_route_stats.setdefault(metadata_route, _new_metadata_route_metrics())[
+                    "metadata_budget_skipped_count"
+                ] += 1
+                if pipeline_counts is not None:
+                    pipeline_counts["metadata_budget_skipped_count"] += 1
+                    reason = fetched["metadata_reject_reason"]
+                    failure_reasons = pipeline_counts.setdefault("metadata_failure_reason_counts", {})
+                    failure_reasons[reason] = int(failure_reasons.get(reason, 0) or 0) + 1
+                _record_route_failure(metadata_route, fetched["metadata_reject_reason"])
+            metadata["metadata_resolution_status"] = "METADATA_ATTEMPTED"
+            if fetched.get("metadata_fetch_status") == "skipped":
+                metadata["metadata_resolution_status"] = "METADATA_SKIPPED_GENERIC_PAGE"
+                metadata["metadata_lookup_skipped_reason"] = fetched.get("metadata_lookup_skipped_reason", "generic_landing_page_title")
+                if pipeline_counts is not None:
+                    pipeline_counts["metadata_false_match_rejected_count"] += 1
+                _record_pipeline_failure(pipeline_counts, metadata["metadata_lookup_skipped_reason"])
+            elif fetched.get("metadata_fetch_status") == "budget_skipped":
+                metadata["metadata_resolution_status"] = "METADATA_BUDGET_SKIPPED"
+                metadata["metadata_reject_reason"] = fetched.get("metadata_reject_reason", "已達 metadata budget")
+            elif fetched.get("metadata_fetch_status") == "success":
+                metadata_resolution["success"] += 1
+                metadata.update(fetched)
+                route_metrics["metadata_resolved_count"] += 1
+                metadata["publisher_domain"] = _academic_publisher_domain(url, metadata)
+                if fetched.get("metadata_title") and len(fetched.get("metadata_title", "")) > len(title):
+                    title = fetched["metadata_title"]
+                if fetched.get("metadata_abstract") and len(fetched.get("metadata_abstract", "")) > len(snippet):
+                    snippet = fetched["metadata_abstract"]
+                result_with_metadata = dict(result)
+                result_with_metadata["journal_metadata"] = metadata
+                date_info = _research_date_info(result_with_metadata, title, snippet, context=context)
+                rescued = initial_date_info["date_confidence"] != "high" and date_info["date_confidence"] == "high"
+                if rescued:
+                    metadata_resolution["rescued"] += 1
+                    metadata["metadata_resolution_status"] = "METADATA_RESCUED"
+                    if pipeline_counts is not None:
+                        pipeline_counts["metadata_rescued_count"] += 1
+                if pipeline_counts is not None and _metadata_has_authoritative_date(metadata):
+                    pipeline_counts["metadata_resolved_count"] += 1
+            else:
+                metadata_resolution["failed"] += 1
+                metadata["metadata_resolution_status"] = "METADATA_FAILED"
+                if fetched.get("metadata_reject_reason"):
+                    metadata["metadata_reject_reason"] = fetched["metadata_reject_reason"]
+                if fetched.get("metadata_match_status") == "low_confidence" and pipeline_counts is not None:
+                    pipeline_counts["metadata_false_match_rejected_count"] += 1
+                failure_reason = str(fetched.get("metadata_reject_reason") or "metadata lookup failed")
+                _record_pipeline_failure(pipeline_counts, failure_reason)
+                _record_route_failure(metadata_route, failure_reason)
+            if date_info["date_confidence"] != "high":
+                metadata_resolution["year_only_rejected"] += 1
+            text = f"{title} {snippet} {url} {metadata.get('journal_name', '')} {metadata.get('doi', doi)} {metadata.get('pii', pii)}"
+        if date_info["date_confidence"] != "high":
+            metadata_resolution["year_only_rejected"] += 1
         if date_info["date_confidence"] != "high" or not date_info["is_within_research_period"]:
             if date_info["date_confidence"] == "high" and not date_info["is_within_research_period"]:
                 exclude_reason = f"明確發表日期不在{context.research_supplement_period_label}研究補充期間"
@@ -1104,6 +1450,8 @@ def collect_journal_candidates(
             )
             _exclude(query, title, url, exclude_reason, snippet, metadata)
             return False
+        if pipeline_counts is not None:
+            pipeline_counts["date_pass_count"] += 1
 
         title_key = _normalize_title(title)
         url_key = _dedupe_url(url)
@@ -1128,6 +1476,9 @@ def collect_journal_candidates(
         candidate["published_date"] = date_info["published_date"]
         candidate["date_confidence"] = date_info["date_confidence"]
         candidate["date_reason"] = date_info["date_reason"]
+        candidate["date_source"] = date_info.get("date_source", "")
+        candidate["date_authoritative"] = bool(date_info.get("date_authoritative"))
+        candidate["date_resolution_method"] = date_info.get("date_resolution_method", "")
         candidate["metadata_source"] = date_info.get("metadata_source") or metadata.get("metadata_source", "search_result")
         candidate["publication_date"] = date_info["published_date"]
         candidate["metadata_fields_seen"] = list(dict.fromkeys(
@@ -1139,6 +1490,21 @@ def collect_journal_candidates(
         candidate["pii"] = metadata.get("pii", pii)
         candidate["journal_name"] = metadata.get("journal_name", source)
         candidate["metadata_fetch_status"] = metadata.get("metadata_fetch_status", "not_needed")
+        candidate["metadata_route"] = metadata_route
+        candidate["metadata_attempted"] = metadata.get("metadata_resolution_status") in {
+            "METADATA_ATTEMPTED",
+            "METADATA_RESCUED",
+            "METADATA_FAILED",
+            "METADATA_BUDGET_SKIPPED",
+        }
+        candidate["metadata_method"] = metadata.get("metadata_attempt_method", "")
+        candidate["metadata_resolved"] = _metadata_has_authoritative_date(metadata)
+        candidate["metadata_failure_reason"] = (
+            metadata.get("metadata_reject_reason")
+            or metadata.get("metadata_lookup_skipped_reason")
+            or ""
+        )
+        candidate["page_type"] = page_type
         candidate["publisher_domain"] = _academic_publisher_domain(url, metadata)
         candidate["discovery_source"] = metadata.get("discovery_source") or source_family or "generic_academic"
         candidate["discovery_date_hint"] = date_info.get("discovery_date_hint", "")
@@ -1151,6 +1517,7 @@ def collect_journal_candidates(
         if pipeline_counts is not None:
             pipeline_counts["journal_score_pass_count"] += 1
         candidates.append(candidate)
+        route_metrics["accepted_count"] += 1
         if pipeline_counts is not None:
             pipeline_counts["accepted_count"] += 1
         return True
@@ -1308,6 +1675,17 @@ def collect_journal_candidates(
         for key, value in journal_timings.items()
     }
     journal_timings["total"] = round(time.perf_counter() - total_started, 3)
+    for row in statuses:
+        if row.get("timing_stage") not in {"source_page_fetch", "ddgs_search"}:
+            continue
+        source_route = _journal_source_label(str(row.get("source_family") or row.get("query") or "Generic Academic"))
+        if source_route not in JOURNAL_METADATA_ROUTE_NAMES:
+            source_route = "Generic Academic"
+        route_metrics = _route_metrics(source_route)
+        route_metrics["query_count"] += 1
+        route_metrics["raw_count"] += int(row.get("backend_raw_count", row.get("count", 0)) or 0)
+    for route in JOURNAL_METADATA_ROUTE_NAMES:
+        _route_metrics(route)
     source_pipeline_counts = journal_query_source_outcomes(statuses)
     academic_diagnostics = academic_source_diagnostics(statuses, candidates, selected)
     statuses.append({
@@ -1320,6 +1698,7 @@ def collect_journal_candidates(
         "journal_elapsed_by_source": elapsed_by_source,
         "journal_timings": journal_timings,
         "journal_query_source_outcomes": source_pipeline_counts,
+        "journal_metadata_route_outcomes": metadata_route_stats,
         "journal_source_pipeline_counts": source_pipeline_counts,
         **academic_diagnostics,
         "journal_metadata_resolution": metadata_resolution,
