@@ -557,6 +557,92 @@ class StreamlitUiModuleTests(unittest.TestCase):
         }
         self.assertEqual(_sha256(snapshot), EXPECTED_DEBUG_SHA256)
 
+    def test_failed_report_hides_formal_output_and_delivery_controls(self):
+        recorder = FakeStreamlit(
+            session_state={
+                "latest_report_md": "old report",
+                "latest_report": "old report",
+                "latest_pdf": b"old pdf",
+                "latest_report_integrity_failure": {
+                    "report_validation_passed": False,
+                },
+            }
+        )
+        context = streamlit_report_ui.ReportDisplayContext(
+            current_run_config={"report_label": "年報"},
+            report_period_label="年報",
+            current_app_hash="fixture-hash",
+            last_pdf_error="",
+            progress_placeholder=_Node(recorder, "progress-placeholder"),
+            status_placeholder=_Node(recorder, "status-placeholder"),
+            candidate_marker_remover=lambda value: value,
+            final_report_normalizer=lambda value: value,
+            report_markdown_renderer=lambda value: value,
+            pdf_renderer=lambda value: b"should-not-render",
+            download_filename_builder=lambda prefix, extension, config: f"{prefix}.{extension}",
+            email_sender=lambda *args, **kwargs: True,
+        )
+        with patch.object(streamlit_report_ui, "st", recorder):
+            result = streamlit_report_ui.render_report_display(context)
+
+        self.assertEqual(result.report_to_show, "")
+        self.assertFalse(any(call["name"] == "download_button" for call in recorder.calls))
+        self.assertFalse(
+            any(
+                any("寄送目前報告" in str(arg) for arg in call["args"])
+                for call in recorder.calls
+                if call["name"] == "button"
+            )
+        )
+
+    def test_debug_caption_mentions_failure_download(self):
+        recorder = FakeStreamlit()
+        context = streamlit_debug_ui.DebugUiContext(
+            show_developer_info=True,
+            report_stats={},
+            source_statuses=[],
+            display_run_config={"report_label": "年報"},
+            payload_builder=lambda debug, stats, statuses: {},
+            download_filename_builder=lambda prefix, extension, config: f"{prefix}.{extension}",
+        )
+        with patch.object(streamlit_debug_ui, "st", recorder):
+            streamlit_debug_ui.render_developer_debug_ui(context)
+
+        captions = [call["args"][0] for call in recorder.calls if call["name"] == "caption"]
+        self.assertTrue(any("正式報告驗證失敗" in caption and "不產生 PDF" in caption for caption in captions))
+
+    def test_failed_report_still_renders_developer_json_download(self):
+        recorder = FakeStreamlit(
+            session_state={
+                "latest_debug_info": {
+                    "report_validation_passed": False,
+                    "failure_diagnostics": {
+                        "multi_candidate_model_blocks": [[2, 7]],
+                    },
+                },
+                "latest_report_integrity_failure": {
+                    "report_validation_passed": False,
+                },
+            }
+        )
+        context = streamlit_debug_ui.DebugUiContext(
+            show_developer_info=True,
+            report_stats={"report_validation_passed": False},
+            source_statuses=[],
+            display_run_config={"report_label": "年報"},
+            payload_builder=lambda debug, stats, statuses: {
+                "report_validation_passed": False,
+                "multi_candidate_model_blocks": [[2, 7]],
+            },
+            download_filename_builder=lambda prefix, extension, config: f"{prefix}.{extension}",
+        )
+        with patch.object(streamlit_debug_ui, "st", recorder):
+            streamlit_debug_ui.render_developer_debug_ui(context)
+
+        download_calls = [call for call in recorder.calls if call["name"] == "download_button"]
+        self.assertEqual(len(download_calls), 1)
+        self.assertIn("developer_debug.json", download_calls[0]["kwargs"]["file_name"])
+
 
 if __name__ == "__main__":
     unittest.main()

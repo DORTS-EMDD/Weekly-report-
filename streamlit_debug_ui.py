@@ -49,5 +49,5 @@ def render_developer_debug_ui(context: DebugUiContext):
             )
         else:
             st.caption(
-                "請先產生報告，開發者 JSON 會在報告完成後提供下載。"
+                "開發者 JSON 會於報告產製流程完成後提供下載；如正式報告驗證失敗，仍可下載 JSON 供除錯使用，但不產生 PDF 或寄送 Email。"
             )

@@ -8,6 +8,51 @@ import maiagent_service
 
 
 class MaiAgentTimeoutTests(unittest.TestCase):
+    def test_retry_prompt_is_complete_replacement_with_runtime_category_lock(self):
+        prompt = maiagent_service.build_report_retry_prompt(
+            "original prompt",
+            "previous response",
+            {
+                "missing_ids": [],
+                "unknown_ids": [],
+                "duplicate_ids": [2, 7],
+                "multi_candidate_model_blocks": [],
+                "category_mismatches": [
+                    {
+                        "candidate_id": 7,
+                        "expected_category": "機電標案",
+                        "actual_category": "技術新知",
+                        "section_heading": "一、技術新知",
+                    },
+                    {
+                        "candidate_id": 2,
+                        "expected_category": "技術新知",
+                        "actual_category": "機電標案",
+                        "section_heading": "四、機電標案",
+                    },
+                ],
+                "content_quality_issues": [],
+            },
+            selected_candidates=[
+                {"candidate_id": 2, "classification": "技術新知"},
+                {"candidate_id": 7, "classification": "機電標案"},
+                {"candidate_id": 8, "classification": "營運政策"},
+            ],
+        )
+
+        self.assertIn("COMPLETE REPLACEMENT REPORT", prompt)
+        self.assertIn("INVALID PREVIOUS OUTPUT — REFERENCE ONLY", prompt)
+        self.assertIn('"2": "技術新知"', prompt)
+        self.assertIn('"7": "機電標案"', prompt)
+        self.assertIn('"8": "營運動態"', prompt)
+        self.assertIn("重複 ID：[2, 7]", prompt)
+        self.assertIn('"expected_category": "機電標案"', prompt)
+        self.assertIn('"actual_category": "技術新知"', prompt)
+        self.assertIn("不得以其他 candidate ID 取代", prompt)
+        self.assertIn("expected_category 是唯一正確類別", prompt)
+        self.assertIn("不得輸出 patch/delta", prompt)
+        self.assertIn("每個正式新聞 block 必須且只能包含一個 candidate marker", prompt)
+
     def test_retry_prompt_lists_multi_candidate_blocks_and_requires_split(self):
         prompt = maiagent_service.build_report_retry_prompt(
             "original prompt",

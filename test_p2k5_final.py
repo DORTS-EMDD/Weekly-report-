@@ -267,6 +267,37 @@ class P2K5FinalTests(unittest.TestCase):
         self.assertFalse(state["email_sent"])
         self.assertNotIn("latest_report_integrity_failure", state)
 
+    def test_failed_attempt_stores_debug_payload_and_blocks_visible_outputs(self):
+        state = {
+            "latest_report_md": "old report",
+            "latest_pdf": b"old pdf",
+            "report_generated": True,
+            "email_sent": True,
+        }
+        debug_payload = {
+            "report_validation_passed": False,
+            "multi_candidate_model_blocks": [[2, 7]],
+        }
+        record_failed_report_attempt(
+            state,
+            {
+                "report_validation_passed": False,
+                "duplicate_ids": [2, 7],
+            },
+            debug_info={"report_validation_passed": False},
+            debug_payload=debug_payload,
+            report_stats={"report_validation_passed": False},
+            source_statuses=[{"source": "fixture", "status": "ok"}],
+            run_config={"report_label": "年報"},
+        )
+
+        self.assertEqual(state["latest_debug_payload"], debug_payload)
+        self.assertEqual(state["latest_report_md"], "")
+        self.assertIsNone(state["latest_pdf"])
+        self.assertFalse(state["report_generated"])
+        self.assertFalse(state["email_sent"])
+        self.assertFalse(state["latest_report_integrity_failure"]["report_validation_passed"])
+
     def test_scope_caption_removed_from_user_facing_sources(self):
         sidebar = Path("streamlit_sidebar_ui.py").read_text(encoding="utf-8")
         demo = Path("streamlit_app.py").read_text(encoding="utf-8")

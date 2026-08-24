@@ -907,7 +907,12 @@ def run_report_workflow(
     if validation.get("retry_required"):
         retry_attempted = True
         raw_report = dependencies.call_maiagent(
-            build_report_retry_prompt(report_prompt, raw_report, validation)
+            build_report_retry_prompt(
+                report_prompt,
+                raw_report,
+                validation,
+                selected_candidates=selected_candidates,
+            )
         )
     final_validation = validate_authoritative_report(
         raw_report,

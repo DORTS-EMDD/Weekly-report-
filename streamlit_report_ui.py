@@ -120,6 +120,9 @@ def render_report_display(context: ReportDisplayContext) -> ReportDisplayResult:
     )
 
     report_stats = st.session_state.get("latest_report_stats", {})
+    report_validation_failed = bool(
+        st.session_state.get("latest_report_integrity_failure")
+    )
     stored_latest_report_md = st.session_state.get("latest_report_md", "")
     stored_latest_report = st.session_state.get("latest_report", "")
     latest_report_md = context.candidate_marker_remover(
@@ -141,7 +144,7 @@ def render_report_display(context: ReportDisplayContext) -> ReportDisplayResult:
         latest_report_md = clean_session_report
     report_to_show = (
         (latest_report_md or legacy_latest_report)
-        if report_matches_current_app
+        if report_matches_current_app and not report_validation_failed
         else ""
     )
     if report_to_show and not latest_report_md:

@@ -526,6 +526,11 @@ def build_developer_debug_payload(
             if debug_info else context.latest_report_md
         ),
     }
+    if debug_info.get("report_validation_passed") is False:
+        failure_diagnostics = debug_info.get("failure_diagnostics", {})
+        if isinstance(failure_diagnostics, dict):
+            payload["failure_diagnostics"] = _json_safe(failure_diagnostics)
+            payload.update(_json_safe(failure_diagnostics))
     if has_forward_debug:
         forward_debug_defaults = {
             "forward_query_count_by_topic": {},

@@ -579,6 +579,40 @@ class DeveloperDebugServiceRegressionTests(unittest.TestCase):
         for module_name, module_hash in module_hashes.items():
             self.assertEqual(runtime_version[f"{module_name}_hash"], module_hash)
 
+    def test_failure_payload_preserves_retry_diagnostics_and_runtime_sha(self):
+        _configure_target(app)
+        failure_debug = {
+            "run_config": _run_config(fast_mode=False, label="failure fixture"),
+            "report_validation_passed": False,
+            "selected_candidates": [_candidate()],
+            "selected_ids": [7],
+            "raw_report": "<!-- candidate_id: 7 -->\ninvalid fixture",
+            "failure_diagnostics": {
+                "selected_candidate_ids": [7],
+                "model_candidate_ids": [7, 12],
+                "duplicate_candidate_ids": [7],
+                "report_retry_attempted": True,
+                "report_id_validation_before_retry": {"duplicate_ids": [7]},
+                "report_id_validation_after_retry": {"multi_candidate_model_blocks": [[7, 12]]},
+                "multi_candidate_model_blocks": [[7, 12]],
+                "category_mismatches": [{"candidate_id": 7, "expected_category": "技術新知"}],
+                "missing_model_fields": {"7": ["事件摘要"]},
+                "parser_failure_reasons": {"7": "fixture"},
+                "content_quality_issues": [{"code": "fixture_issue"}],
+                "raw_report": "<!-- candidate_id: 7 -->\ninvalid fixture",
+                "report_validation_passed": False,
+            },
+            "report_stats": {"report_validation_passed": False},
+        }
+        payload = app.build_developer_debug_payload(failure_debug, failure_debug["report_stats"], [])
+
+        self.assertFalse(payload["report_validation_passed"])
+        self.assertEqual(payload["failure_diagnostics"]["multi_candidate_model_blocks"], [[7, 12]])
+        self.assertEqual(payload["multi_candidate_model_blocks"], [[7, 12]])
+        self.assertTrue(payload["report_retry_attempted"])
+        self.assertIn("git_commit_sha", payload["run_info"]["runtime_version"])
+        self.assertIn("invalid fixture", payload["maiagent"]["raw_report"])
+
     def test_runtime_module_fingerprint_detects_core_module_changes(self):
         original = {"module_sha1": {"streamlit_app": "a", "article_processor": "b"}}
         changed_core = {"module_sha1": {"streamlit_app": "a", "article_processor": "c"}}

@@ -27,10 +27,34 @@ def snapshot_report_result(state: MutableMapping[str, Any]) -> dict[str, Any]:
 def record_failed_report_attempt(
     state: MutableMapping[str, Any],
     failure: dict[str, Any],
+    *,
+    debug_info: dict[str, Any] | None = None,
+    debug_payload: dict[str, Any] | None = None,
+    report_stats: dict[str, Any] | None = None,
+    source_statuses: list[dict[str, Any]] | None = None,
+    run_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Record the failed attempt without mutating the previous successful result."""
+    """Record failure diagnostics without exposing an invalid formal report."""
     previous = snapshot_report_result(state)
     state["latest_report_integrity_failure"] = dict(failure)
+    if debug_info is None:
+        return previous
+
+    state.update(
+        {
+            "latest_report_md": "",
+            "latest_report": "",
+            "latest_pdf": None,
+            "latest_report_summary": {},
+            "latest_report_stats": dict(report_stats or {}),
+            "latest_debug_info": dict(debug_info),
+            "latest_debug_payload": dict(debug_payload or {}),
+            "latest_source_statuses": list(source_statuses or []),
+            "latest_run_config": dict(run_config or {}),
+            "report_generated": False,
+            "email_sent": False,
+        }
+    )
     return previous
 
 

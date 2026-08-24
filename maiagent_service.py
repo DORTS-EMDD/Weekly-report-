@@ -6,7 +6,14 @@ this module performs no HTTP request and does not import Streamlit.
 
 import os
 import re
+import json
 import requests
+
+from config import (
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY,
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+    FORMAL_REPORT_CATEGORY_MAP,
+)
 
 REPORT_CANDIDATE_ID_PATTERN = re.compile(r"<!--\s*candidate_id\s*:\s*(\d+)\s*-->", flags=re.IGNORECASE)
 REPORT_ESCAPED_CANDIDATE_ID_PATTERN = re.compile(r"&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;", flags=re.IGNORECASE)
@@ -235,22 +242,87 @@ def validate_report_candidate_ids(report_md: str, selected_candidates: list[dict
     return {"expected_ids": expected_ids, "found_ids": found_ids, "missing_ids": [value for value in expected_ids if value not in found_set], "unknown_ids": sorted(found_set - expected_set), "duplicate_ids": duplicate_ids, "valid": found_set == expected_set and not duplicate_ids and len(found_ids) == len(expected_ids)}
 
 
-def build_report_retry_prompt(original_prompt: str, previous_response: str, validation: dict) -> str:
+_FORMAL_RETRY_CATEGORIES = {
+    "技術新知",
+    "重大事故",
+    "營運動態",
+    ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL,
+}
+
+
+def _canonical_retry_category(value: object) -> str:
+    category = str(value or "").strip()
+    if category == "營運議題":
+        return "營運動態"
+    if category == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY:
+        return ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL
+    return FORMAL_REPORT_CATEGORY_MAP.get(category, category)
+
+
+def _retry_category_map(selected_candidates: list[dict] | None) -> dict[str, str]:
+    category_map: dict[str, str] = {}
+    for candidate in selected_candidates or []:
+        raw_id = candidate.get("candidate_id") or candidate.get("id")
+        try:
+            candidate_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if candidate_id <= 0:
+            continue
+        raw_category = next(
+            (
+                candidate.get(key)
+                for key in (
+                    "classification",
+                    "primary_category",
+                    "preliminary_type",
+                    "category",
+                    "category_key",
+                )
+                if candidate.get(key)
+            ),
+            "",
+        )
+        category_map[str(candidate_id)] = _canonical_retry_category(raw_category)
+    return category_map
+
+
+def build_report_retry_prompt(
+    original_prompt: str,
+    previous_response: str,
+    validation: dict,
+    *,
+    selected_candidates: list[dict] | None = None,
+) -> str:
     quality_issues = validation.get("content_quality_issues", [])
     multi_candidate_blocks = validation.get("multi_candidate_model_blocks", [])
+    duplicate_ids = validation.get("duplicate_ids", [])
+    category_mismatches = validation.get("category_mismatches", [])
+    category_map = _retry_category_map(selected_candidates)
+    category_map_text = json.dumps(category_map, ensure_ascii=False, sort_keys=True)
+    category_mismatches_text = json.dumps(
+        category_mismatches,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
     return f"""{original_prompt}
 
 ## 輸出完整性重試
 上一次輸出未通過正式報告驗證。
 - 缺少 ID：{validation.get('missing_ids', [])}
 - 未知 ID：{validation.get('unknown_ids', [])}
-- 重複 ID：{validation.get('duplicate_ids', [])}
+- 重複 ID：{duplicate_ids}
 - 多候選 marker block：{multi_candidate_blocks}
 - 內容品質問題：{quality_issues}
-請重新輸出完整報告。每個 expected candidate_id 必須且只能出現一次，標記格式必須是 `<!-- candidate_id: N -->`，並緊接在該則正式新聞標題前。每個正式新聞 block 必須且只能包含一個 candidate marker。
+這是 COMPLETE REPLACEMENT REPORT（完整替換報告），不是 append、patch 或 delta。請忽略上一次報告的版面結構，從權威候選全集重新建立一份完整報告；只輸出這份完整替換報告，不得在舊報告後附加修正。
+權威 candidate/category map（只能依此分類；依候選資料中的 authoritative classification 建立）：{category_map_text}
+每個 selected candidate_id 必須恰好出現一次，不能遺漏、不能使用未知 ID、不能重複；正式類別只能是「技術新知」、「重大事故」、「營運動態」或「機電標案」。標記格式必須是 `<!-- candidate_id: N -->`，並緊接在該則正式新聞標題前。每個正式新聞 block 必須且只能包含一個 candidate marker。
+若重複 ID 不為空，這些 runtime candidate IDs 各出現超過一次；每個 ID 只保留一個 block，移除該 ID 的其他重複 block，不得以其他 candidate ID 取代，也不得把重複 ID 合併成單一 block。
 若「多候選 marker block」不為空，列出的每組 candidate IDs 均為無效 block；請將它們改寫為各自獨立的完整新聞 block。即使描述同一事件也不得合併，不得把任何 candidate ID 靜默省略，所有有效 candidate IDs 必須各出現一次。不得只補局部段落。
-正式新聞類型標籤只能使用「技術新知」、「重大事故」、「營運動態」或「機電標案」；不得把 Python internal subtype 當成正式標籤，且須依候選資料中的 authoritative classification 放入對應章節。
+分類不一致診斷：{category_mismatches_text}
+若分類不一致診斷不為空，請逐一依 candidate_id 對照上方權威 map 修正：expected_category 是唯一正確類別，actual_category 只是錯誤診斷；將該 block 移至 expected category 的正式章節，不得把 candidate 移到其他類別或以另一個 candidate 取代。
 
-上一次輸出僅供修正格式參考：
+## INVALID PREVIOUS OUTPUT — REFERENCE ONLY
+以下上一次輸出只能用來辨識錯誤，禁止盲目複製其結構，禁止在其後附加修正，不得輸出 patch/delta；請依上述權威候選與分類 map 重新建立完整 replacement report：
 {previous_response}
 """.strip()

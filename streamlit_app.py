@@ -2799,6 +2799,7 @@ if generate_btn:
                     report_prompt,
                     raw_report,
                     report_id_validation_before_retry,
+                    selected_candidates=selected_candidates,
                 )
                 raw_report = call_maiagent_cloud(retry_prompt)
                 maiagent_call_count += 1
@@ -2851,7 +2852,105 @@ if generate_btn:
                 }
                 LAST_REPORT_ID_VALIDATION.clear()
                 LAST_REPORT_ID_VALIDATION.update(integrity_failure)
-                record_failed_report_attempt(st.session_state, integrity_failure)
+                failure_diagnostics = {
+                    "runtime_version": current_runtime_version,
+                    "git_commit_sha": current_runtime_version.get("git_commit_sha", ""),
+                    "selected_candidate_ids": integrity_failure["selected_candidate_ids"],
+                    "model_candidate_ids": integrity_failure["model_candidate_ids"],
+                    "missing_candidate_ids": integrity_failure["missing_ids"],
+                    "unknown_candidate_ids": integrity_failure["unknown_ids"],
+                    "duplicate_candidate_ids": integrity_failure["duplicate_ids"],
+                    "report_retry_attempted": report_retry_attempted,
+                    "report_id_validation_before_retry": report_id_validation_before_retry,
+                    "report_id_validation_after_retry": report_id_validation_after_retry,
+                    "multi_candidate_model_blocks": integrity_failure[
+                        "multi_candidate_model_blocks"
+                    ],
+                    "category_mismatches": integrity_failure["category_mismatches"],
+                    "missing_model_fields": integrity_failure["missing_model_fields"],
+                    "parser_failure_reasons": integrity_failure["parser_failure_reasons"],
+                    "content_quality_issues": integrity_failure["content_quality_issues"],
+                    "raw_report": raw_report,
+                    "initial_raw_report": initial_raw_report,
+                    "report_validation_passed": False,
+                }
+                failure_report_stats = {
+                    "raw_count": candidate_pool.get("raw_count", 0),
+                    "deduped_count": candidate_pool.get("deduped_count", 0),
+                    "filtered_count": candidate_pool.get("filtered_count", 0),
+                    "ai_selected_count": len(selected_candidates),
+                    "selected_count": len(selected_candidates),
+                    "formal_count": 0,
+                    "report_retry_attempted": report_retry_attempted,
+                    "report_id_validation_before_retry": report_id_validation_before_retry,
+                    "report_id_validation_after_retry": report_id_validation_after_retry,
+                    "selected_candidate_ids": integrity_failure["selected_candidate_ids"],
+                    "model_candidate_ids": integrity_failure["model_candidate_ids"],
+                    "missing_candidate_ids": integrity_failure["missing_ids"],
+                    "unknown_candidate_ids": integrity_failure["unknown_ids"],
+                    "duplicate_candidate_ids": integrity_failure["duplicate_ids"],
+                    "missing_model_fields": integrity_failure["missing_model_fields"],
+                    "parser_failure_reasons": integrity_failure["parser_failure_reasons"],
+                    "multi_candidate_model_blocks": integrity_failure[
+                        "multi_candidate_model_blocks"
+                    ],
+                    "category_mismatches": integrity_failure["category_mismatches"],
+                    "content_quality_issues": integrity_failure["content_quality_issues"],
+                    "report_validation_passed": False,
+                    "maiagent_call_count": maiagent_call_count,
+                    "run_config": run_config,
+                }
+                failure_debug_info = {
+                    "run_config": run_config,
+                    "raw_candidates": candidate_pool.get("raw_candidates", []),
+                    "deduped_candidates": candidate_pool.get("deduped_candidates", []),
+                    "filtered_candidates": candidate_pool.get("filtered_candidates", []),
+                    "excluded_candidates": candidate_pool.get("excluded_candidates", []),
+                    "model_candidates": model_candidates,
+                    "candidate_cards": candidate_pool.get("candidate_cards", []),
+                    "selected_candidates": selected_candidates,
+                    "selected_ids": selected_ids,
+                    "selection_debug": LAST_PYTHON_SELECTION_DEBUG,
+                    "pipeline_debug_stats": pipeline_debug_stats,
+                    "source_statuses": source_statuses,
+                    "source_health_summary": source_health_summary,
+                    "report_prompt": report_prompt,
+                    "initial_raw_report": initial_raw_report,
+                    "raw_report": raw_report,
+                    "initial_report_response": initial_raw_report,
+                    "report_response": raw_report,
+                    "raw_report_candidate_ids": raw_report_candidate_ids,
+                    "report_id_validation_before_retry": report_id_validation_before_retry,
+                    "report_id_validation_after_retry": report_id_validation_after_retry,
+                    "report_id_reconciliation": integrity_failure,
+                    "report_validation_passed": False,
+                    "failure_diagnostics": failure_diagnostics,
+                    "report_stats": failure_report_stats,
+                }
+                failure_debug_context = DeveloperDebugContext(
+                    current_run_config=run_config,
+                    latest_run_config=run_config,
+                    app_source_hash=st.session_state.get("_app_source_hash", current_app_hash),
+                    latest_report_md="",
+                    source_health_summary_builder=build_source_health_summary,
+                    candidate_marker_remover=remove_internal_candidate_markers,
+                    now_provider=datetime.datetime.now,
+                )
+                failure_debug_payload = service_build_developer_debug_payload(
+                    failure_debug_info,
+                    failure_report_stats,
+                    source_statuses,
+                    context=failure_debug_context,
+                )
+                record_failed_report_attempt(
+                    st.session_state,
+                    integrity_failure,
+                    debug_info=failure_debug_info,
+                    debug_payload=failure_debug_payload,
+                    report_stats=failure_report_stats,
+                    source_statuses=source_statuses,
+                    run_config=run_config,
+                )
                 st.error(
                     "❌ 正式報告完整性驗證未通過；已停止輸出，不產生 PDF、不下載、不寄送 Email。"
                 )
