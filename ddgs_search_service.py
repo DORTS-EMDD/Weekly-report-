@@ -479,6 +479,24 @@ def build_search_queries(
             if not radar_only and not context.active_regions
             else []
         )
+        if context.lookback_int >= 365 and not radar_only:
+            global_incident_specs = []
+            if "major_accident" in content_families:
+                major_accident_spec = next(iter(_active_query_specs("major_accident")), None)
+                if major_accident_spec:
+                    global_incident_specs.append(("major_accident", major_accident_spec))
+            if include_official:
+                official_investigation_spec = next(iter(_active_query_specs("official_investigation")), None)
+                if official_investigation_spec:
+                    global_incident_specs.append(("official_investigation", official_investigation_spec))
+            for family, spec in global_incident_specs:
+                _add(
+                    spec.get("query", ""),
+                    family=family,
+                    lang=spec.get("lang", "en"),
+                    use_news=bool(spec.get("use_news", family != "official_investigation")),
+                    query_region="global",
+                )
         if {"營運政策", "營運爭議", SERVICE_OPENING_CATEGORY_KEY}.intersection(context.selected_types):
             for spec in SERVICE_OPENING_QUERY_SPECS:
                 _add(
