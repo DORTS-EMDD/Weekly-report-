@@ -295,6 +295,7 @@ class WorkflowRuntime:
         region: str,
         source_type: str,
         source_href: str = "",
+        raw_provenance: dict | None = None,
     ) -> dict:
         return _make_news_candidate(
             title,
@@ -309,6 +310,7 @@ class WorkflowRuntime:
             query_metadata=self.query_metadata.get(query or "", {}),
             search_family_resolver=self._search_family_from_query,
             search_language_resolver=self._search_language_from_query,
+            raw_provenance=raw_provenance,
         )
 
     def parse_candidates(self, raw_rss: str, raw_ddg: str) -> list[dict]:

@@ -124,6 +124,37 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
             "classification": item.get("classification", ""),
             "reason": item.get("selected_reason", ""),
         }
+        if any(
+            key in item
+            for key in (
+                "raw_ingest_id",
+                "search_provider",
+                "raw_title",
+                "raw_publication_value",
+                "fetched_at",
+                "raw_url",
+            )
+        ):
+            row.update({
+                "raw_ingest_id": item.get("raw_ingest_id", ""),
+                "search_provider": item.get("search_provider", ""),
+                "provider": item.get("search_provider", ""),
+                "publisher": item.get("publisher"),
+                "raw_title": item.get("raw_title", item.get("title", "")),
+                "normalized_title": item.get("normalized_title", item.get("title", "")),
+                "raw_publication_value": item.get("raw_publication_value"),
+                "published_date": item.get("published_date", item.get("date", "")),
+                "fetched_at": item.get("fetched_at"),
+                "raw_url": item.get("raw_url", item.get("url", "")),
+                "effective_url": (
+                    item.get("resolved_article_url")
+                    or item.get("source_href")
+                    or item.get("url", "")
+                ),
+                "original_provider_metadata": dict(
+                    list((item.get("original_provider_metadata") or {}).items())[:20]
+                ),
+            })
         if "operational_subtype" in item:
             row["operational_subtype"] = item["operational_subtype"]
         for key in (

@@ -2,6 +2,8 @@
 
 import datetime
 import difflib
+import hashlib
+import json
 import re
 import time
 import urllib.parse
@@ -12,6 +14,75 @@ from email.utils import parsedate_to_datetime
 
 from config import *
 from search_queries import FORMAL_SOURCE_PROXY_LABELS
+
+
+class RawSearchText(str):
+    """Backward-compatible search text with bounded ingestion provenance."""
+
+    def __new__(cls, value: str, provenance_records: list[dict] | None = None):
+        instance = super().__new__(cls, value or "")
+        instance.provenance_records = tuple(
+            dict(record)
+            for record in (provenance_records or [])
+            if isinstance(record, dict)
+        )
+        return instance
+
+
+def build_raw_ingest_id(
+    *,
+    search_provider: str,
+    raw_title: str,
+    raw_url: str,
+    raw_publication_value: str | None,
+    source: str,
+    query: str | None,
+    provider_record_index: int = 0,
+) -> str:
+    """Build an ingestion-only identity that never participates in selection."""
+    payload = {
+        "search_provider": str(search_provider or ""),
+        "raw_title": str(raw_title or ""),
+        "raw_url": str(raw_url or ""),
+        "raw_publication_value": raw_publication_value,
+        "source": str(source or ""),
+        "query": query,
+        "provider_record_index": int(provider_record_index or 0),
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"raw_{hashlib.sha256(encoded).hexdigest()[:24]}"
+
+
+def _matching_raw_provenance(
+    raw_text: str,
+    used_indices: set[int],
+    *,
+    search_provider: str,
+    title: str,
+    url: str,
+    query: str = "",
+) -> dict:
+    records = getattr(raw_text, "provenance_records", ()) or ()
+    for index, record in enumerate(records):
+        if index in used_indices or not isinstance(record, dict):
+            continue
+        if str(record.get("search_provider", "") or "").casefold() != search_provider.casefold():
+            continue
+        if str(record.get("raw_title", "") or "").strip() != str(title or "").strip():
+            continue
+        if str(record.get("raw_url", "") or "").strip() != str(url or "").strip():
+            continue
+        record_query = str(record.get("query", "") or "")
+        if query and record_query and record_query != query:
+            continue
+        used_indices.add(index)
+        return dict(record)
+    return {}
 
 def _parse_pub_date(pub_str: str) -> str:
     if not pub_str:
@@ -951,6 +1022,21 @@ def _date_sort_key(candidate: dict) -> int:
     return date_obj.toordinal() if date_obj else 0
 
 
+def _bounded_provider_metadata(metadata: object) -> dict:
+    if not isinstance(metadata, dict):
+        return {}
+    bounded: dict = {}
+    for raw_key, raw_value in list(metadata.items())[:20]:
+        key = str(raw_key)[:80]
+        if raw_value is None or isinstance(raw_value, (bool, int, float)):
+            bounded[key] = raw_value
+        elif isinstance(raw_value, str):
+            bounded[key] = raw_value[:500]
+        elif isinstance(raw_value, (list, tuple)):
+            bounded[key] = [str(value)[:200] for value in list(raw_value)[:20]]
+    return bounded
+
+
 def _make_news_candidate(
     title: str,
     date: str,
@@ -962,7 +1048,7 @@ def _make_news_candidate(
     source_type: str,
     source_href: str = "",
     *, query_metadata: dict | None = None, search_family_resolver=None,
-    search_language_resolver=None,
+    search_language_resolver=None, raw_provenance: dict | None = None,
 ) -> dict:
     normalized_date = _clean_text(date)
     if not _candidate_date_obj(normalized_date):
@@ -1002,6 +1088,51 @@ def _make_news_candidate(
         "search_language": search_language,
         "query_region": query_metadata.get("query_region", ""),
     }
+    if raw_provenance is not None:
+        raw_provenance = dict(raw_provenance)
+        search_provider = str(
+            raw_provenance.get("search_provider")
+            or ("DDGS" if str(source_type or "").casefold() == "ddgs" else "RSS")
+        )
+        raw_title = raw_provenance.get("raw_title")
+        if raw_title is None:
+            raw_title = title
+        raw_url = raw_provenance.get("raw_url")
+        if raw_url is None:
+            raw_url = url
+        raw_publication_value = raw_provenance.get("raw_publication_value")
+        raw_ingest_id = str(raw_provenance.get("raw_ingest_id") or "")
+        if not raw_ingest_id:
+            raw_ingest_id = build_raw_ingest_id(
+                search_provider=search_provider,
+                raw_title=str(raw_title or ""),
+                raw_url=str(raw_url or ""),
+                raw_publication_value=(
+                    str(raw_publication_value)
+                    if raw_publication_value is not None
+                    else None
+                ),
+                source=source,
+                query=query if search_provider == "DDGS" else None,
+            )
+        candidate.update({
+            "raw_title": str(raw_title or ""),
+            "normalized_title": _clean_text(title),
+            "raw_publication_value": (
+                str(raw_publication_value)
+                if raw_publication_value is not None
+                else None
+            ),
+            "published_date": normalized_date or "日期未知",
+            "fetched_at": raw_provenance.get("fetched_at"),
+            "raw_url": str(raw_url or ""),
+            "search_provider": search_provider,
+            "publisher": raw_provenance.get("publisher"),
+            "original_provider_metadata": _bounded_provider_metadata(
+                raw_provenance.get("original_provider_metadata")
+            ),
+            "raw_ingest_id": raw_ingest_id,
+        })
     proxy_url = next(
         (
             value.strip()
@@ -1043,6 +1174,7 @@ def _make_news_candidate(
 
 def parse_rss_candidates(raw_rss: str, candidate_factory=_make_news_candidate) -> list[dict]:
     candidates: list[dict] = []
+    used_provenance_indices: set[int] = set()
     for block in re.split(r"(?=^【RSS來源：)", raw_rss or "", flags=re.MULTILINE):
         block = block.strip()
         if not block.startswith("【RSS來源："):
@@ -1055,6 +1187,24 @@ def parse_rss_candidates(raw_rss: str, candidate_factory=_make_news_candidate) -
 
         def _flush_current():
             if current.get("title") and current.get("url"):
+                raw_provenance = _matching_raw_provenance(
+                    raw_rss,
+                    used_provenance_indices,
+                    search_provider="RSS",
+                    title=current.get("title", ""),
+                    url=current.get("url", ""),
+                )
+                if not raw_provenance:
+                    raw_provenance = {
+                        "raw_title": current.get("title", ""),
+                        "raw_url": current.get("url", ""),
+                        "raw_publication_value": None,
+                        "fetched_at": None,
+                        "search_provider": "RSS",
+                        "publisher": None,
+                        "query": None,
+                        "original_provider_metadata": {},
+                    }
                 candidates.append(candidate_factory(
                     title=current.get("title", ""),
                     date=current.get("date", ""),
@@ -1065,6 +1215,7 @@ def parse_rss_candidates(raw_rss: str, candidate_factory=_make_news_candidate) -
                     region=guess_region_from_text(f"{source_name} {current.get('title', '')}"),
                     source_type=source_type,
                     source_href=current.get("source_href", ""),
+                    raw_provenance=raw_provenance,
                 ))
 
         for raw_line in body_lines:
@@ -1092,6 +1243,7 @@ def parse_rss_candidates(raw_rss: str, candidate_factory=_make_news_candidate) -
 
 def parse_ddg_candidates(raw_ddg: str, candidate_factory=_make_news_candidate) -> list[dict]:
     candidates: list[dict] = []
+    used_provenance_indices: set[int] = set()
     for block in re.split(r"(?=^【搜尋\s+\d+)", raw_ddg or "", flags=re.MULTILINE):
         block = block.strip()
         if not block.startswith("【搜尋"):
@@ -1104,6 +1256,28 @@ def parse_ddg_candidates(raw_ddg: str, candidate_factory=_make_news_candidate) -
         def _flush_current():
             if current.get("title") and current.get("url"):
                 source_domain = _domain_from_url(current.get("url", ""))
+                raw_provenance = _matching_raw_provenance(
+                    raw_ddg,
+                    used_provenance_indices,
+                    search_provider="DDGS",
+                    title=current.get("title", ""),
+                    url=current.get("url", ""),
+                    query=query,
+                )
+                if not raw_provenance:
+                    raw_date = current.get("date", "")
+                    raw_provenance = {
+                        "raw_title": current.get("title", ""),
+                        "raw_url": current.get("url", ""),
+                        "raw_publication_value": (
+                            raw_date if raw_date and raw_date != "日期未知" else None
+                        ),
+                        "fetched_at": None,
+                        "search_provider": "DDGS",
+                        "publisher": None,
+                        "query": query,
+                        "original_provider_metadata": {},
+                    }
                 candidates.append(candidate_factory(
                     title=current.get("title", ""),
                     date=current.get("date", ""),
@@ -1113,6 +1287,7 @@ def parse_ddg_candidates(raw_ddg: str, candidate_factory=_make_news_candidate) -
                     query=query,
                     region=guess_region_from_text(f"{query} {current.get('title', '')} {current.get('snippet', '')}"),
                     source_type="ddgs",
+                    raw_provenance=raw_provenance,
                 ))
 
         for raw_line in body_lines:

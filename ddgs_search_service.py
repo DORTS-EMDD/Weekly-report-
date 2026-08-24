@@ -12,11 +12,13 @@ from urllib.parse import urlparse
 import requests
 
 from article_processor import (
+    RawSearchText,
     _candidate_date_obj,
     _contains_taiwan_reference,
     _host_matches,
     _is_blocked_host,
     _is_domestic_taiwan_host,
+    build_raw_ingest_id,
 )
 from config import (
     ADVANCED_TYPES,
@@ -73,6 +75,9 @@ class DdgsSearchContext:
     perf_counter: Callable[[], float] = time.perf_counter
     sleep: Callable[[float], None] = time.sleep
     random_uniform: Callable[[float, float], float] = random.uniform
+    now_provider: Callable[[], datetime.datetime] = (
+        lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
     news_scope: str = DEFAULT_NEWS_SCOPE
     planned_required_families: list[str] = field(default_factory=list)
     annual_breakthrough_query_count: int = 0
@@ -1048,6 +1053,7 @@ def _run_single_query(
     context: DdgsSearchContext,
 ) -> tuple[int, str, str, list[dict], str, dict]:
     started = context.perf_counter()
+    fetched_at = context.now_provider().isoformat()
     status_row = _ddgs_query_status_template(query, news_timelimit, context=context)
     metadata = _query_metadata_for(query, context=context) or {}
     if metadata.get("date_bucket"):
@@ -1077,14 +1083,26 @@ def _run_single_query(
                 status_row["returned_count"] = len(result_list)
                 if not result_list:
                     break
-                for result in result_list:
+                for provider_record_index, result in enumerate(result_list):
                     if not isinstance(result, dict):
                         reason = "unparseable_result"
                         status_row["excluded_counts_by_reason"][reason] = status_row["excluded_counts_by_reason"].get(reason, 0) + 1
                         continue
                     body = (result.get("body") or result.get("excerpt") or result.get("description") or "")[:350]
-                    href = result.get("href") or result.get("url") or ""
-                    title = (result.get("title") or "").strip()
+                    raw_url = str(result.get("href") or result.get("url") or "")
+                    raw_title = str(result.get("title") or "")
+                    href = raw_url.strip()
+                    title = raw_title.strip()
+                    raw_publication_value = result.get("date")
+                    if raw_publication_value is None:
+                        raw_publication_value = result.get("published")
+                    if raw_publication_value is not None:
+                        raw_publication_value = str(raw_publication_value)
+                    publisher = result.get("source")
+                    if publisher is None:
+                        publisher = result.get("publisher")
+                    if publisher is not None:
+                        publisher = str(publisher)[:300]
                     item_date = _search_result_date_hint(
                         result.get("date") or result.get("published") or "",
                         f"{title} {body}",
@@ -1109,11 +1127,42 @@ def _run_single_query(
                     result_domain = urlparse(href).netloc.casefold()
                     if result_domain:
                         result_domains.add(result_domain)
+                    original_provider_metadata = {
+                        "result_keys": sorted(str(key)[:80] for key in result.keys())[:20],
+                        "source": str(result.get("source"))[:300] if result.get("source") is not None else None,
+                        "publisher": str(result.get("publisher"))[:300] if result.get("publisher") is not None else None,
+                        "date": str(result.get("date"))[:500] if result.get("date") is not None else None,
+                        "published": str(result.get("published"))[:500] if result.get("published") is not None else None,
+                        "provider": str(result.get("provider"))[:300] if result.get("provider") is not None else None,
+                        "backend": final_backend,
+                        "use_news": bool(use_news),
+                    }
+                    raw_provenance = {
+                        "raw_title": raw_title,
+                        "raw_url": raw_url,
+                        "raw_publication_value": raw_publication_value,
+                        "fetched_at": fetched_at,
+                        "search_provider": "DDGS",
+                        "publisher": publisher,
+                        "query": query,
+                        "query_region": metadata.get("query_region"),
+                        "original_provider_metadata": original_provider_metadata,
+                        "raw_ingest_id": build_raw_ingest_id(
+                            search_provider="DDGS",
+                            raw_title=raw_title,
+                            raw_url=raw_url,
+                            raw_publication_value=raw_publication_value,
+                            source=publisher or "",
+                            query=query,
+                            provider_record_index=provider_record_index,
+                        ),
+                    }
                     result_items.append({
                         "title": title,
                         "summary": body,
                         "link": href,
                         "date": item_date or "日期未知",
+                        "_raw_provenance": raw_provenance,
                     })
                 break
             except Exception as exc:
@@ -1188,6 +1237,7 @@ def run_duckduckgo_searches(
         return "沒有規劃 DDGS 查詢。", statuses, build_ddgs_search_summary([], 0)
 
     results_map: dict[int, str] = {}
+    provenance_map: dict[int, list[dict]] = {}
     primary_forward_relevance_by_index: dict[int, int] = {}
     done_count = 0
     max_workers = max(1, min(6, total))
@@ -1218,6 +1268,11 @@ def run_duckduckgo_searches(
                 query_status["error_message"] = str(exc)[:300]
             statuses.append(query_status)
             results_map[i] = _format_ddg_block(i, backend, query, items, status)
+            provenance_map[i] = [
+                item["_raw_provenance"]
+                for item in items
+                if item.get("_raw_provenance")
+            ]
             if (
                 (query_status.get("search_family") or query_status.get("family")) == "forward_technology"
                 and not query_status.get("fallback_layer")
@@ -1317,6 +1372,11 @@ def run_duckduckgo_searches(
                     query_status["fallback_layer"] = "forward_technology_urban_rail_constrained"
                     statuses.append(query_status)
                     results_map[i] = _format_ddg_block(i, backend, query, items, status)
+                    provenance_map[i] = [
+                        item["_raw_provenance"]
+                        for item in items
+                        if item.get("_raw_provenance")
+                    ]
             context.forward_technology_fallback_query_count = len(fallback_queries)
 
     statuses = sorted(
@@ -1329,4 +1389,16 @@ def run_duckduckgo_searches(
         planned_required_families=context.planned_required_families,
         annual_breakthrough_query_count=context.annual_breakthrough_query_count,
     )
-    return "\n\n".join(results_map[i] for i in sorted(results_map)), statuses, summary
+    provenance_records = [
+        record
+        for index in sorted(provenance_map)
+        for record in provenance_map[index]
+    ]
+    return (
+        RawSearchText(
+            "\n\n".join(results_map[i] for i in sorted(results_map)),
+            provenance_records,
+        ),
+        statuses,
+        summary,
+    )

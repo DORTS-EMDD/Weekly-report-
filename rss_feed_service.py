@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
+from article_processor import RawSearchText, build_raw_ingest_id
 from config import MAX_ITEMS_PER_SOURCE
 from search_service import FeedFetchError
 
@@ -67,6 +68,9 @@ def _items_from_parsed_feed(
     source_name: str = "",
     *,
     context: RssFeedContext,
+    feed_url: str = "",
+    fetched_at: str | None = None,
+    retrieval_method: str = "RSS",
 ) -> tuple[list[dict], int, int, int, int]:
     items: list[dict] = []
     invalid_count = 0
@@ -74,12 +78,28 @@ def _items_from_parsed_feed(
     duplicate_count = 0
     topic_filtered_count = 0
 
-    for entry in getattr(parsed_feed, "entries", []):
-        title = (entry.get("title") or "").strip()
-        link = (entry.get("link") or "").strip()
+    for provider_record_index, entry in enumerate(getattr(parsed_feed, "entries", [])):
+        raw_title = str(entry.get("title") or "")
+        raw_url = str(entry.get("link") or "")
+        raw_publication_value = entry.get("published")
+        if raw_publication_value is None:
+            raw_publication_value = entry.get("updated")
+        if raw_publication_value is not None:
+            raw_publication_value = str(raw_publication_value)
+        title = raw_title.strip()
+        link = raw_url.strip()
         desc = (entry.get("summary") or entry.get("description") or "").strip()
         pub_str = context.entry_pub_str(entry)
         source_href = context.entry_source_href(entry)
+        provider_source = entry.get("source") or {}
+        source_title = (
+            provider_source.get("title") or provider_source.get("name")
+            if isinstance(provider_source, dict)
+            else None
+        )
+        publisher = entry.get("publisher") or source_title
+        if publisher is not None:
+            publisher = str(publisher)[:300]
 
         if not title or not context.is_recent(pub_str, cutoff):
             continue
@@ -123,12 +143,42 @@ def _items_from_parsed_feed(
         seen_titles.add(title_key)
         seen_urls.add(url_key)
 
+        original_provider_metadata = {
+            "entry_id": str(entry.get("id") or entry.get("guid") or "")[:500] or None,
+            "published": str(entry.get("published"))[:500] if entry.get("published") is not None else None,
+            "updated": str(entry.get("updated"))[:500] if entry.get("updated") is not None else None,
+            "source_title": str(source_title)[:300] if source_title is not None else None,
+            "source_href": str(source_href)[:500] if source_href else None,
+            "feed_url": str(feed_url)[:500] if feed_url else None,
+            "retrieval_method": str(retrieval_method)[:100],
+        }
+        raw_provenance = {
+            "raw_title": raw_title,
+            "raw_url": raw_url,
+            "raw_publication_value": raw_publication_value,
+            "fetched_at": fetched_at,
+            "search_provider": "RSS",
+            "publisher": publisher,
+            "query": None,
+            "query_region": None,
+            "original_provider_metadata": original_provider_metadata,
+            "raw_ingest_id": build_raw_ingest_id(
+                search_provider="RSS",
+                raw_title=raw_title,
+                raw_url=raw_url,
+                raw_publication_value=raw_publication_value,
+                source=source_name,
+                query=None,
+                provider_record_index=provider_record_index,
+            ),
+        }
         items.append({
             "title": title,
             "link": link,
             "summary": re.sub(r"<[^>]+>", " ", desc)[:500],
             "date": context.parse_pub_date(pub_str),
             "source_href": source_href,
+            "_raw_provenance": raw_provenance,
         })
 
     return items, invalid_count, blocked_count, duplicate_count, topic_filtered_count
@@ -216,11 +266,13 @@ def fetch_rss_feeds(
     return_status: bool = False,
 ) -> str | tuple[str, list[dict]]:
     """Collect RSS/Atom sources and retain source-level diagnostics."""
-    cutoff = (
-        context.now_provider()
-        - datetime.timedelta(days=max(1, min(int(context.lookback_days), 365)))
+    fetched_at_value = context.now_provider()
+    fetched_at = fetched_at_value.isoformat()
+    cutoff = fetched_at_value - datetime.timedelta(
+        days=max(1, min(int(context.lookback_days), 365))
     )
     all_blocks: list[str] = []
+    provenance_records: list[dict] = []
     source_statuses: list[dict] = []
     seen_titles: set[str] = set()
     seen_urls: set[str] = set()
@@ -256,9 +308,17 @@ def fetch_rss_feeds(
                 seen_urls,
                 source_name,
                 context=context,
+                feed_url=url,
+                fetched_at=fetched_at,
+                retrieval_method=method,
             )
             if items_found:
                 all_blocks.append(_format_items_block(source_name, items_found))
+                provenance_records.extend(
+                    item["_raw_provenance"]
+                    for item in items_found[:MAX_ITEMS_PER_SOURCE]
+                    if item.get("_raw_provenance")
+                )
                 source_statuses.append(_status_record(source_name, method, "成功", min(len(items_found), MAX_ITEMS_PER_SOURCE)))
             else:
                 status = "非都市軌道" if topic_filtered_count and not (invalid_count or blocked_count) else "被安全規則排除" if blocked_count and not invalid_count else "無文章"
@@ -277,9 +337,17 @@ def fetch_rss_feeds(
                         seen_urls,
                         f"{source_name}（fallback Google News）",
                         context=context,
+                        feed_url=fallback_url,
+                        fetched_at=fetched_at,
+                        retrieval_method="Google News fallback",
                     )
                     if items_found:
                         all_blocks.append(_format_items_block(f"{source_name}（fallback Google News）", items_found))
+                        provenance_records.extend(
+                            item["_raw_provenance"]
+                            for item in items_found[:MAX_ITEMS_PER_SOURCE]
+                            if item.get("_raw_provenance")
+                        )
                         source_statuses.append(
                             _status_record(source_name, "Google News fallback", "fallback 成功", min(len(items_found), MAX_ITEMS_PER_SOURCE), f"官方 RSS 失敗：{exc.message}", True)
                         )
@@ -297,7 +365,7 @@ def fetch_rss_feeds(
                 all_blocks.append(f"【RSS來源：{source_name}】（{exc.status}）")
                 source_statuses.append(_status_record(source_name, method, exc.status, 0, exc.message))
 
-    raw_text = "\n\n".join(all_blocks)
+    raw_text = RawSearchText("\n\n".join(all_blocks), provenance_records)
     if return_status:
         return raw_text, source_statuses
     return raw_text

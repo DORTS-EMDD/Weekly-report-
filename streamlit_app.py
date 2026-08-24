@@ -688,12 +688,24 @@ generate_btn, _, progress_placeholder, status_placeholder = (
 )
 
 
-def _make_news_candidate(title: str, date: str, source: str, url: str, snippet: str, query: str, region: str, source_type: str, source_href: str = "") -> dict:
+def _make_news_candidate(
+    title: str,
+    date: str,
+    source: str,
+    url: str,
+    snippet: str,
+    query: str,
+    region: str,
+    source_type: str,
+    source_href: str = "",
+    raw_provenance: dict | None = None,
+) -> dict:
     return service_make_news_candidate(
         title, date, source, url, snippet, query, region, source_type, source_href,
         query_metadata=LAST_DDGS_QUERY_METADATA.get(query or "", {}) or {},
         search_family_resolver=_search_family_from_query,
         search_language_resolver=_search_language_from_query,
+        raw_provenance=raw_provenance,
     )
 
 
