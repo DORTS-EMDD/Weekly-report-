@@ -155,6 +155,19 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
                     list((item.get("original_provider_metadata") or {}).items())[:20]
                 ),
             })
+        if "region_resolution_method" in item:
+            row.update({
+                "resolved_region": item.get("resolved_region", item.get("region", "")),
+                "region_resolution_method": item.get("region_resolution_method", ""),
+                "region_resolution_evidence_type": item.get("region_resolution_evidence_type", ""),
+                "region_resolution_evidence": item.get("region_resolution_evidence", ""),
+                "region_resolution_winning_evidence": dict(
+                    list((item.get("region_resolution_winning_evidence") or {}).items())[:10]
+                ),
+                "region_resolution_conflicting_evidence": list(
+                    item.get("region_resolution_conflicting_evidence") or []
+                )[:12],
+            })
         if "operational_subtype" in item:
             row["operational_subtype"] = item["operational_subtype"]
         for key in (

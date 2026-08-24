@@ -374,88 +374,417 @@ def _region_from_domain_hints(candidate: dict) -> str:
     return ""
 
 
-def _region_guess_from_candidate(candidate: dict) -> str:
-    title = str(candidate.get("title", "") or "")
-    snippet = str(candidate.get("snippet", "") or "")
-    explicit_event_guess = _explicit_event_region_hint(f"{title} {snippet}")
-    if explicit_event_guess:
-        return explicit_event_guess
-    for value in (title, snippet):
-        text_guess = guess_region_from_text(value)
-        if text_guess != "未判定":
-            return text_guess
+def _geography_term_spans(text_lower: str, term: str) -> list[tuple[int, int]]:
+    term_lower = str(term or "").casefold()
+    if not term_lower:
+        return []
+    escaped = re.escape(term_lower)
+    if re.fullmatch(r"[a-z0-9.\-]+", term_lower):
+        pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])"
+    else:
+        pattern = escaped
+    return [match.span() for match in re.finditer(pattern, text_lower)]
 
-    source_guess = guess_region_from_text(candidate.get("source", ""))
-    if source_guess != "未判定":
-        return source_guess
+
+def _geography_evidence_record(
+    evidence_type: str,
+    region: str,
+    *,
+    field: str,
+    evidence: str,
+    method: str,
+    position: int = 0,
+    eligible: bool = True,
+) -> dict:
+    return {
+        "type": evidence_type,
+        "region": region,
+        "field": field,
+        "evidence": re.sub(r"\s+", " ", str(evidence or "")).strip()[:500],
+        "method": method,
+        "precedence": int(GEOGRAPHY_EVIDENCE_PRECEDENCE.get(evidence_type, 90)),
+        "position": max(0, int(position or 0)),
+        "eligible": bool(eligible),
+    }
+
+
+def _manufacturer_location_evidence(text: str, field: str) -> list[dict]:
+    text_lower = str(text or "").casefold()
+    evidence: list[dict] = []
+    seen_regions: set[str] = set()
+    for rule in METRO_SYSTEM_OWNERSHIP_RULES:
+        region = str(rule.get("region", "") or "")
+        for alias in rule.get("location_aliases", ()):
+            for start, end in _geography_term_spans(text_lower, alias):
+                context_start = max(0, start - 45)
+                context_end = min(len(text_lower), end + 45)
+                context_lower = text_lower[context_start:context_end]
+                manufacturer_context = any(term in context_lower for term in (
+                    "factory", "plant", "manufactur", "production site", "assembl",
+                ))
+                vendor_context = any(term in context_lower for term in (
+                    "vendor", "supplier", "headquarter", "head office", "-based", " based",
+                ))
+                if not manufacturer_context and not vendor_context:
+                    continue
+                if region in seen_regions:
+                    break
+                seen_regions.add(region)
+                evidence.append(_geography_evidence_record(
+                    "manufacturer_location" if manufacturer_context else "vendor_location",
+                    region,
+                    field=field,
+                    evidence=str(text or "")[context_start:context_end],
+                    method=(
+                        "manufacturer_location_context"
+                        if manufacturer_context
+                        else "vendor_location_context"
+                    ),
+                    position=start,
+                    eligible=False,
+                ))
+            if region in seen_regions:
+                break
+    return evidence
+
+
+def _metro_system_ownership_evidence(text: str, field: str) -> list[dict]:
+    raw_text = str(text or "")
+    text_lower = raw_text.casefold()
+    evidence: list[dict] = []
+    for rule in METRO_SYSTEM_OWNERSHIP_RULES:
+        region = str(rule.get("region", "") or "")
+        system_spans = [
+            span
+            for term in rule.get("system_terms", ())
+            for span in _geography_term_spans(text_lower, term)
+        ]
+        location_match: tuple[int, int, int, int] | None = None
+        for alias in rule.get("location_aliases", ()):
+            for alias_start, alias_end in _geography_term_spans(text_lower, alias):
+                for system_start, system_end in system_spans:
+                    distance = max(
+                        0,
+                        system_start - alias_end,
+                        alias_start - system_end,
+                    )
+                    if distance > 45:
+                        continue
+                    between_start = min(alias_end, system_end)
+                    between_end = max(alias_start, system_start)
+                    between = text_lower[between_start:between_end]
+                    alias_context = text_lower[
+                        max(0, alias_start - 28):min(len(text_lower), alias_end + 28)
+                    ]
+                    manufacturer_context = any(
+                        term in between or term in alias_context
+                        for term in GEOGRAPHY_MANUFACTURER_CONTEXT_TERMS
+                    )
+                    if manufacturer_context and distance > 8:
+                        continue
+                    candidate_match = (distance, alias_start, system_start, system_end)
+                    if location_match is None or candidate_match < location_match:
+                        location_match = candidate_match
+        if location_match is not None:
+            _distance, alias_start, system_start, system_end = location_match
+            match_start = max(0, min(alias_start, system_start) - 20)
+            match_end = min(len(raw_text), max(alias_start + 30, system_end) + 20)
+            evidence.append(_geography_evidence_record(
+                "metro_system_location",
+                region,
+                field=field,
+                evidence=raw_text[match_start:match_end],
+                method="metro_system_ownership",
+                position=min(alias_start, system_start),
+            ))
+
+        operator_positions = [
+            start
+            for alias in rule.get("operator_aliases", ())
+            for start, _end in _geography_term_spans(text_lower, alias)
+        ]
+        if operator_positions and system_spans:
+            position = min(operator_positions)
+            evidence.append(_geography_evidence_record(
+                "operator_location",
+                region,
+                field=field,
+                evidence=raw_text[max(0, position - 20):min(len(raw_text), position + 100)],
+                method="operator_ownership",
+                position=position,
+            ))
+    return evidence
+
+
+def _region_resolution_details(candidate: dict) -> dict:
+    evidence_rows: list[dict] = []
+    seen: set[tuple] = set()
+
+    def add(row: dict | None) -> None:
+        if not row or not row.get("type"):
+            return
+        key = (
+            row.get("type"), row.get("region"), row.get("field"),
+            row.get("method"), row.get("evidence"),
+        )
+        if key in seen or len(evidence_rows) >= 30:
+            return
+        seen.add(key)
+        evidence_rows.append(row)
+
+    explicit_fields = (
+        ("event_location", "event_location", "explicit_event_location_field", True),
+        ("metro_system_location", "metro_system_location", "explicit_metro_system_location_field", True),
+        ("operator_location", "operator_location", "explicit_operator_location_field", True),
+        ("project_location", "project_location", "explicit_project_location_field", True),
+        ("manufacturer_location", "manufacturer_location", "explicit_manufacturer_location_field", False),
+        ("vendor_location", "vendor_location", "explicit_vendor_location_field", False),
+        ("publisher_location", "publisher_location", "explicit_publisher_location_field", True),
+        ("source_domain_location", "source_domain_location", "explicit_source_domain_location_field", True),
+    )
+    for field_name, evidence_type, method, eligible in explicit_fields:
+        value = str(candidate.get(field_name, "") or "").strip()
+        if not value:
+            continue
+        region = guess_region_from_text(value)
+        if region != "未判定":
+            add(_geography_evidence_record(
+                evidence_type,
+                region,
+                field=field_name,
+                evidence=value,
+                method=method,
+                eligible=eligible,
+            ))
+
+    title = str(candidate.get("title", "") or "")
+    raw_title = str(candidate.get("raw_title", "") or "")
+    snippet = str(candidate.get("snippet", "") or "")
+    subject_fields = [("title", title)]
+    if raw_title and raw_title.strip() != title.strip():
+        subject_fields.append(("raw_title", raw_title))
+    subject_fields.append(("snippet", snippet))
+
+    manufacturer_by_field: dict[str, set[str]] = {}
+    ownership_by_field: dict[str, set[str]] = {}
+    for field_name, value in subject_fields:
+        manufacturer_rows = _manufacturer_location_evidence(value, field_name)
+        ownership_rows = _metro_system_ownership_evidence(value, field_name)
+        manufacturer_by_field[field_name] = {row["region"] for row in manufacturer_rows}
+        ownership_by_field[field_name] = {row["region"] for row in ownership_rows}
+        for row in manufacturer_rows + ownership_rows:
+            add(row)
+
+    combined_subject = f"{title} {snippet}".strip()
+    explicit_event_region = _explicit_event_region_hint(combined_subject)
+    combined_manufacturer_regions = {
+        region for regions in manufacturer_by_field.values() for region in regions
+    }
+    combined_ownership_regions = {
+        region for regions in ownership_by_field.values() for region in regions
+    }
+    if (
+        explicit_event_region
+        and (
+            explicit_event_region not in combined_manufacturer_regions
+            or explicit_event_region in combined_ownership_regions
+        )
+    ):
+        add(_geography_evidence_record(
+            "event_location",
+            explicit_event_region,
+            field="title_snippet",
+            evidence=combined_subject,
+            method="title_snippet_explicit_event",
+        ))
+
+    for field_name, value in subject_fields:
+        text_guess = guess_region_from_text(value)
+        if text_guess == "未判定":
+            continue
+        manufacturer_only = (
+            text_guess in manufacturer_by_field.get(field_name, set())
+            and text_guess not in ownership_by_field.get(field_name, set())
+        )
+        if not manufacturer_only:
+            add(_geography_evidence_record(
+                "article_subject_country",
+                text_guess,
+                field=field_name,
+                evidence=value,
+                method=f"{field_name}_city_system_operator",
+            ))
+
+    for field_name in ("source", "publisher"):
+        value = str(candidate.get(field_name, "") or "")
+        source_guess = guess_region_from_text(value)
+        if source_guess != "未判定":
+            add(_geography_evidence_record(
+                "publisher_location",
+                source_guess,
+                field=field_name,
+                evidence=value,
+                method="official_operator_or_source" if field_name == "source" else "publisher_location",
+            ))
+
+    provider_metadata = candidate.get("original_provider_metadata") or {}
+    if isinstance(provider_metadata, dict):
+        provider_source = str(provider_metadata.get("source_title", "") or "")
+        provider_guess = guess_region_from_text(provider_source)
+        if provider_guess != "未判定":
+            add(_geography_evidence_record(
+                "publisher_location",
+                provider_guess,
+                field="original_provider_metadata.source_title",
+                evidence=provider_source,
+                method="provider_publisher_location",
+            ))
+
     domain_guess = _region_from_domain_hints(candidate)
     if domain_guess:
-        return domain_guess
+        domain_evidence = " ".join(
+            str(candidate.get(key, "") or "")
+            for key in ("source_domain", "source_href", "url", "raw_url")
+        ).strip()
+        add(_geography_evidence_record(
+            "source_domain_location",
+            domain_guess,
+            field="source_domain",
+            evidence=domain_evidence,
+            method="official_source_domain",
+        ))
 
     existing = str(candidate.get("region", "") or "").strip()
     query_region = str(candidate.get("query_region", "") or "").strip()
-    if existing not in {"", "未判定", "國際", "國際研究"} and existing != query_region:
-        return existing
+    generic_regions = {"", "未判定", "國際", "國際研究"}
+    if (
+        existing not in generic_regions
+        and existing != query_region
+        and (
+            existing not in combined_manufacturer_regions
+            or existing in combined_ownership_regions
+        )
+    ):
+        add(_geography_evidence_record(
+            "candidate_region",
+            existing,
+            field="region",
+            evidence=existing,
+            method="candidate_region",
+        ))
 
     path_text = " ".join(
         urlparse(candidate.get(key, "") or "").path.replace("/", " ")
-        for key in ("url", "source_href")
+        for key in ("url", "source_href", "raw_url")
     )
     path_guess = guess_region_from_text(path_text)
     if path_guess != "未判定":
-        return path_guess
-    if query_region and query_region not in {"global", "unplanned", "domestic", "未判定", "國際", "國際研究"}:
-        return query_region
-    query_guess = guess_region_from_text(candidate.get("query", ""))
-    return query_guess if query_guess != "未判定" else "未判定"
+        add(_geography_evidence_record(
+            "source_domain_location",
+            path_guess,
+            field="source_url_path",
+            evidence=path_text,
+            method="source_url_path",
+        ))
+
+    if query_region and query_region not in {
+        "global", "unplanned", "domestic", "未判定", "國際", "國際研究"
+    }:
+        add(_geography_evidence_record(
+            "query_region",
+            query_region,
+            field="query_region",
+            evidence=query_region,
+            method="query_region_fallback",
+        ))
+    query = str(candidate.get("query", "") or "")
+    query_guess = guess_region_from_text(query)
+    if query_guess != "未判定":
+        add(_geography_evidence_record(
+            "query_region",
+            query_guess,
+            field="query",
+            evidence=query,
+            method="query_text_fallback",
+        ))
+
+    language = str(
+        candidate.get("article_language")
+        or candidate.get("search_language")
+        or ""
+    ).strip()
+    if language:
+        add(_geography_evidence_record(
+            "article_language",
+            "",
+            field="article_language",
+            evidence=language,
+            method="article_language_non_ownership",
+            eligible=False,
+        ))
+
+    field_order = {
+        "event_location": 0,
+        "title": 1,
+        "raw_title": 2,
+        "title_snippet": 3,
+        "snippet": 4,
+    }
+    eligible_rows = [
+        row for row in evidence_rows
+        if row.get("eligible") and row.get("region") not in {"", "未判定"}
+    ]
+    if eligible_rows:
+        winner = min(
+            eligible_rows,
+            key=lambda row: (
+                int(row.get("precedence", 90)),
+                field_order.get(str(row.get("field", "")), 10),
+                int(row.get("position", 0)),
+            ),
+        )
+    else:
+        winner = _geography_evidence_record(
+            "unresolved", "未判定", field="", evidence="", method="unresolved"
+        )
+    conflicts = [
+        {key: row.get(key) for key in ("type", "region", "field", "evidence", "method", "precedence")}
+        for row in evidence_rows
+        if row.get("region") not in {"", "未判定", winner.get("region")}
+    ][:12]
+    return {
+        "region": winner.get("region", "未判定"),
+        "method": winner.get("method", "unresolved"),
+        "evidence": winner.get("evidence", ""),
+        "evidence_type": winner.get("type", "unresolved"),
+        "winning_evidence": {
+            key: winner.get(key)
+            for key in ("type", "region", "field", "evidence", "method", "precedence")
+        },
+        "conflicting_evidence": conflicts,
+    }
+
+
+def _region_guess_from_candidate(candidate: dict) -> str:
+    return str(_region_resolution_details(candidate).get("region") or "未判定")
 
 
 def _region_resolution(candidate: dict) -> tuple[str, str, str]:
-    title = str(candidate.get("title", "") or "")
-    snippet = str(candidate.get("snippet", "") or "")
-    explicit_event_guess = _explicit_event_region_hint(f"{title} {snippet}")
-    if explicit_event_guess:
-        return explicit_event_guess, "title_snippet_explicit_event", f"{title} {snippet}".strip()
-    for field_name, value in (("title", title), ("snippet", snippet)):
-        text_guess = guess_region_from_text(value)
-        if text_guess != "未判定":
-            return text_guess, f"{field_name}_city_system_operator", value
-    source = str(candidate.get("source", "") or "")
-    source_guess = guess_region_from_text(source)
-    if source_guess != "未判定":
-        return source_guess, "official_operator_or_source", source
-    domain_guess = _region_from_domain_hints(candidate)
-    if domain_guess:
-        evidence = " ".join(
-            str(candidate.get(key, "") or "")
-            for key in ("source_domain", "source_href", "url")
-        ).strip()
-        return domain_guess, "official_source_domain", evidence
-    existing = str(candidate.get("region", "") or "").strip()
-    query_region = str(candidate.get("query_region", "") or "").strip()
-    if existing not in {"", "未判定", "國際", "國際研究"} and existing != query_region:
-        return existing, "candidate_region", existing
-    path_text = " ".join(
-        urlparse(candidate.get(key, "") or "").path.replace("/", " ")
-        for key in ("url", "source_href")
-    )
-    path_guess = guess_region_from_text(path_text)
-    if path_guess != "未判定":
-        return path_guess, "source_url_path", path_text
-    if query_region and query_region not in {"global", "unplanned", "domestic", "未判定", "國際", "國際研究"}:
-        return query_region, "query_region_fallback", query_region
-    query_guess = guess_region_from_text(candidate.get("query", ""))
-    if query_guess != "未判定":
-        return query_guess, "query_text_fallback", str(candidate.get("query", "") or "")
-    return "未判定", "unresolved", ""
+    details = _region_resolution_details(candidate)
+    return details["region"], details["method"], details["evidence"]
 
 
 def _canonical_candidate_region(candidate: dict) -> str:
     original_region = str(candidate.get("region", "") or "").strip()
     query_region = str(candidate.get("query_region", "") or "").strip()
-    guessed, method, evidence = _region_resolution(candidate)
+    details = _region_resolution_details(candidate)
+    guessed = details["region"]
+    method = details["method"]
+    evidence = details["evidence"]
     region = original_region
-    if guessed == "巴西":
+    if guessed == "未判定" and method == "unresolved":
+        region = "未判定"
+    elif guessed == "巴西":
         region = "巴西"
     elif guessed != "未判定" and (not region or region in {"未判定", "國際", "國際研究"} or region != guessed):
         region = guessed
@@ -467,6 +796,9 @@ def _canonical_candidate_region(candidate: dict) -> str:
     candidate["resolved_region"] = region
     candidate["region_resolution_method"] = method
     candidate["region_resolution_evidence"] = evidence
+    candidate["region_resolution_evidence_type"] = details["evidence_type"]
+    candidate["region_resolution_winning_evidence"] = details["winning_evidence"]
+    candidate["region_resolution_conflicting_evidence"] = details["conflicting_evidence"]
     candidate["region_conflict"] = bool(
         query_region
         and query_region not in {"global", "unplanned", "domestic", "未判定", "國際", "國際研究"}
@@ -509,6 +841,10 @@ _COUNTRY_BY_REGION = {
     "法國": "法國",
     "Berlin": "德國",
     "Munich": "德國",
+    "München": "德國",
+    "Muenchen": "德國",
+    "MVG": "德國",
+    "SWM": "德國",
     "柏林": "德國",
     "慕尼黑": "德國",
     "德國": "德國",
@@ -936,7 +1272,7 @@ def guess_region_from_text(text: str) -> str:
         "澳洲": ["australia", "sydney", "melbourne", "brisbane", "澳洲"],
         "英國": ["united kingdom", "uk", "london", "tfl", "underground", "manchester", "metrolink", "英國", "英国", "倫敦"],
         "法國": ["france", "paris", "ratp", "法國", "法国", "巴黎"],
-        "德國": ["germany", "berlin", "munich", "hamburg", "u-bahn", "德國", "德国"],
+        "德國": ["germany", "berlin", "munich", "münchen", "muenchen", "mvg", "swm", "hamburg", "u-bahn", "德國", "德国"],
         "美國": [
             "united states", "new york", "nyc", "manhattan", "washington", "chicago",
             "seattle", "federal way", "star lake", "sound transit", "link light rail",

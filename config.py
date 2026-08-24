@@ -252,6 +252,56 @@ EVENT_REGION_PRIORITY_HINTS: list[tuple[str, list[str]]] = [
     ("德國", ["bvg", "berlin", "adlershof", "leipzig", "munich", "hamburg", "u-bahn", "柏林", "萊比錫", "慕尼黑", "漢堡"]),
 ]
 
+# Geography resolution is ownership-aware: event and transit-system evidence
+# outrank incidental manufacturer, publisher, domain, and query geography.
+GEOGRAPHY_EVIDENCE_PRECEDENCE = {
+    "event_location": 10,
+    "metro_system_location": 20,
+    "operator_location": 30,
+    "project_location": 40,
+    "article_subject_country": 50,
+    "candidate_region": 55,
+    "manufacturer_location": 60,
+    "vendor_location": 61,
+    "publisher_location": 70,
+    "source_domain_location": 71,
+    "query_region": 80,
+    "article_language": 81,
+    "unresolved": 90,
+}
+
+METRO_SYSTEM_OWNERSHIP_RULES = (
+    {
+        "region": "德國",
+        "location_aliases": ("münchen", "muenchen", "munich", "慕尼黑"),
+        "operator_aliases": ("mvg", "stadtwerke münchen", "stadtwerke muenchen", "swm"),
+        "system_terms": ("u-bahn", "metro", "subway", "urban rail", "c2", "train", "rolling stock"),
+    },
+    {
+        "region": "奧地利",
+        "location_aliases": ("wien", "vienna", "奧地利", "austria"),
+        "operator_aliases": ("wiener linien",),
+        "system_terms": ("u-bahn", "metro", "subway", "urban rail", "tram", "train", "rolling stock"),
+    },
+    {
+        "region": "英國",
+        "location_aliases": ("manchester", "manchester piccadilly"),
+        "operator_aliases": ("metrolink",),
+        "system_terms": ("tram", "light rail", "metro", "station", "train"),
+    },
+    {
+        "region": "印度",
+        "location_aliases": ("chennai",),
+        "operator_aliases": ("cmrl", "chennai metro rail"),
+        "system_terms": ("metro", "metro rail", "subway", "station", "train"),
+    },
+)
+
+GEOGRAPHY_MANUFACTURER_CONTEXT_TERMS = (
+    "factory", "plant", "manufactur", "production site", "assembl",
+    "vendor", "supplier", "headquarter", "head office", "-based", " based",
+)
+
 REGION_DOMAIN_HINTS = {
     "translink.ca": "加拿大",
     "ttc.ca": "加拿大",
