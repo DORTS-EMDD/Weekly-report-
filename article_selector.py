@@ -36,6 +36,12 @@ from article_processor import (
     _strip_source_name_noise,
     normalize_country,
 )
+from electromechanical_taxonomy import (
+    CORE_SYSTEM_LABELS,
+    CORE_SYSTEM_TERM_GROUPS,
+    CORE_TO_PROCUREMENT_GROUP,
+    classify_candidate_electromechanical,
+)
 
 LOW_VALUE_POLICY_TERMS = [
     "holiday service", "weekend service", "weekender", "service advisory",
@@ -304,62 +310,6 @@ ELECTROMECHANICAL_GENERIC_SCOPE_TERMS = [
     "systems package", "systems contract", "機電標", "機電系統標",
     "機電系統", "機電設備", "기전 시스템", "전기기계 시스템",
 ]
-
-CORE_SYSTEM_LABELS = (
-    "電聯車",
-    "號誌",
-    "供電",
-    "通訊",
-    "自動收費",
-    "機廠維修設備",
-    "月臺門",
-)
-
-CORE_SYSTEM_TERM_GROUPS: dict[str, tuple[str, ...]] = {
-    "電聯車": (
-        "vehicle equipment", "car door", "train door", "bogie", "wheelset",
-        "coupler", "propulsion", "traction inverter", "traction inverters", "traction motor", "braking system",
-        "brake system", "tcms", "rolling-stock", "車門", "轉向架", "輪對",
-        "聯結器", "推進", "牽引變流器", "牽引馬達", "煞車", "制動", "tcms",
-        "車載", "電聯車", "車輛",
-    ),
-    "號誌": (
-        "cbtc", "atp", "ato", "ats", "signalling", "signaling", "signal system",
-        "interlocking", "train control", "train supervision", "wayside signal",
-        "axle counter", "axle counters", "號誌", "信號", "聯鎖", "列車控制",
-        "列控", "行車監控", "自動列車監控", "軸計數器",
-        "信号", "信号システム", "신호", "신호 시스템",
-    ),
-    "供電": (
-        "traction power", "traction power supply", "power supply", "traction substation",
-        "substation", "third rail", "third-rail", "overhead catenary", "power rail",
-        "ups", "供電", "牽引供電", "牽引變電站", "變電站", "第三軌", "電力系統",
-        "不斷電系統",
-    ),
-    "通訊": (
-        "cctv", "wireless radio", "radio system", "fiber optic", "fibre optic",
-        "fiber communication", "fibre communication", "pids", "passenger information display",
-    "telecommunications", "telecommunication system", "communications system",
-        "communications", "communications systems", "communication network", "telephone system", "通訊", "CCTV", "無線電", "光纖",
-        "旅客資訊顯示", "電話",
-    ),
-    "自動收費": (
-        "automatic fare collection", "afc", "fare gate", "ticket gate", "ticketing system",
-        "ticket vending machine", "contactless payment", "票閘", "售票機", "自動收費",
-        "票務", "感應支付",
-    ),
-    "機廠維修設備": (
-        "wheel lathe", "lifting jack", "train washer", "wash plant", "maintenance equipment",
-        "depot equipment", "workshop equipment", "rescue equipment", "depot electromechanical",
-        "maintenance facility", "maintenance depot", "train maintenance facility", "depot maintenance",
-        "depot", "workshop", "operations and maintenance centre", "operations and maintenance center",
-        "機廠", "維修廠", "維修中心", "車床", "舉升", "洗車", "維修設備", "救援設備",
-    ),
-    "月臺門": (
-        "platform screen door", "platform screen doors", "platform door", "platform doors",
-        "psd", "月臺門", "月台門",
-    ),
-}
 
 ROLLING_STOCK_EVENT_TERMS = (
     "new", "order", "orders", "ordered", "procure", "procurement", "procured",
@@ -2411,11 +2361,18 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def _core_systems_for_candidate(candidate: dict) -> list[str]:
         text = _candidate_selection_text(candidate)
-        systems = [
-            label
-            for label in CORE_SYSTEM_LABELS
-            if _contains_positive_term(text, list(CORE_SYSTEM_TERM_GROUPS[label]))
-        ]
+        taxonomy = classify_candidate_electromechanical(candidate)
+        systems = list(taxonomy["systems"])
+        candidate["electromechanical_classification"] = list(systems)
+        candidate["electromechanical_winning_evidence"] = list(
+            taxonomy["winning_evidence"]
+        )[:16]
+        candidate["electromechanical_rejected_evidence"] = list(
+            taxonomy["rejected_evidence"]
+        )[:12]
+        candidate["electromechanical_classification_reason"] = str(
+            taxonomy["classification_reason"]
+        )
         rolling_stock_specific_terms = (
             "vehicle equipment", "car door", "train door", "bogie", "wheelset", "coupler",
             "propulsion", "traction inverter", "traction inverters", "traction motor",
@@ -2469,6 +2426,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             and not _contains_any_term(text, list(rolling_stock_specific_terms))
         ):
             systems.remove("電聯車")
+        candidate["electromechanical_classification"] = list(systems)
+        if systems and candidate["electromechanical_classification_reason"] == "insufficient_electromechanical_evidence":
+            candidate["electromechanical_classification_reason"] = "technical_event_evidence"
         return systems
 
 
@@ -3044,6 +3004,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             title_snippet,
             ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS,
         )
+        formal_taxonomy = classify_candidate_electromechanical(candidate)
+        for core_system in formal_taxonomy["systems"]:
+            procurement_group = CORE_TO_PROCUREMENT_GROUP.get(str(core_system))
+            if procurement_group and procurement_group not in systems:
+                systems.append(procurement_group)
         generic_electromechanical_scope = _contains_any_term(
             title_snippet,
             ELECTROMECHANICAL_GENERIC_SCOPE_TERMS,
@@ -4679,6 +4644,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 normalize_country(candidate.get("resolved_region") or candidate.get("region", "未判定")),
             ),
             "core_systems": _core_systems_for_candidate(candidate),
+            "electromechanical_classification": candidate.get("electromechanical_classification", []),
+            "electromechanical_winning_evidence": candidate.get("electromechanical_winning_evidence", [])[:16],
+            "electromechanical_rejected_evidence": candidate.get("electromechanical_rejected_evidence", [])[:12],
+            "electromechanical_classification_reason": candidate.get("electromechanical_classification_reason", ""),
             "technical_themes": candidate.get("technical_themes", _technical_themes_for_candidate(candidate)),
             "page_type": candidate.get("page_type", ""),
             "page_type_reason": candidate.get("page_type_reason", ""),

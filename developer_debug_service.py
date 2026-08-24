@@ -214,9 +214,18 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
             "dispute_gate_positive_signals",
             "dispute_gate_failure_reasons",
             "procurement_generic_electromechanical_scope",
+            "electromechanical_classification",
+            "electromechanical_winning_evidence",
+            "electromechanical_rejected_evidence",
+            "electromechanical_classification_reason",
         ):
             if key in item:
-                row[key] = item[key]
+                if key == "electromechanical_winning_evidence":
+                    row[key] = list(item[key] or [])[:16]
+                elif key == "electromechanical_rejected_evidence":
+                    row[key] = list(item[key] or [])[:12]
+                else:
+                    row[key] = item[key]
         rows.append(row)
     return rows
 

@@ -33,6 +33,10 @@ from config import (
     SECTION_NUMBER_BY_TYPE,
     SERVICE_OPENING_CATEGORY_KEY,
 )
+from electromechanical_taxonomy import (
+    classify_electromechanical_evidence,
+    report_labels_for_core_systems,
+)
 from journal_service import _parse_full_research_date
 from maiagent_service import (
     REPORT_CANDIDATE_ID_PATTERN,
@@ -1080,11 +1084,26 @@ def normalize_electromechanical_system_value(value: str, context: str = "") -> s
     raw_evidence = "" if raw_is_generic or (raw_has_non_physical and not raw_has_explicit_system) else raw_value
     context_evidence = (context or "").replace(raw_value, "")
     evidence = " ".join(part for part in (raw_evidence, context_evidence) if part).strip()
-    systems = [
-        label
-        for label, terms in CANONICAL_ELECTROMECHANICAL_SYSTEMS
-        if _contains_any_term(evidence, list(terms))
-    ]
+    formal_taxonomy = classify_electromechanical_evidence({
+        "reported_value": raw_evidence,
+        "context": context_evidence,
+    })
+    shared_report_labels = {
+        "號誌系統": "號誌",
+        "通訊系統": "通訊",
+        "自動收費系統": "自動收費",
+        "機廠設備": "機廠維修設備",
+    }
+    formal_systems = set(formal_taxonomy["systems"])
+    systems = []
+    for label, terms in CANONICAL_ELECTROMECHANICAL_SYSTEMS:
+        shared_core_label = shared_report_labels.get(label)
+        if shared_core_label:
+            if shared_core_label in formal_systems:
+                systems.append(label)
+            continue
+        if _contains_any_term(evidence, list(terms)):
+            systems.append(label)
     incident_context_terms = (
         "derailment", "collision", "crash", "incident", "accident", "出軌", "碰撞", "事故", "調查"
     )
@@ -2987,6 +3006,9 @@ _FALLBACK_ELECTROMECHANICAL_SYSTEM_LABELS = {
 def _fallback_electromechanical_system(candidate: dict) -> str:
     if candidate.get("procurement_generic_electromechanical_scope") and not candidate.get("core_systems"):
         return ""
+    formal_labels = report_labels_for_core_systems(candidate.get("core_systems") or [])
+    if formal_labels:
+        return '、'.join(formal_labels)
     systems = candidate.get('procurement_systems') or []
     if isinstance(systems, str):
         systems = [systems]
@@ -3066,6 +3088,27 @@ def _force_candidate_fields_in_block(block: str, candidate: dict | list[dict], *
     category = _formal_category_for_candidate(candidates[0]) or context.infer_preliminary_type(candidates[0])
     normalized = re.sub(r'(?mi)^\s*(?:<!--\s*candidate_id.*?-->|&lt;!--.*?--&gt;)\s*$', '', normalized).strip()
     normalized = re.sub('(?m)^(🔹\\s*)\\[[^\\]]+\\]', f'\\1[{category}]', normalized, count=1)
+    if all("core_systems" in item for item in candidates):
+        formal_core_systems = list(dict.fromkeys(
+            system
+            for item in candidates
+            for system in (item.get("core_systems") or [])
+        ))
+        formal_system_value = '、'.join(report_labels_for_core_systems(formal_core_systems))
+        system_line_pattern = r'(?m)^•\s*相關機電系統\s*[：:].*$'
+        if formal_system_value:
+            replacement = f'• 相關機電系統：{formal_system_value}'
+            if re.search(system_line_pattern, normalized):
+                normalized = re.sub(system_line_pattern, replacement, normalized, count=1)
+            else:
+                normalized = re.sub(
+                    r'(?m)^•\s*事件摘要\s*[：:]',
+                    f'{replacement}\n\n• 事件摘要：',
+                    normalized,
+                    count=1,
+                )
+        else:
+            normalized = re.sub(system_line_pattern + r'\n?', '', normalized, count=1)
     source_line = _candidate_source_line(candidates[0], context=context) if _effective_source_url(candidates[0]) else ''
     if source_line:
         normalized_lines: list[str] = []
