@@ -204,6 +204,17 @@ class V21OperationalTopicTests(unittest.TestCase):
         ]
         for candidate in candidates:
             candidate.update(streamlit_app.evaluate_category_gates(candidate))
+            candidate.update({
+                "resolved_region": candidate["region"],
+                "country": candidate["region"],
+                "core_systems": [],
+                "category_resolution_method": "event_action_object_status",
+                "canonical_event_id": f"event:fixture:{candidate['id']}",
+                "authoritative_materialization_stage": "post_enrichment",
+                "normalized_publication_date": candidate["date"],
+                "date_validation": "valid_in_range",
+                "recent_window_valid": True,
+            })
 
         selected_types = list(streamlit_app.selected_types)
         streamlit_app.selected_types[:] = ["技術新知", "重大事故", "營運政策", "營運爭議"]

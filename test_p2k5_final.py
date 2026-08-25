@@ -189,6 +189,7 @@ class P2K5FinalTests(unittest.TestCase):
             _profile_timing_add=lambda *_args: None,
         )
         def candidate(identifier: int, date_value: str) -> dict:
+            parsed = datetime.date.fromisoformat(date_value)
             return {
                 "id": identifier,
                 "candidate_id": identifier,
@@ -198,6 +199,8 @@ class P2K5FinalTests(unittest.TestCase):
                 "source_tier": "B_professional",
                 "final_selection_score": 92,
                 "python_score": 92,
+                "verified_bucket": f"{parsed.year:04d}-Q{((parsed.month - 1) // 3) + 1}",
+                "date_verification_status": "verified",
             }
 
         selected = [candidate(1, "2026-08-01"), candidate(2, "2026-07-10"), candidate(3, "2026-06-25")]
@@ -207,10 +210,7 @@ class P2K5FinalTests(unittest.TestCase):
             candidate(6, "2025-10-16"),
         ]
         balanced = selector["rebalance_selected_candidates"](selected, pool)
-        quarters = {
-            f"{datetime.date.fromisoformat(item['date']).year:04d}-Q{((datetime.date.fromisoformat(item['date']).month - 1) // 3) + 1}"
-            for item in balanced
-        }
+        quarters = {item["verified_bucket"] for item in balanced}
         self.assertGreaterEqual(len(quarters), 3)
 
     def test_annual_common_english_phrase_requires_retry_validation(self):

@@ -61,6 +61,37 @@ def _complete_block(candidate_id: int, title: str, category: str, url: str) -> s
     ])
 
 
+def _materialized_selector_candidate(
+    candidate: dict,
+    category: str,
+    event_id: str,
+    systems: list[str] | None = None,
+) -> dict:
+    """Build the upstream-owned fields required by the A7 selector barrier."""
+    gate_key = {
+        "技術新知": "technology",
+        "重大事故": "major_accident",
+        "營運政策": "operational_policy",
+        "營運爭議": "operational_dispute",
+    }.get(category, "technology")
+    candidate.update({
+        "primary_category": category,
+        "classification": category,
+        "preliminary_type": category,
+        "category_gates": {gate_key: True},
+        "category_resolution_method": "event_action_object_status",
+        "resolved_region": candidate.get("region", "未判定"),
+        "country": candidate.get("region", "未判定"),
+        "core_systems": list(systems or []),
+        "canonical_event_id": event_id,
+        "authoritative_materialization_stage": "post_enrichment",
+        "normalized_publication_date": candidate.get("date", ""),
+        "date_validation": "valid_in_range",
+        "recent_window_valid": True,
+    })
+    return candidate
+
+
 class P2K4RRegressionTests(unittest.TestCase):
     def test_production_chain_consolidates_selected_events_before_prompt(self):
         config = workflow_service.WorkflowConfig(
@@ -114,6 +145,15 @@ class P2K4RRegressionTests(unittest.TestCase):
             "classification": "技術新知",
             "primary_category": "技術新知",
         })
+        _materialized_selector_candidate(
+            hanzomon_operational, "營運政策", "event:tokyo-metro:hanzomon:asbestos"
+        )
+        _materialized_selector_candidate(
+            hanzomon_accident, "重大事故", "event:tokyo-metro:hanzomon:asbestos"
+        )
+        _materialized_selector_candidate(
+            gold_coast, "技術新知", "event:gold-coast:signalling-upgrade", ["號誌"]
+        )
         model_candidates = [hanzomon_operational, hanzomon_accident, gold_coast]
         runtime.selector_api["select_candidates_by_python"] = lambda items: list(items)
 
@@ -230,6 +270,8 @@ class P2K4RRegressionTests(unittest.TestCase):
                 source_display="Metro Journal",
             ),
         ]
+        for candidate in candidates:
+            candidate["canonical_event_id"] = "event:tokyo-metro:hanzomon:asbestos"
         consolidated, stats = api["consolidate_event_candidates"](candidates)
 
         self.assertEqual(len(consolidated), 1)
@@ -265,6 +307,8 @@ class P2K4RRegressionTests(unittest.TestCase):
             "source_tier": "C_media",
             "title": "Hanzomon asbestos inspection reported",
         })
+        candidate["canonical_event_id"] = "event:tokyo-metro:hanzomon:asbestos"
+        duplicate["canonical_event_id"] = "event:tokyo-metro:hanzomon:asbestos"
         consolidated, _ = api["consolidate_event_candidates"]([candidate, duplicate])
         selected = dict(consolidated[0], id=1, candidate_id=1)
         prompt = app.build_report_prompt([selected], [], 1)

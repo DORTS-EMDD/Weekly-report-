@@ -297,6 +297,17 @@ class P2KRecallQualityTests(unittest.TestCase):
 
     def test_existing_model_source_is_normalized_to_primary_candidate_source(self):
         candidate = _candidate(16, "Metro signalling upgrade", "CBTC upgrade improves reliability.", core_systems=["號誌"])
+        candidate.update({
+            "primary_category": "技術新知",
+            "classification": "技術新知",
+            "preliminary_type": "技術新知",
+            "category_gates": {"technology": True},
+            "category_resolution_method": "event_action_object_status",
+            "resolved_region": "英國",
+            "country": "英國",
+            "canonical_event_id": "event:fixture:16",
+            "authoritative_materialization_stage": "post_enrichment",
+        })
         report = "\n".join([
             "<!-- candidate_id: 16 -->",
             "🔹 [技術新知] Metro signalling upgrade",

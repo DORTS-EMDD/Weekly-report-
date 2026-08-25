@@ -210,6 +210,11 @@ class V21QualityGateTests(unittest.TestCase):
         first = _candidate(1, "Gelsenkirchen tram collision leaves dozens injured", "Gelsenkirchen tram collision", category="重大事故", region="德國", query_region="德國")
         second = _candidate(2, "Tram collision injures 25 people", "Gelsenkirchen tram collision", category="重大事故", region="德國", query_region="德國")
         other_city = _candidate(3, "Berlin tram collision injures 25 people", "Berlin tram collision", category="重大事故", region="德國", query_region="德國")
+        # Event identity is an upstream authoritative field in A7; city/title
+        # similarity alone is no longer a selector merge authority.
+        first["canonical_event_id"] = "event:gelsenkirchen:tram-collision"
+        second["canonical_event_id"] = "event:gelsenkirchen:tram-collision"
+        other_city["canonical_event_id"] = "event:berlin:tram-collision"
         self.assertTrue(app._is_same_report_event(first, second))
         self.assertFalse(app._is_same_report_event(first, other_city))
 

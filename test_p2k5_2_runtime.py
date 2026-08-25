@@ -110,18 +110,29 @@ class P2K52RuntimeTests(unittest.TestCase):
     def test_annual_rescue_budget_reaches_each_quarter(self):
         api = _selector()
         candidates = []
-        for index, date_value in enumerate(
-            ("2025-09-10", "2025-12-10", "2026-03-10", "2026-06-10", "2026-08-10"),
+        bucketed_dates = (
+            ("2025-09-10", "2025-Q3"),
+            ("2025-12-10", "2025-Q4"),
+            ("2026-03-10", "2026-Q1"),
+            ("2026-06-10", "2026-Q2"),
+            ("2026-08-10", "2026-Q3"),
+        )
+        for index, (date_value, verified_bucket) in enumerate(
+            bucketed_dates,
             1,
         ):
-            candidates.append(
-                _candidate(
-                    index,
-                    f"Metro {index} CBTC modernization",
-                    "Urban rail metro CBTC modernization",
-                    date_value,
-                )
+            candidate = _candidate(
+                index,
+                f"Metro {index} CBTC modernization",
+                "Urban rail metro CBTC modernization",
+                date_value,
             )
+            candidate.update({
+                "verified_bucket": verified_bucket,
+                "date_verification_status": "verified",
+                "normalized_publication_date": date_value,
+            })
+            candidates.append(candidate)
 
         def enrich(candidate, _session):
             candidate["snippet"] += " deploys system integration and improves reliability."
@@ -205,7 +216,7 @@ class P2K52RuntimeTests(unittest.TestCase):
         }
         self.assertEqual(report_postprocessor._fallback_electromechanical_system(candidate), "")
 
-    def test_explicit_em_fallback_keeps_supported_system_label(self):
+    def test_missing_authoritative_em_does_not_fallback_from_procurement_systems(self):
         candidate = {
             "procurement_generic_electromechanical_scope": False,
             "core_systems": [],
@@ -213,7 +224,9 @@ class P2K52RuntimeTests(unittest.TestCase):
             "title": "Metro signalling renewal",
             "snippet": "The signalling system will be renewed.",
         }
-        self.assertEqual(report_postprocessor._fallback_electromechanical_system(candidate), "號誌系統")
+        # A7-T11: an explicit empty authoritative result is valid and must not
+        # be replaced by procurement/title inference.
+        self.assertEqual(report_postprocessor._fallback_electromechanical_system(candidate), "")
 
     def test_sidebar_settings_use_fragment_without_requesting_workflow(self):
         recorder = FakeStreamlit()

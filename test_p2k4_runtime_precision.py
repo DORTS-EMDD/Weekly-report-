@@ -196,6 +196,10 @@ class P2K4RuntimePrecisionTests(unittest.TestCase):
                 source_display="Transit TV",
             ),
         ]
+        # A7 requires the upstream event owner to materialize identity before
+        # source consolidation; title/location similarity is not an authority.
+        for candidate in candidates:
+            candidate["canonical_event_id"] = "event:tokyo-metro:hanzomon:unusual-odor"
         consolidated, stats = api["consolidate_event_candidates"](candidates)
         self.assertEqual(len(consolidated), 1)
         self.assertEqual(stats["duplicate_count"], 2)
