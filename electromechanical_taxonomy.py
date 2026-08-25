@@ -105,6 +105,97 @@ CORE_TO_PROCUREMENT_GROUP = {
     "月臺門": "platform_screen_doors",
 }
 
+
+# These contextual terms were historically applied by the selector after the
+# shared taxonomy ran.  They remain part of the A3 semantics, but now live in
+# this owner so a candidate receives one authoritative `core_systems` result.
+_ROLLING_STOCK_SPECIFIC_TERMS = (
+    "vehicle equipment", "car door", "train door", "bogie", "wheelset", "coupler",
+    "propulsion", "traction inverter", "traction inverters", "traction motor",
+    "braking system", "brake system", "tcms", "車門", "轉向架", "輪對", "聯結器",
+    "牽引變流器", "牽引馬達", "煞車", "制動", "車載",
+)
+_ROLLING_STOCK_EVENT_TERMS = (
+    "new", "order", "orders", "ordered", "procure", "procurement", "procured",
+    "purchase", "purchased", "delivery", "delivered", "introduce", "introduced",
+    "deployment", "deployed", "upgrade", "upgraded", "modernization", "modernisation",
+    "performance", "maintenance", "overhaul", "fleet", "採購", "訂購", "交車",
+    "導入", "投入", "性能", "維修", "更新",
+)
+_DEPOT_FACILITY_TERMS = (
+    "maintenance facility", "maintenance depot", "train maintenance facility",
+    "depot maintenance", "depot", "workshop", "operations and maintenance centre",
+    "operations and maintenance center", "電扶梯", "電梯", "空調", "月臺設備",
+    "月台設備", "旅客資訊系統", "影像分析", "監控中心", "安全中心", "行控中心",
+    "維修機廠",
+)
+_GENERIC_PACKAGE_TERMS = (
+    "e&m package", "e & m package", "electromechanical package",
+    "electromechanical systems package", "electromechanical systems",
+    "integrated e&m", "integrated electromechanical", "mep package", "systems package",
+    "systems contract", "機電標", "機電系統標", "機電系統", "機電設備",
+)
+
+
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    lowered = str(text or "").casefold()
+    for term in terms:
+        normalized = str(term or "").casefold()
+        if re.fullmatch(r"[a-z0-9][a-z0-9\s/&.\-]*", normalized):
+            if re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", lowered):
+                return True
+        elif normalized in lowered:
+            return True
+    return False
+
+
+def _apply_contextual_vehicle_semantics(text: str, systems: list[str]) -> list[str]:
+    """Preserve the former A3 rolling-stock/depot context rules in the owner."""
+
+    lowered = str(text or "").casefold()
+    has_depot_facility = _contains_any(lowered, _DEPOT_FACILITY_TERMS)
+    has_specific_vehicle_evidence = _contains_any(lowered, _ROLLING_STOCK_SPECIFIC_TERMS)
+    explicit_vehicle_terms = (
+        *_ROLLING_STOCK_SPECIFIC_TERMS,
+        "rolling stock", "vehicle fleet", "trainset", "trainsets",
+        "light rail vehicle", "light rail vehicles", "車輛系統", "車輛設備", "電聯車",
+    )
+    generic_package_without_vehicle_detail = (
+        _contains_any(lowered, _GENERIC_PACKAGE_TERMS)
+        and not _contains_any(lowered, explicit_vehicle_terms)
+    )
+    has_vehicle_event = bool(
+        re.search(
+            r"\b(?:new|order(?:s|ed)?|procure(?:d|ment)?|purchase(?:d)?|deliver(?:y|ed)?|"
+            r"introduc(?:e|ed|tion)|deploy(?:ed|ment)?|upgrade(?:d)?|moderni[sz](?:e|ed|ation)|"
+            r"performance|maintenan(?:ce|t)|overhaul)\b.{0,50}\b(?:rolling stock|vehicle fleet|"
+            r"metro trains?|trainset|trainsets|trains?|列車|車輛)\b",
+            lowered,
+        )
+        or re.search(
+            r"\b(?:rolling stock|vehicle fleet|metro trains?|trainset|trainsets|列車|車輛)\b.{0,50}\b(?:"
+            r"maintenan(?:ce|t)|overhaul|performance|upgrade(?:d)?|moderni[sz](?:e|ed|ation))\b",
+            lowered,
+        )
+        or (
+            _contains_any(lowered, ("rolling stock", "vehicle fleet", "trainset", "trainsets"))
+            and _contains_any(lowered, _ROLLING_STOCK_EVENT_TERMS)
+        )
+    )
+    systems = list(systems)
+    if (
+        not generic_package_without_vehicle_detail
+        and (has_specific_vehicle_evidence or has_vehicle_event)
+        and "電聯車" not in systems
+        and (not has_depot_facility or has_specific_vehicle_evidence)
+    ):
+        systems.append("電聯車")
+    if generic_package_without_vehicle_detail:
+        systems = [system for system in systems if system != "電聯車"]
+    if "號誌" in systems and "電聯車" in systems and not _contains_any(lowered, _ROLLING_STOCK_SPECIFIC_TERMS):
+        systems.remove("電聯車")
+    return systems
+
 _NEGATION_PATTERN = re.compile(
     r"\b(?:no|not|without|neither|nor|lacks?|missing|rather than)\b|"
     r"(?:沒有|未列明|未提供|不含|未包含|並非|不是)",
@@ -251,11 +342,18 @@ def classify_electromechanical_evidence(fields: Mapping[str, str] | str) -> dict
 
 
 def classify_candidate_electromechanical(candidate: Mapping[str, object]) -> dict[str, object]:
-    return classify_electromechanical_evidence({
+    fields = {
         field: str(candidate.get(field, "") or "")
         for field in ("raw_title", "title", "raw_snippet", "snippet", "prefetched_text_snippet")
         if candidate.get(field)
-    })
+    }
+    result = classify_electromechanical_evidence(fields)
+    text = " ".join(fields.values())
+    systems = _apply_contextual_vehicle_semantics(text, list(result["systems"]))
+    if systems and not result["systems"]:
+        result["classification_reason"] = "technical_event_evidence"
+    result["systems"] = systems
+    return result
 
 
 def report_labels_for_core_systems(systems: list[str] | tuple[str, ...]) -> list[str]:

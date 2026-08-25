@@ -8,6 +8,7 @@ from typing import Callable
 
 from article_processor import (
     _candidate_date_obj,
+    _canonical_candidate_region,
     _date_sort_key,
     _dedupe_url,
     _domain_from_url,
@@ -22,6 +23,7 @@ from article_processor import (
     _region_guess_from_candidate,
     _shorten,
     _source_tier_rank,
+    normalize_country,
     dedupe_candidates,
     parse_ddg_candidates,
     parse_rss_candidates,
@@ -29,6 +31,13 @@ from article_processor import (
     source_verb_for_report,
 )
 from article_selector import build_selector_api
+from electromechanical_taxonomy import classify_candidate_electromechanical
+from event_identity import annotate_event_identity
+from selector_contract import (
+    MODE_BUCKETED_ABSOLUTE as SELECTOR_MODE_BUCKETED_ABSOLUTE,
+    MODE_CONTINUOUS_RECENT as SELECTOR_MODE_CONTINUOUS_RECENT,
+    validate_selector_entries,
+)
 from config import (
     ADVANCED_TYPES,
     CANDIDATE_SNIPPET_CHARS,
@@ -528,6 +537,67 @@ class WorkflowRuntime:
         for route_id in dict.fromkeys(str(value) for value in route_ids if value):
             self.temporal_plan.record(route_id, field)
 
+    def _materialize_authoritative_candidate(self, candidate: dict, *, authoritative: bool = True) -> dict:
+        """Materialize all formal fields after the latest enrichment pass."""
+        resolved_region = _canonical_candidate_region(candidate)
+        candidate["resolved_region"] = resolved_region
+        candidate["country"] = normalize_country(resolved_region)
+
+        taxonomy = classify_candidate_electromechanical(candidate)
+        candidate["core_systems"] = list(taxonomy.get("systems", []) or [])
+        candidate["electromechanical_classification"] = list(candidate["core_systems"])
+        candidate["electromechanical_winning_evidence"] = list(
+            taxonomy.get("winning_evidence", []) or []
+        )[:16]
+        candidate["electromechanical_rejected_evidence"] = list(
+            taxonomy.get("rejected_evidence", []) or []
+        )[:12]
+        candidate["electromechanical_classification_reason"] = str(
+            taxonomy.get("classification_reason", "") or ""
+        )
+        candidate["authoritative_materialization_stage"] = (
+            "post_enrichment" if authoritative else "provisional"
+        )
+
+        gate_payload = self.selector_api["evaluate_category_gates"](candidate)
+        candidate.update(gate_payload)
+        primary_category = str(candidate.get("primary_category") or "").strip()
+        candidate["classification"] = primary_category
+        candidate["preliminary_type"] = primary_category
+
+        # The A5 owner is the only place that materializes/reconciles event IDs.
+        annotate_event_identity(candidate)
+        return candidate
+
+    def _selector_temporal_mode(self) -> str:
+        if self.config.today is None or self.config.lookback_days is None:
+            raise RuntimeError("PIPELINE_CONTRACT_ERROR: temporal mode/report date is missing")
+        if self.temporal_plan is not None:
+            if self.temporal_plan.mode == MODE_BUCKETED_ABSOLUTE:
+                return SELECTOR_MODE_BUCKETED_ABSOLUTE
+            if self.temporal_plan.mode == SELECTOR_MODE_CONTINUOUS_RECENT:
+                return SELECTOR_MODE_CONTINUOUS_RECENT
+            raise RuntimeError("PIPELINE_CONTRACT_ERROR: temporal mode is invalid")
+        return (
+            SELECTOR_MODE_BUCKETED_ABSOLUTE
+            if int(self.config.lookback_days) >= 365
+            else SELECTOR_MODE_CONTINUOUS_RECENT
+        )
+
+    def _validate_selector_entry(self, candidates: list[dict]) -> tuple[list[dict], list[dict]]:
+        accepted, excluded = validate_selector_entries(
+            candidates,
+            temporal_mode=self._selector_temporal_mode(),
+            today=self.config.today,
+            lookback_days=self.config.lookback_days,
+        )
+        for candidate in accepted:
+            candidate["recent_window_valid"] = (
+                self._selector_temporal_mode() == SELECTOR_MODE_CONTINUOUS_RECENT
+                and candidate.get("date_validation") == "valid_in_range"
+            )
+        return accepted, excluded
+
     def prepare_candidate_pool(self, raw_rss: str, raw_ddg: str) -> dict:
         pool_started = time.perf_counter()
         selector = self.selector_api
@@ -546,9 +616,8 @@ class WorkflowRuntime:
             candidate["page_type"], candidate["page_type_reason"] = selector[
                 "_compute_candidate_page_type"
             ](candidate)
-            initial_gate_payload = selector["evaluate_category_gates"](candidate)
-            candidate.update(initial_gate_payload)
-            initial_gate_snapshot = _category_gate_snapshot(initial_gate_payload)
+            self._materialize_authoritative_candidate(candidate, authoritative=False)
+            initial_gate_snapshot = _category_gate_snapshot(candidate)
             candidate["category_gate_before_enrichment"] = initial_gate_snapshot
             candidate["category_gate_after_enrichment"] = deepcopy(initial_gate_snapshot)
             candidate["category_changed_after_enrichment"] = False
@@ -609,9 +678,8 @@ class WorkflowRuntime:
                 before_enrichment = candidate.get("category_gate_before_enrichment") or _category_gate_snapshot(
                     candidate
                 )
-                refreshed_gate_payload = selector["evaluate_category_gates"](candidate)
-                after_enrichment = _category_gate_snapshot(refreshed_gate_payload)
-                candidate.update(refreshed_gate_payload)
+                self._materialize_authoritative_candidate(candidate)
+                after_enrichment = _category_gate_snapshot(candidate)
                 candidate["category_gate_before_enrichment"] = deepcopy(before_enrichment)
                 candidate["category_gate_after_enrichment"] = deepcopy(after_enrichment)
                 candidate["category_changed_after_enrichment"] = before_enrichment != after_enrichment
@@ -625,10 +693,13 @@ class WorkflowRuntime:
                 )
                 candidate.clear()
                 candidate.update(refreshed)
+            else:
+                self._materialize_authoritative_candidate(candidate)
             keep, reason = selector["preliminary_filter_candidate"](candidate)
             if keep:
                 if any((candidate.get("category_gates") or {}).values()):
                     self._record_temporal_candidate_stage(candidate, "gate_pass")
+                candidate["recent_window_valid"] = candidate.get("date_validation") == "valid_in_range"
                 candidate["exclude_reason"] = ""
                 candidate["final_exclude_reason"] = ""
                 candidate["selection_stage"] = "candidate_pool"
@@ -641,6 +712,29 @@ class WorkflowRuntime:
                 excluded_candidates.append(candidate)
                 exclusion_stats[reason] = exclusion_stats.get(reason, 0) + 1
         timings["preliminary_filter"] = time.perf_counter() - preliminary_started
+
+        contract_started = time.perf_counter()
+        contract_ready, contract_excluded = self._validate_selector_entry(filtered_candidates)
+        if contract_excluded:
+            excluded_candidates.extend(contract_excluded)
+            exclusion_stats["selector_contract_violation"] = len(contract_excluded)
+        filtered_candidates = contract_ready
+        timings["selector_entry_contract"] = time.perf_counter() - contract_started
+
+        # A5 reconciliation is an upstream event-identity operation.  Run it
+        # once more after enrichment so that evidence revealed by prefetch can
+        # participate in the canonical event decision before selector entry.
+        post_enrichment_dedupe_started = time.perf_counter()
+        filtered_candidates, post_enrichment_dedupe_stats = dedupe_candidates(
+            filtered_candidates,
+            self.config.lookback_days,
+        )
+        timings["post_enrichment_event_identity"] = (
+            time.perf_counter() - post_enrichment_dedupe_started
+        )
+
+        for candidate in filtered_candidates:
+            selector["materialize_selector_quality"](candidate)
 
         event_consolidation_started = time.perf_counter()
         consolidate_events = selector.get("consolidate_event_candidates")
@@ -728,6 +822,7 @@ class WorkflowRuntime:
             "final": 0,
         })
         pipeline_debug_stats["event_consolidation_stats"] = event_consolidation_stats
+        pipeline_debug_stats["post_enrichment_dedupe_stats"] = post_enrichment_dedupe_stats
         pipeline_debug_stats["temporal_retrieval"] = self.temporal_router.diagnostics(
             self.temporal_plan
         )
@@ -740,6 +835,7 @@ class WorkflowRuntime:
             "candidate_cards": candidate_cards,
             "candidate_card_limit": candidate_limit,
             "dedupe_stats": dedupe_stats,
+            "post_enrichment_dedupe_stats": post_enrichment_dedupe_stats,
             "event_consolidation_stats": event_consolidation_stats,
             "prefetch_stats": prefetch_stats,
             "exclusion_stats": exclusion_stats,
@@ -752,6 +848,12 @@ class WorkflowRuntime:
         }
 
     def select_candidates(self, model_candidates: list[dict]) -> list[dict]:
+        incoming_candidates = list(model_candidates or [])
+        model_candidates, contract_excluded = self._validate_selector_entry(
+            incoming_candidates
+        )
+        for candidate in model_candidates:
+            self.selector_api["materialize_selector_quality"](candidate)
         selected = ensure_selected_candidate_ids(
             self.selector_api["select_candidates_by_python"](model_candidates)
         )

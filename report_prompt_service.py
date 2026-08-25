@@ -88,12 +88,13 @@ def _authoritative_candidate_classification(
     *,
     context: ReportPromptContext,
 ) -> str:
-    for key in ("classification", "primary_category", "preliminary_type"):
-        value = str(candidate.get(key, "") or "").strip()
-        if value in context.advanced_types:
-            return value
-    inferred = str(context.infer_preliminary_type(candidate) or "").strip()
-    return inferred if inferred in context.advanced_types else ""
+    value = str(
+        candidate.get("primary_category")
+        or candidate.get("classification")
+        or candidate.get("preliminary_type")
+        or ""
+    ).strip()
+    return value if value in context.advanced_types else ""
 
 
 def _formal_report_category(value: str) -> str:
@@ -119,10 +120,11 @@ def format_selection_candidate(
             or context.domain_from_url(source_url)
             or context.extract_domain_hint(source_url)
         ),
-        "region": candidate.get("region", "未判定"),
-        "preliminary_type": candidate.get(
-            "preliminary_type",
-            context.infer_preliminary_type(candidate),
+        "region": candidate.get("resolved_region", candidate.get("region", "未判定")),
+        "preliminary_type": (
+            candidate.get("primary_category")
+            or candidate.get("classification")
+            or candidate.get("preliminary_type", "")
         ),
         "python_score": candidate.get("python_score", 0),
         "short_snippet": candidate.get(

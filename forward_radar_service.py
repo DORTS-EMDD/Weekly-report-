@@ -9,14 +9,18 @@ from pathlib import Path
 from typing import Callable
 
 from article_processor import (
+    _canonical_candidate_region,
     _make_news_candidate,
     _shorten,
     _date_sort_key,
     dedupe_candidates,
+    normalize_country,
     parse_ddg_candidates,
 )
 from article_selector import build_selector_api
 from config import CANDIDATE_SNIPPET_CHARS
+from electromechanical_taxonomy import classify_candidate_electromechanical
+from event_identity import annotate_event_identity
 from ddgs_search_service import (
     DdgsSearchContext,
     _search_family_from_query,
@@ -292,6 +296,12 @@ def run_forward_radar(
         for candidate in candidates
         if candidate.get("search_family") == RADAR_QUERY_FAMILY
     ]
+    raw_candidate_count = len(candidates)
+    # The same DDGS row is commonly returned once per query.  Reconcile those
+    # rows through the A5 owner before the comparatively expensive formal
+    # materialization work; the final pass below remains the post-enrichment
+    # safety boundary.
+    candidates, _raw_dedupe_stats = dedupe_candidates(candidates, lookback_days)
 
     selector = _build_selector(
         as_of_date=as_of,
@@ -305,7 +315,25 @@ def run_forward_radar(
         candidate["page_type"], candidate["page_type_reason"] = selector[
             "_compute_candidate_page_type"
         ](candidate)
+        candidate["resolved_region"] = _canonical_candidate_region(candidate)
+        candidate["country"] = normalize_country(candidate["resolved_region"])
+        taxonomy = classify_candidate_electromechanical(candidate)
+        candidate["core_systems"] = list(taxonomy.get("systems", []) or [])
+        candidate["electromechanical_classification"] = list(candidate["core_systems"])
+        candidate["electromechanical_winning_evidence"] = list(
+            taxonomy.get("winning_evidence", []) or []
+        )[:16]
+        candidate["electromechanical_rejected_evidence"] = list(
+            taxonomy.get("rejected_evidence", []) or []
+        )[:12]
+        candidate["electromechanical_classification_reason"] = str(
+            taxonomy.get("classification_reason", "") or ""
+        )
+        candidate["authoritative_materialization_stage"] = "post_enrichment"
         candidate.update(selector["evaluate_category_gates"](candidate))
+        candidate["classification"] = candidate.get("primary_category", "")
+        candidate["preliminary_type"] = candidate.get("primary_category", "")
+        annotate_event_identity(candidate)
         enriched = selector["annotate_candidate_for_scheme_d"](candidate)
         enriched["id"] = index
         enriched["candidate_id"] = index
@@ -328,7 +356,7 @@ def run_forward_radar(
     eligible_output = [_candidate_output(candidate) for candidate in eligible]
     watchlist_output = [_candidate_output(candidate) for candidate in watchlist]
     counts = {
-        "raw": len(enriched_candidates),
+        "raw": raw_candidate_count,
         "deduplicated": len(deduplicated),
         "urban_rail": sum(bool(candidate.get("urban_rail_gate")) for candidate in deduplicated),
         "report_eligible": len(eligible_output),

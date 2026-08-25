@@ -1428,6 +1428,10 @@ def canonical_formal_report_category(value: str) -> str:
 
 
 def _formal_category_for_candidate(candidate: dict) -> str:
+    # `classification`/`preliminary_type` are materialized mirrors kept for
+    # compatibility with already-selected records; no text or query inference
+    # is performed here.  New selector entries must still provide
+    # `primary_category` through the entry contract.
     internal_category = str(
         candidate.get("primary_category")
         or candidate.get("classification")
@@ -2780,13 +2784,26 @@ def ensure_supplemental_sources_in_report(report_md: str, selected_candidates: l
 # Extracted formal-report reconciliation and diagnostics.
 
 def _candidate_region_display(candidate: dict, *, context: ReportPostprocessContext) -> str:
+    resolved = str(candidate.get("resolved_region") or "").strip()
+    if resolved or candidate.get("authoritative_materialization_stage"):
+        return resolved or str(candidate.get("region") or "未判定").strip() or "未判定"
+    # Compatibility-only path for pre-A7 records that never crossed the
+    # selector contract.  Production candidates always carry resolved_region.
     text = context.candidate_selection_text(candidate)
     region = _canonical_candidate_region(dict(candidate))
-    city_map = [('北愛爾蘭', ['northern ireland', 'belfast', '北愛爾蘭', '貝爾法斯特'], '英國（北愛爾蘭）'), ('巴塞爾', ['basel', '巴塞爾'], '瑞士（巴塞爾）'), ('休士頓', ['houston', '休士頓', '休斯頓'], '美國（休士頓）'), ('溫哥華', ['vancouver', 'broadway subway', '溫哥華'], '加拿大（溫哥華）'), ('多倫多', ['toronto', 'finch west', '多倫多'], '加拿大（多倫多）'), ('柏林', ['berlin', 'adlershof', '柏林'], '德國（柏林）'), ('萊比錫', ['leipzig', '萊比錫'], '德國（萊比錫）')]
+    city_map = [
+        ('北愛爾蘭', ['northern ireland', 'belfast', '北愛爾蘭', '貝爾法斯特'], '英國（北愛爾蘭）'),
+        ('巴塞爾', ['basel', '巴塞爾'], '瑞士（巴塞爾）'),
+        ('休士頓', ['houston', '休士頓', '休斯頓'], '美國（休士頓）'),
+        ('溫哥華', ['vancouver', 'broadway subway', '溫哥華'], '加拿大（溫哥華）'),
+        ('多倫多', ['toronto', 'finch west', '多倫多'], '加拿大（多倫多）'),
+        ('柏林', ['berlin', 'adlershof', '柏林'], '德國（柏林）'),
+        ('萊比錫', ['leipzig', '萊比錫'], '德國（萊比錫）'),
+    ]
     for _, terms, label in city_map:
         if _contains_any_term(text, terms):
             return label
-    return region or '未判定'
+    return region or str(candidate.get("region") or "未判定").strip() or "未判定"
 
 def _is_unknown_region_value(value: str, *, context: ReportPostprocessContext) -> bool:
     cleaned = re.sub('\\s+', '', value or '').strip('：:，,。-')
@@ -2824,7 +2841,9 @@ def repair_report_region_lines(report_md: str, selected_candidates: list[dict], 
     return ''.join(output)
 
 def formal_title_from_candidate(candidate: dict, *, context: ReportPostprocessContext) -> str:
-    category = candidate.get('classification') or candidate.get('preliminary_type') or context.infer_preliminary_type(candidate)
+    category = _formal_category_for_candidate(candidate)
+    if not category:
+        return ''
     text = context.candidate_selection_text(candidate)
     original_title = _clean_text(unescape(str(candidate.get('title', '') or '')))
     lower_text = text.casefold()
@@ -3005,39 +3024,39 @@ _FALLBACK_ELECTROMECHANICAL_SYSTEM_LABELS = {
 
 
 def _fallback_electromechanical_system(candidate: dict) -> str:
-    if candidate.get("procurement_generic_electromechanical_scope") and not candidate.get("core_systems"):
-        return ""
+    if "core_systems" not in candidate:
+        if candidate.get("authoritative_materialization_stage"):
+            return ""
+        # Compatibility-only path for legacy pre-contract records.
+        if candidate.get("procurement_generic_electromechanical_scope"):
+            return ""
+        systems = candidate.get("procurement_systems") or []
+        if isinstance(systems, str):
+            systems = [systems]
+        evidence = " ".join(
+            str(candidate.get(key, '') or '')
+            for key in ('title', 'snippet', 'summary', 'summary_zh')
+        )
+        labels = [
+            _FALLBACK_ELECTROMECHANICAL_SYSTEM_LABELS.get(str(system).strip())
+            for system in systems
+        ]
+        labels = [label for label in labels if label]
+        inferred_labels = normalize_electromechanical_system_value('', evidence)
+        if inferred_labels != '未明確':
+            labels.extend(inferred_labels.split('、'))
+        labels = [label for label in labels if label != '未明確']
+        return '、'.join(dict.fromkeys(labels)) if labels else '未明確'
     formal_labels = report_labels_for_core_systems(candidate.get("core_systems") or [])
-    if formal_labels:
-        return '、'.join(formal_labels)
-    systems = candidate.get('procurement_systems') or []
-    if isinstance(systems, str):
-        systems = [systems]
-    evidence = " ".join(
-        str(candidate.get(key, '') or '')
-        for key in ('title', 'snippet', 'summary', 'summary_zh')
-    )
-    labels = [
-        _FALLBACK_ELECTROMECHANICAL_SYSTEM_LABELS.get(str(system).strip())
-        for system in systems
-    ]
-    labels = [label for label in labels if label]
-    if 'vertical_transport' in {str(system).strip() for system in systems}:
-        vertical_labels = normalize_electromechanical_system_value('', evidence)
-        if vertical_labels != '未明確':
-            labels = [label for label in labels if label != '未明確']
-            labels.append(vertical_labels)
-    inferred_labels = normalize_electromechanical_system_value('', evidence)
-    if inferred_labels != '未明確':
-        labels.extend(inferred_labels.split('、'))
-    labels = [label for label in labels if label != '未明確']
-    return '、'.join(dict.fromkeys(labels)) if labels else '未明確'
+    return '、'.join(formal_labels) if formal_labels else ''
 
 def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext) -> str:
     if _fallback_reason(candidate, context=context):
         return ''
     candidate_id = int(candidate.get('candidate_id') or candidate.get('id') or 0)
-    category = _formal_category_for_candidate(candidate) or context.infer_preliminary_type(candidate)
+    category = _formal_category_for_candidate(candidate)
+    if not category:
+        return ''
     title = _fallback_title_from_candidate(candidate)
     if not title:
         return ''
@@ -3064,6 +3083,10 @@ def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext
 
 
 def _candidate_event_identity(candidate: dict) -> str:
+    explicit = str(candidate.get("canonical_event_id") or "").strip()
+    if explicit or candidate.get("authoritative_materialization_stage"):
+        return explicit
+    # Compatibility-only identity for legacy records that predate A5/A7.
     return canonical_event_id(candidate)
 
 def _force_candidate_fields_in_block(block: str, candidate: dict | list[dict], *, context: ReportPostprocessContext) -> str:
@@ -3074,7 +3097,9 @@ def _force_candidate_fields_in_block(block: str, candidate: dict | list[dict], *
     normalized = normalize_final_report_md(unescape(block or ''))
     if not re.search('(?m)^🔹\\s*\\[[^\\]]+\\]', normalized):
         return ''
-    category = _formal_category_for_candidate(candidates[0]) or context.infer_preliminary_type(candidates[0])
+    category = _formal_category_for_candidate(candidates[0])
+    if not category:
+        return ''
     normalized = re.sub(r'(?mi)^\s*(?:<!--\s*candidate_id.*?-->|&lt;!--.*?--&gt;)\s*$', '', normalized).strip()
     normalized = re.sub('(?m)^(🔹\\s*)\\[[^\\]]+\\]', f'\\1[{category}]', normalized, count=1)
     if all("core_systems" in item for item in candidates):
@@ -3215,13 +3240,14 @@ def reconcile_report_candidate_output(report_md: str, selected_candidates: list[
             for candidate in candidates
             if candidate
         }
+        event_identities.discard("")
         if event_identities.intersection(seen_event_identities):
             deduplicated_event_ids.extend(candidate_ids)
             return
         seen_event_identities.update(event_identities)
         records.append({
             'candidate_ids': candidate_ids,
-            'category': _formal_category_for_candidate(candidates[0] or {}) or context.infer_preliminary_type(candidates[0] or {}),
+            'category': _formal_category_for_candidate(candidates[0] or {}),
             'text': text,
             'model': model,
         })

@@ -43,11 +43,7 @@ from electromechanical_taxonomy import (
     classify_candidate_electromechanical,
 )
 from category_conflict_resolver import resolve_primary_category
-from event_identity import (
-    annotate_event_identity,
-    compare_event_candidates,
-    mark_duplicate,
-)
+from event_identity import canonical_article_key
 
 LOW_VALUE_POLICY_TERMS = [
     "holiday service", "weekend service", "weekender", "service advisory",
@@ -1939,14 +1935,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return stats
         session = create_requests_session()
         def _annual_rescue_bucket(candidate: dict) -> str:
-            explicit = str(candidate.get("date_bucket", "") or "").strip()
-            if explicit:
-                return explicit
-            date_obj = _candidate_date_obj(candidate.get("date", ""))
-            return (
-                f"{date_obj.year:04d}-Q{((date_obj.month - 1) // 3) + 1}"
-                if date_obj else ""
-            )
+            return str(candidate.get("verified_bucket", "") or "").strip()
 
         def _rescue_priority(item: dict) -> tuple:
             return (
@@ -2112,7 +2101,18 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         snippet = candidate.get("snippet", "")
         text = f"{title} {snippet} {source} {url} {source_href}"
         text_lower = text.casefold()
-        candidate_region = _canonical_candidate_region(candidate)
+        if not candidate.get("authoritative_materialization_stage") and "resolved_region" not in candidate:
+            # Legacy direct callers predate the workflow materializer.  Keep
+            # their observable normalization while production entries use the
+            # resolver in WorkflowRuntime before this boundary.
+            _canonical_candidate_region(candidate)
+        # Geography is materialized upstream.  This function only consumes the
+        # resolved value and never rewrites the formal region.
+        candidate_region = str(
+            candidate.get("resolved_region")
+            or candidate.get("region")
+            or "未判定"
+        ).strip()
 
         def _reject(reason: str) -> tuple[bool, str]:
             candidate["preliminary_keep"] = False
@@ -2242,11 +2242,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         elif not is_global_scope:
             if candidate_region not in active_regions:
                 if candidate_region in {"國際", "國際研究", "未判定"} and _is_allowed_international_candidate(candidate, text, looks_like_standard):
-                    candidate["region"] = "國際"
+                    candidate["scope_eligible"] = True
+                    candidate["scope_admission_reason"] = "international_policy_with_unresolved_region"
                 else:
                     return _reject("國家/地區不在指定範圍")
         elif candidate_region in {"國際", "國際研究"} and not _is_allowed_international_candidate(candidate, text, looks_like_standard):
-            candidate["region"] = "未判定"
+            return _reject("國際範圍候選缺少允許的國際證據")
 
         if not _is_urban_rail_candidate(text, source):
             return _reject("非捷運/都市軌道")
@@ -2255,13 +2256,19 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if _is_tech_news_only_mode() and not is_forward_family and not _is_technical_news_candidate(text, source):
             return _reject("非技術新知")
 
-        gate_info = evaluate_category_gates(candidate)
-        candidate.update(gate_info)
-        if gate_info.get("primary_category") == "excluded":
+        primary_category = str(candidate.get("primary_category") or "").strip()
+        if not primary_category and not candidate.get("authoritative_materialization_stage"):
+            # Compatibility-only path for legacy direct selector callers.  The
+            # workflow materializes primary_category before this function, so
+            # production selector entry never evaluates a Gate here.
+            legacy_gate_payload = evaluate_category_gates(candidate)
+            candidate.update(legacy_gate_payload)
+            primary_category = str(candidate.get("primary_category") or "").strip()
+        if not primary_category or primary_category == "excluded":
             candidate["classification"] = "excluded"
             candidate["exclude_reason"] = "no_category_gate"
             return _reject("no_category_gate")
-        candidate["classification"] = gate_info.get("primary_category", "")
+        candidate["classification"] = primary_category
 
         if candidate.get("source_quality") == "C" and not _contains_any_term(text, URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS):
             return _reject("C級來源且主題關聯不足")
@@ -2366,9 +2373,28 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _core_systems_for_candidate(candidate: dict) -> list[str]:
-        text = _candidate_selection_text(candidate)
-        taxonomy = classify_candidate_electromechanical(candidate)
-        systems = list(taxonomy["systems"])
+        if candidate.get("authoritative_materialization_stage") and "core_systems" in candidate:
+            systems = list(candidate.get("core_systems") or [])
+            taxonomy = {
+                "systems": systems,
+                "winning_evidence": candidate.get("electromechanical_winning_evidence", []),
+                "rejected_evidence": candidate.get("electromechanical_rejected_evidence", []),
+                "classification_reason": candidate.get("electromechanical_classification_reason", ""),
+            }
+        else:
+            taxonomy = classify_candidate_electromechanical(candidate)
+        # Formal inference belongs to electromechanical_taxonomy.  The selector
+        # only consumes an upstream materialized list when it is present; the
+        # taxonomy call remains a compatibility/provisional path for low-level
+        # callers that have not crossed the workflow boundary yet.
+        # An explicitly materialized empty list is authoritative (for example
+        # a generic package or non-E&M article).  Only provisional callers
+        # without the field may ask the shared taxonomy to infer systems.
+        systems = (
+            list(candidate.get("core_systems") or [])
+            if candidate.get("authoritative_materialization_stage") and "core_systems" in candidate
+            else list(taxonomy["systems"])
+        )
         candidate["electromechanical_classification"] = list(systems)
         candidate["electromechanical_winning_evidence"] = list(
             taxonomy["winning_evidence"]
@@ -2379,62 +2405,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         candidate["electromechanical_classification_reason"] = str(
             taxonomy["classification_reason"]
         )
-        rolling_stock_specific_terms = (
-            "vehicle equipment", "car door", "train door", "bogie", "wheelset", "coupler",
-            "propulsion", "traction inverter", "traction inverters", "traction motor",
-            "braking system", "brake system", "tcms", "車門", "轉向架", "輪對", "聯結器",
-            "牽引變流器", "牽引馬達", "煞車", "制動", "車載",
-        )
-        has_depot_facility = _contains_positive_term(text, list(DEPOT_FACILITY_TERMS))
-        has_specific_vehicle_evidence = _contains_positive_term(text, list(rolling_stock_specific_terms))
-        explicit_rolling_stock_terms = (
-            *rolling_stock_specific_terms,
-            "rolling stock", "vehicle fleet", "trainset", "trainsets",
-            "light rail vehicle", "light rail vehicles", "車輛系統", "車輛設備", "電聯車",
-        )
-        generic_package_without_vehicle_detail = (
-            _contains_any_term(text, ELECTROMECHANICAL_GENERIC_SCOPE_TERMS)
-            and not _contains_any_term(text, list(explicit_rolling_stock_terms))
-        )
-        text_lower = text.casefold()
-        has_vehicle_event = bool(
-            re.search(
-                r"\b(?:new|order(?:s|ed)?|procure(?:d|ment)?|purchase(?:d)?|deliver(?:y|ed)?|"
-                r"introduc(?:e|ed|tion)|deploy(?:ed|ment)?|upgrade(?:d)?|moderni[sz](?:e|ed|ation)|"
-                r"performance|maintenan(?:ce|t)|overhaul)\b.{0,50}\b(?:rolling stock|vehicle fleet|"
-                r"metro trains?|trainset|trainsets|trains?|列車|車輛)\b",
-                text_lower,
-            )
-            or re.search(
-                r"\b(?:rolling stock|vehicle fleet|metro trains?|trainset|trainsets|列車|車輛)\b.{0,50}\b(?:"
-                r"maintenan(?:ce|t)|overhaul|performance|upgrade(?:d)?|moderni[sz](?:e|ed|ation))\b",
-                text_lower,
-            )
-            or (
-                _contains_any_term(text, ["rolling stock", "vehicle fleet", "trainset", "trainsets"])
-                and _contains_any_term(text, list(ROLLING_STOCK_EVENT_TERMS))
-            )
-        )
-        if (
-            not generic_package_without_vehicle_detail
-            and (
-            (has_specific_vehicle_evidence or has_vehicle_event)
-            and "電聯車" not in systems
-            and (not has_depot_facility or has_specific_vehicle_evidence)
-            )
-        ):
-            systems.append("電聯車")
-        if generic_package_without_vehicle_detail:
-            systems = [system for system in systems if system != "電聯車"]
-        if (
-            "號誌" in systems
-            and "電聯車" in systems
-            and not _contains_any_term(text, list(rolling_stock_specific_terms))
-        ):
-            systems.remove("電聯車")
         candidate["electromechanical_classification"] = list(systems)
-        if systems and candidate["electromechanical_classification_reason"] == "insufficient_electromechanical_evidence":
-            candidate["electromechanical_classification_reason"] = "technical_event_evidence"
         return systems
 
 
@@ -4228,11 +4199,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def infer_preliminary_type(candidate: dict) -> str:
-        text = _candidate_selection_text(candidate)
-        if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True):
-            return "規範更新"
-        gate_info = evaluate_category_gates(candidate)
-        return gate_info.get("primary_category", "excluded")
+        # Compatibility accessor only.  Formal category inference belongs to
+        # the upstream materializer and A4 conflict resolver.
+        primary = str(candidate.get("primary_category") or "").strip()
+        return primary if primary in BACKEND_CATEGORY_TYPES else "excluded"
 
 
     def build_candidate_flags(candidate: dict) -> list[str]:
@@ -4331,7 +4301,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _compute_innovation_score(candidate: dict) -> dict:
-        gate_info = evaluate_category_gates(candidate)
+        gate_info = (
+            dict(candidate)
+            if candidate.get("authoritative_materialization_stage")
+            else evaluate_category_gates(candidate)
+        )
         is_forward_candidate = candidate.get("search_family") == "forward_technology"
         passes_forward_gate = bool(
             is_forward_candidate and _passes_forward_technology_gate(candidate)
@@ -4444,7 +4418,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def score_news_candidate(candidate: dict) -> dict:
         text = _candidate_selection_text(candidate)
-        gate_info = evaluate_category_gates(candidate)
+        gate_info = (
+            dict(candidate)
+            if candidate.get("authoritative_materialization_stage")
+            else evaluate_category_gates(candidate)
+        )
         primary_category = gate_info.get("primary_category", "excluded")
         score = 50
         reasons: list[str] = []
@@ -4581,7 +4559,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if primary_category == "excluded":
             score = min(score, 35)
             reasons.append("未通過類別 gate，分數上限 35")
-        preliminary_type = "規範更新" if _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True) else primary_category
+        preliminary_type = primary_category
         quality_score = max(0, min(100, score))
         innovation_payload = _compute_innovation_score(candidate)
         if innovation_payload["innovation_score"]:
@@ -4688,15 +4666,23 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         enriched["search_language"] = enriched.get("search_language") or _search_language_from_query(enriched.get("query", ""))
         enriched["source_domain_normalized"] = enriched.get("source_domain_normalized") or _normalize_source_domain(enriched.get("source_domain", ""))
         region_started = time.perf_counter()
-        enriched["resolved_region"] = _canonical_candidate_region(enriched)
-        enriched["country"] = normalize_country(enriched["resolved_region"])
-        enriched["core_systems"] = _core_systems_for_candidate(enriched)
+        if not enriched.get("authoritative_materialization_stage") and "resolved_region" not in enriched:
+            _canonical_candidate_region(enriched)
+        enriched["resolved_region"] = enriched.get("resolved_region", enriched.get("region", "未判定"))
+        enriched["country"] = enriched.get("country") or normalize_country(enriched["resolved_region"])
+        if "core_systems" not in enriched:
+            enriched["core_systems"] = _core_systems_for_candidate(enriched)
+        else:
+            enriched["core_systems"] = list(enriched.get("core_systems") or [])
         enriched["technical_themes"] = _technical_themes_for_candidate(enriched)
+        # Selection-only diversity metadata; never used as a formal category
+        # or evidence fallback.
+        enriched["selection_theme"] = enriched.get("selection_theme") or (
+            enriched["technical_themes"][0] if enriched["technical_themes"] else "未分類"
+        )
         enriched.update(_candidate_quality_kpis(enriched))
         _profile_timing_add(profile_timings, "region_resolution", time.perf_counter() - region_started)
-        fingerprint_started = time.perf_counter()
-        enriched["event_fingerprint"] = build_event_fingerprint(enriched)
-        _profile_timing_add(profile_timings, "event_fingerprint", time.perf_counter() - fingerprint_started)
+        enriched["event_fingerprint"] = dict(enriched.get("event_fingerprint") or {})
         enriched["duplicate_of"] = enriched.get("duplicate_of", "")
         enriched["selection_stage"] = enriched.get("selection_stage", "excluded" if exclude_reason else "candidate_pool")
         return enriched
@@ -4725,15 +4711,21 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 "country",
                 normalize_country(candidate.get("resolved_region") or candidate.get("region", "未判定")),
             ),
-            "core_systems": _core_systems_for_candidate(candidate),
+            "core_systems": list(candidate.get("core_systems") or []),
             "electromechanical_classification": candidate.get("electromechanical_classification", []),
             "electromechanical_winning_evidence": candidate.get("electromechanical_winning_evidence", [])[:16],
             "electromechanical_rejected_evidence": candidate.get("electromechanical_rejected_evidence", [])[:12],
             "electromechanical_classification_reason": candidate.get("electromechanical_classification_reason", ""),
             "technical_themes": candidate.get("technical_themes", _technical_themes_for_candidate(candidate)),
+            "selection_theme": candidate.get("selection_theme", "未分類"),
             "page_type": candidate.get("page_type", ""),
             "page_type_reason": candidate.get("page_type_reason", ""),
             "date_validation": candidate.get("date_validation", ""),
+            "selector_contract_status": candidate.get("selector_contract_status", ""),
+            "selector_contract_failures": candidate.get("selector_contract_failures", []),
+            "recent_window_valid": candidate.get("recent_window_valid", False),
+            "verified_bucket": candidate.get("verified_bucket", ""),
+            "date_verification_status": candidate.get("date_verification_status", ""),
             "urban_rail_gate": candidate.get("urban_rail_gate", ""),
             "canonical_tags": candidate.get("canonical_tags", []),
             "category_gates": candidate.get("category_gates", {}),
@@ -4747,7 +4739,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "accident_severity_score": candidate.get("accident_severity_score", 0),
             "technical_triplet_status": candidate.get("technical_triplet_status", ""),
             "candidate_level": candidate.get("candidate_level", ""),
-            "preliminary_type": candidate.get("preliminary_type", infer_preliminary_type(candidate)),
+            "preliminary_type": candidate.get("preliminary_type") or candidate.get("primary_category", ""),
             "short_snippet": candidate.get("short_snippet", _shorten(candidate.get("snippet", ""), CANDIDATE_SNIPPET_CHARS)),
             "url": source_url,
             "python_score": candidate.get("python_score", 0),
@@ -4842,8 +4834,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
     def rebalance_selected_candidates(selected: list[dict], annual_pool: list[dict] | None = None) -> list[dict]:
         if lookback_int == 365:
             def _quarter_key(candidate: dict) -> str:
-                date_obj = _candidate_date_obj(candidate.get("date", ""))
-                return f"{date_obj.year:04d}-Q{((date_obj.month - 1) // 3) + 1}" if date_obj else ""
+                return str(candidate.get("verified_bucket", "") or "").strip()
 
             def _is_recent(candidate: dict) -> bool:
                 date_obj = _candidate_date_obj(candidate.get("date", ""))
@@ -4950,12 +4941,6 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         primary_category = candidate.get("primary_category")
         if primary_category in BACKEND_CATEGORY_TYPES:
             return primary_category
-        inferred_type = infer_preliminary_type(candidate)
-        if inferred_type in BACKEND_CATEGORY_TYPES:
-            return inferred_type
-        preliminary_type = candidate.get("preliminary_type")
-        if preliminary_type in BACKEND_CATEGORY_TYPES:
-            return preliminary_type
         return "excluded"
 
 
@@ -5002,7 +4987,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         for label, terms in theme_terms:
             if _contains_any_term(text, terms):
                 return label
-        return candidate.get("classification") or candidate.get("preliminary_type") or "未分類"
+        return candidate.get("selection_theme") or "未分類"
 
 
     def _candidate_operator_key(candidate: dict) -> str:
@@ -5098,7 +5083,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def _canonical_event_geo(candidate: dict) -> str:
         specific = _candidate_specific_event_location(candidate)
-        region = _canonical_candidate_region(candidate)
+        region = str(candidate.get("resolved_region") or candidate.get("region") or "未判定")
         country_keys = {
             "美國": "united-states", "加拿大": "canada", "德國": "germany", "英國": "united-kingdom",
             "法國": "france", "義大利": "italy", "新加坡": "singapore", "日本": "japan",
@@ -5124,17 +5109,63 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def build_event_fingerprint(candidate: dict) -> dict:
-        # Preserve the selector's established geography normalization side effect
-        # before delegating identity construction to the shared A5 owner.
-        _canonical_candidate_region(candidate)
-        annotate_event_identity(candidate)
+        # Identity is materialized upstream.  This compatibility accessor must
+        # never recompute or overwrite an authoritative canonical_event_id.
         return dict(candidate.get("event_fingerprint") or {})
 
 
     def _compare_report_event(candidate: dict, selected_item: dict) -> dict:
-        build_event_fingerprint(candidate)
-        build_event_fingerprint(selected_item)
-        return compare_event_candidates(candidate, selected_item)
+        left_id = str(candidate.get("canonical_event_id") or "").strip()
+        right_id = str(selected_item.get("canonical_event_id") or "").strip()
+        left_url = canonical_article_key(candidate)
+        right_url = canonical_article_key(selected_item)
+        conflicts: list[dict] = []
+        if left_url and right_url and left_url == right_url and left_id != right_id:
+            conflicts.append({
+                "component": "canonical_event_id",
+                "left": left_id,
+                "right": right_id,
+                "reason": "same_canonical_url_different_event_id",
+            })
+        if not left_id or not right_id:
+            return {
+                "same_event": False,
+                "article_duplicate": False,
+                "duplicate_type": "",
+                "left_event_id": left_id,
+                "right_event_id": right_id,
+                "matched_fields": [],
+                "same_event_reason": "missing canonical_event_id; selector merge disabled",
+                "conflicting_evidence": conflicts,
+                "upstream_contract_violation": bool(conflicts),
+            }
+        same_event = left_id == right_id
+        article_duplicate = same_event and bool(left_url and right_url and left_url == right_url)
+        return {
+            "same_event": same_event,
+            "article_duplicate": article_duplicate,
+            "duplicate_type": "ARTICLE_DUPLICATE" if article_duplicate else "EVENT_DUPLICATE" if same_event else "",
+            "left_event_id": left_id,
+            "right_event_id": right_id,
+            "matched_fields": ["canonical_event_id"] if same_event else [],
+            "same_event_reason": (
+                "authoritative canonical_event_id matched"
+                if same_event
+                else "different authoritative canonical_event_id; selector merge disabled"
+            ),
+            "conflicting_evidence": conflicts,
+            "upstream_contract_violation": bool(conflicts),
+        }
+
+
+    def _mark_selector_duplicate(candidate: dict, matched: dict, comparison: dict) -> None:
+        """Attach merge diagnostics without mutating authoritative identity."""
+        candidate["duplicate_type"] = comparison.get("duplicate_type", "")
+        candidate["matched_event_id"] = str(matched.get("canonical_event_id") or "")
+        candidate["same_event_reason"] = str(comparison.get("same_event_reason", ""))[:240]
+        candidate["conflicting_evidence"] = list(comparison.get("conflicting_evidence", []))[:8]
+        if comparison.get("upstream_contract_violation"):
+            candidate["upstream_contract_violation"] = True
 
 
     def _candidate_specific_event_location(candidate: dict) -> str:
@@ -5332,9 +5363,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _python_candidate_allowed_for_scope(candidate: dict) -> bool:
+        if "scope_eligible" in candidate and not candidate.get("_selector_materialization_phase"):
+            return bool(candidate.get("scope_eligible"))
         if is_global_scope:
             return True
-        region = _canonical_candidate_region(candidate)
+        region = str(candidate.get("resolved_region") or candidate.get("region") or "未判定").strip()
         if candidate.get("region_resolution_method") in {"query_region_fallback", "query_text_fallback"}:
             candidate["scope_validation_failure"] = "event_region_not_explicitly_resolved"
             return False
@@ -5343,12 +5376,13 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         text = f"{candidate.get('title', '')} {candidate.get('snippet', '')} {candidate.get('source', '')} {candidate.get('url', '')} {candidate.get('source_href', '')}"
         looks_like_standard = candidate.get("classification") == "規範更新" or _is_standard_update_candidate(f"{text} {candidate.get('date', '')}", require_url=True)
         if region in {"國際", "國際研究", "未判定"} and _is_allowed_international_candidate(candidate, text, looks_like_standard):
-            candidate["region"] = "國際"
             return True
         return False
 
 
     def _is_low_value_python_selection_candidate(candidate: dict) -> bool:
+        if "selector_quality_eligible" in candidate and not candidate.get("_selector_materialization_phase"):
+            return not bool(candidate.get("selector_quality_eligible"))
         flags = set(candidate.get("candidate_flags", []) or [])
         score = int(candidate.get("python_score", 0) or 0)
         has_good_signal = _has_good_report_signal(candidate)
@@ -5411,6 +5445,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _is_strict_technical_candidate(candidate: dict) -> bool:
+        if "selector_strict_technical" in candidate and not candidate.get("_selector_materialization_phase"):
+            return bool(candidate.get("selector_strict_technical"))
         return _is_technical_news_selection_candidate(candidate)
 
 
@@ -5483,12 +5519,21 @@ def build_selector_api(**dependencies) -> dict[str, object]:
     def consolidate_event_candidates(candidates: list[dict]) -> tuple[list[dict], dict]:
         consolidated: list[dict] = []
         duplicate_records: list[dict] = []
+        upstream_contract_violations: list[dict] = []
         for candidate in candidates or []:
             build_event_fingerprint(candidate)
             duplicate_of = None
             comparison = None
             for item in consolidated:
                 result = _compare_report_event(candidate, item)
+                if result.get("upstream_contract_violation"):
+                    upstream_contract_violations.append({
+                        "candidate_id": candidate.get("candidate_id", candidate.get("id", "")),
+                        "existing_candidate_id": item.get("candidate_id", item.get("id", "")),
+                        "canonical_event_id": candidate.get("canonical_event_id", ""),
+                        "existing_canonical_event_id": item.get("canonical_event_id", ""),
+                        "reason": "same_canonical_url_different_event_id",
+                    })
                 if result["same_event"]:
                     duplicate_of = item
                     comparison = result
@@ -5502,7 +5547,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 consolidated.append(candidate)
                 continue
             source_replaced = _merge_duplicate_event_sources(duplicate_of, candidate)
-            mark_duplicate(candidate, duplicate_of, comparison or {})
+            _mark_selector_duplicate(candidate, duplicate_of, comparison or {})
             candidate["duplicate_of"] = duplicate_of.get("candidate_id", duplicate_of.get("id", ""))
             candidate["selection_stage"] = "event_consolidated_duplicate"
             duplicate_records.append({
@@ -5525,6 +5570,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "output_count": len(consolidated),
             "duplicate_count": len(duplicate_records),
             "duplicate_event_records": duplicate_records,
+            "upstream_contract_violations": upstream_contract_violations,
         }
 
 
@@ -5542,7 +5588,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                     break
             if duplicate_of:
                 source_replaced = _merge_duplicate_event_sources(duplicate_of, candidate)
-                mark_duplicate(candidate, duplicate_of, comparison or {})
+                _mark_selector_duplicate(candidate, duplicate_of, comparison or {})
                 candidate["duplicate_of"] = duplicate_of.get("id", "")
                 candidate["selection_stage"] = "duplicate_suppressed"
                 try:
@@ -5578,6 +5624,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _is_hard_excluded_for_borderline(candidate: dict) -> bool:
+        if "selector_hard_excluded" in candidate and not candidate.get("_selector_materialization_phase"):
+            return bool(candidate.get("selector_hard_excluded"))
         text = _candidate_selection_text(candidate)
         if _is_financial_market_candidate(candidate):
             return True
@@ -5629,6 +5677,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _is_b_level_technical_candidate(candidate: dict) -> bool:
+        if "selector_b_level_technical" in candidate and not candidate.get("_selector_materialization_phase"):
+            return bool(candidate.get("selector_b_level_technical"))
         text = _candidate_selection_text(candidate)
         if candidate.get("classification") != "技術新知":
             return False
@@ -5652,6 +5702,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _is_borderline_report_candidate(candidate: dict) -> tuple[bool, str]:
+        if "selector_borderline_eligible" in candidate and not candidate.get("_selector_materialization_phase"):
+            return bool(candidate.get("selector_borderline_eligible")), str(
+                candidate.get("selector_borderline_reason") or ""
+            )
         classification = candidate.get("classification") or _selection_classification(candidate)
         candidate["classification"] = classification
         if classification not in selected_types:
@@ -5704,6 +5758,39 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return False, "未符合候補條件"
 
 
+    def materialize_selector_quality(candidate: dict) -> dict:
+        """Materialize legacy quality decisions before selector entry.
+
+        The predicates retain their locked semantics, but their outputs become
+        immutable selector inputs.  Selection-time calls only read these fields.
+        """
+        candidate["_selector_materialization_phase"] = True
+        try:
+            candidate["selector_strict_technical"] = bool(_is_strict_technical_candidate(candidate))
+            candidate["selector_hard_excluded"] = bool(_is_hard_excluded_for_borderline(candidate))
+            candidate["selector_b_level_technical"] = bool(_is_b_level_technical_candidate(candidate))
+            borderline, reason = _is_borderline_report_candidate(candidate)
+            candidate["selector_borderline_eligible"] = bool(borderline)
+            candidate["selector_borderline_reason"] = str(reason or "")
+            candidate["selector_quality_eligible"] = not bool(
+                _is_low_value_python_selection_candidate(candidate)
+            )
+            candidate["selector_forward_gate_pass"] = bool(
+                _passes_forward_technology_gate(candidate)
+            ) if candidate.get("search_family") == "forward_technology" else True
+            candidate["selector_technology_gate_pass"] = bool(
+                (candidate.get("category_gates") or {}).get("technology")
+                or candidate.get("selector_strict_technical")
+                or candidate.get("selector_forward_gate_pass")
+            )
+            candidate["selector_operational_coverage"] = bool(
+                _qualifying_operational_coverage_candidate(candidate, [])
+            )
+        finally:
+            candidate.pop("_selector_materialization_phase", None)
+        return candidate
+
+
     def _selection_lower_bound(days: int) -> int:
         lower, _ = _selection_target_range(days)
         return lower
@@ -5731,6 +5818,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _qualifying_operational_coverage_candidate(candidate: dict, selected: list[dict]) -> dict | None:
+        if "selector_operational_coverage" in candidate and not candidate.get("_selector_materialization_phase"):
+            return dict(candidate) if candidate.get("selector_operational_coverage") else None
         candidate = dict(candidate)
         classification = _selection_classification(candidate)
         if classification not in {"營運政策", "營運爭議"} or classification not in selected_types:
@@ -5942,23 +6031,24 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         annual_gate_pass_by_bucket: dict[str, int] = {}
 
         def _selection_annual_bucket(candidate: dict) -> str:
-            explicit = str(candidate.get("date_bucket", "") or "").strip()
-            if explicit:
-                return explicit
-            date_obj = _candidate_date_obj(candidate.get("date", ""))
-            return (
-                f"{date_obj.year:04d}-Q{((date_obj.month - 1) // 3) + 1}"
-                if date_obj else ""
-            )
+            return str(candidate.get("verified_bucket", "") or "").strip()
 
         for item in model_candidates or []:
+            if (
+                not item.get("authoritative_materialization_stage")
+                and "resolved_region" not in item
+                and item.get("region")
+            ):
+                # Compatibility-only normalization for pre-contract direct
+                # callers; workflow candidates already carry resolved_region.
+                item["region"] = normalize_country(str(item.get("region") or ""))
             category = _selection_classification(item)
             category_gates = item.get("category_gates") or {}
             if category == "技術新知":
                 technology_pass = bool(
-                    category_gates.get("technology")
-                    or _passes_technical_triad(item)
-                    or _passes_forward_technology_gate(item)
+                    item.get("selector_technology_gate_pass")
+                    if "selector_technology_gate_pass" in item
+                    else category_gates.get("technology")
                 )
                 if technology_pass:
                     LAST_PYTHON_SELECTION_DEBUG["technology_gate_pass_count"] += 1
@@ -5986,9 +6076,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         forward_gate_pass_ids: list[object] = []
         forward_gate_pass_titles: list[str] = []
         for item in forward_candidates:
-            passes_forward_gate = item.get("passes_forward_technology_gate") is True
-            if not passes_forward_gate:
-                passes_forward_gate = _passes_forward_technology_gate(item)
+            passes_forward_gate = bool(
+                item.get("selector_forward_gate_pass")
+                if "selector_forward_gate_pass" in item
+                else item.get("passes_forward_technology_gate") is True
+            )
             candidate_id = item.get("candidate_id", item.get("id", ""))
             title = str(item.get("title", "") or "")
             if passes_forward_gate:
@@ -6265,6 +6357,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_is_hard_excluded_for_borderline": _is_hard_excluded_for_borderline,
         "_is_b_level_technical_candidate": _is_b_level_technical_candidate,
         "_is_borderline_report_candidate": _is_borderline_report_candidate,
+        "materialize_selector_quality": materialize_selector_quality,
         "_selection_lower_bound": _selection_lower_bound,
         "_borderline_cap": _borderline_cap,
         "_selection_debug_reset": _selection_debug_reset,
