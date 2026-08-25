@@ -422,21 +422,28 @@ def _manufacturer_location_evidence(text: str, field: str) -> list[dict]:
                 manufacturer_context = any(term in context_lower for term in (
                     "factory", "plant", "manufactur", "production site", "assembl",
                 ))
+                test_facility_context = any(term in context_lower for term in (
+                    "testing in", "tested in", "testing at", "tested at",
+                    "test center", "test centre", "validation center",
+                    "validation centre",
+                ))
                 vendor_context = any(term in context_lower for term in (
                     "vendor", "supplier", "headquarter", "head office", "-based", " based",
                 ))
-                if not manufacturer_context and not vendor_context:
+                if not manufacturer_context and not test_facility_context and not vendor_context:
                     continue
                 if region in seen_regions:
                     break
                 seen_regions.add(region)
                 evidence.append(_geography_evidence_record(
-                    "manufacturer_location" if manufacturer_context else "vendor_location",
+                    "manufacturer_location" if manufacturer_context or test_facility_context else "vendor_location",
                     region,
                     field=field,
                     evidence=str(text or "")[context_start:context_end],
                     method=(
-                        "manufacturer_location_context"
+                        "manufacturer_test_location_context"
+                        if test_facility_context
+                        else "manufacturer_location_context"
                         if manufacturer_context
                         else "vendor_location_context"
                     ),
@@ -480,7 +487,9 @@ def _metro_system_ownership_evidence(text: str, field: str) -> list[dict]:
                         term in between or term in alias_context
                         for term in GEOGRAPHY_MANUFACTURER_CONTEXT_TERMS
                     )
-                    if manufacturer_context and distance > 8:
+                    if manufacturer_context and (
+                        distance > 8 or alias_start >= system_end
+                    ):
                         continue
                     candidate_match = (distance, alias_start, system_start, system_end)
                     if location_match is None or candidate_match < location_match:

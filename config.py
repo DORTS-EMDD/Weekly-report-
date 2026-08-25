@@ -272,6 +272,17 @@ GEOGRAPHY_EVIDENCE_PRECEDENCE = {
 
 METRO_SYSTEM_OWNERSHIP_RULES = (
     {
+        "region": "澳洲",
+        "location_aliases": (
+            "sydney", "western sydney", "western sydney airport",
+        ),
+        "operator_aliases": ("sydney metro",),
+        "system_terms": (
+            "sydney metro", "metro", "subway", "urban rail", "train",
+            "rolling stock",
+        ),
+    },
+    {
         "region": "德國",
         "location_aliases": ("münchen", "muenchen", "munich", "慕尼黑"),
         "operator_aliases": ("mvg", "stadtwerke münchen", "stadtwerke muenchen", "swm"),
@@ -279,7 +290,7 @@ METRO_SYSTEM_OWNERSHIP_RULES = (
     },
     {
         "region": "奧地利",
-        "location_aliases": ("wien", "vienna", "奧地利", "austria"),
+        "location_aliases": ("wien", "vienna", "奧地利", "austria", "austrian"),
         "operator_aliases": ("wiener linien",),
         "system_terms": ("u-bahn", "metro", "subway", "urban rail", "tram", "train", "rolling stock"),
     },
@@ -300,6 +311,8 @@ METRO_SYSTEM_OWNERSHIP_RULES = (
 GEOGRAPHY_MANUFACTURER_CONTEXT_TERMS = (
     "factory", "plant", "manufactur", "production site", "assembl",
     "vendor", "supplier", "headquarter", "head office", "-based", " based",
+    "testing in", "tested in", "testing at", "tested at", "test center",
+    "test centre", "validation center", "validation centre",
 )
 
 REGION_DOMAIN_HINTS = {
