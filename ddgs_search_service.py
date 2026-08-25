@@ -51,6 +51,7 @@ from search_queries import (
     REGION_QUERY_LANGUAGES,
     SEARCH_LANGUAGE_MARKERS,
     SEARCH_QUERY_SPECS,
+    selected_query_families,
     SERVICE_OPENING_QUERY_SPECS,
 )
 from search_service import (
@@ -235,17 +236,7 @@ def _active_query_specs(family: str) -> list[dict]:
 
 
 def _selected_query_families(*, context: DdgsSearchContext) -> list[str]:
-    families: list[str] = []
-    for type_index, family in QUERY_FAMILY_BY_TYPE_INDEX.items():
-        if type_index < len(ADVANCED_TYPES) and ADVANCED_TYPES[type_index] in context.selected_types:
-            families.append(family)
-    if "major_accident" in families:
-        families.append("official_investigation")
-    if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in context.selected_types:
-        families.append(ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY)
-    if SERVICE_OPENING_CATEGORY_KEY in context.selected_types:
-        families.append(SERVICE_OPENING_CATEGORY_KEY)
-    return families
+    return selected_query_families(context.selected_types)
 
 
 def _query_metadata_for(query: str, *, context: DdgsSearchContext) -> dict:
@@ -298,23 +289,17 @@ def _standard_search_queries():
             yield f'"{standard}" revision amendment published draft metro rail standard'
 
 
-def _annual_quarter_windows(context: DdgsSearchContext) -> list[tuple[str, datetime.date, datetime.date]]:
-    start = context.today - datetime.timedelta(days=int(context.lookback_int))
-    end = context.today + datetime.timedelta(days=1)
-    cursor = datetime.date(start.year, ((start.month - 1) // 3) * 3 + 1, 1)
-    windows: list[tuple[str, datetime.date, datetime.date]] = []
-    while cursor < end:
-        if cursor.month == 10:
-            next_cursor = datetime.date(cursor.year + 1, 1, 1)
-        else:
-            next_cursor = datetime.date(cursor.year, cursor.month + 3, 1)
-        bucket = f"{cursor.year:04d}-Q{((cursor.month - 1) // 3) + 1}"
-        bucket_start = max(start, cursor)
-        bucket_end = min(end, next_cursor)
-        if bucket_start < bucket_end:
-            windows.append((bucket, bucket_start, bucket_end))
-        cursor = next_cursor
-    return windows
+def _annual_quarter_windows(context: DdgsSearchContext):
+    """Compatibility shim; bucket ownership lives in temporal_retrieval_service."""
+    from temporal_retrieval_service import build_calendar_quarter_buckets
+
+    return [
+        (bucket.label, bucket.start, bucket.end_exclusive)
+        for bucket in build_calendar_quarter_buckets(
+            context.today - datetime.timedelta(days=int(context.lookback_int)),
+            context.today + datetime.timedelta(days=1),
+        )
+    ]
 
 
 def build_search_queries(
@@ -370,6 +355,13 @@ def build_search_queries(
             context.query_metadata[final_query]["date_bucket"] = date_bucket
         if annual_bucket_families:
             context.query_metadata[final_query]["annual_bucket_families"] = list(annual_bucket_families)
+        if retrieval_lane == "ddgs_annual_discovery":
+            context.query_metadata[final_query].update({
+                "requested_bucket": date_bucket,
+                "verified_bucket": "",
+                "date_verification_status": "unverified",
+                "annual_bucket_coverage_credit": False,
+            })
         if use_news:
             news_indices.add(len(queries))
         return True
@@ -416,7 +408,11 @@ def build_search_queries(
     context.forward_technology_query_count = 0
     context.forward_technology_fallback_query_count = 0
 
-    annual_bucket_queries = []
+    # DDGS may retain bounded annual discovery queries for compatibility, but
+    # temporal_retrieval_service owns bucket verification.  The legacy
+    # requested-bucket fields below are planning metadata only; they are never
+    # copied into status coverage or canonical candidate date_bucket fields.
+    annual_bucket_queries: list[tuple[str, str]] = []
     annual_family_specs: list[tuple[str, dict]] = []
     if context.lookback_int >= 365 and context.news_scope != "domestic":
         annual_bucket_families = ["technology"]
@@ -438,11 +434,13 @@ def build_search_queries(
         )
         if context.active_regions:
             bucket_prefix = f"{REGION_SEARCH_TERMS.get(context.active_regions[0], context.active_regions[0])} {bucket_prefix}"
-        for bucket, bucket_start, bucket_end in _annual_quarter_windows(context):
-            annual_bucket_queries.append((
+        annual_bucket_queries = [
+            (
                 f"{bucket_prefix} after:{bucket_start.isoformat()} before:{bucket_end.isoformat()}",
                 bucket,
-            ))
+            )
+            for bucket, bucket_start, bucket_end in _annual_quarter_windows(context)
+        ]
 
     if context.news_scope in {"domestic", "both"}:
         selected_type_set = set(context.selected_types)
@@ -559,6 +557,7 @@ def build_search_queries(
                     query_region="global",
                     date_bucket="annual",
                     annual_bucket_families=[family],
+                    retrieval_lane="ddgs_annual_discovery",
                 )
             for query, bucket in annual_bucket_queries:
                 _add(
@@ -569,6 +568,7 @@ def build_search_queries(
                     query_region="global",
                     date_bucket=bucket,
                     annual_bucket_families=annual_bucket_families,
+                    retrieval_lane="ddgs_annual_discovery",
                 )
         else:
             forward_reserve = len(forward_specs) + len(forward_fallback_specs)
@@ -645,6 +645,7 @@ def build_search_queries(
                     query_region=preferred_region,
                     date_bucket="annual",
                     annual_bucket_families=[family],
+                    retrieval_lane="ddgs_annual_discovery",
                 )
         max_per_country = min(8, max(2, len(content_families)))
         allocations = {region: min(2, country_budget // max(1, len(regions))) for region in regions}
@@ -688,6 +689,7 @@ def build_search_queries(
                     query_region=regions[0],
                     date_bucket=bucket,
                     annual_bucket_families=annual_bucket_families,
+                    retrieval_lane="ddgs_annual_discovery",
                 )
         forward_region = regions[0] if len(regions) == 1 else "selected_regions"
         forward_prefix = (
@@ -769,6 +771,7 @@ def _ddgs_query_status_template(
     context: DdgsSearchContext,
 ) -> dict:
     metadata = _query_metadata_for(query, context=context) or {}
+    is_annual_discovery = metadata.get("retrieval_lane") == "ddgs_annual_discovery"
     family = metadata.get("family", "general")
     language = metadata.get("lang", "en")
     requested = int(metadata.get("requested_max_results", DDGS_RESULTS_PER_QUERY) or DDGS_RESULTS_PER_QUERY)
@@ -791,8 +794,8 @@ def _ddgs_query_status_template(
         "error_message": "",
         "elapsed_seconds": 0.0,
         "planned_index": int(metadata.get("planned_index", 0) or 0),
-        "date_bucket": metadata.get("date_bucket", ""),
-        "annual_bucket_families": list(metadata.get("annual_bucket_families", ()) or ()),
+        "date_bucket": "" if is_annual_discovery else metadata.get("date_bucket", ""),
+        "annual_bucket_families": [] if is_annual_discovery else list(metadata.get("annual_bucket_families", ()) or ()),
         "fallback_layer": metadata.get("fallback_layer", ""),
         "retrieval_lane": metadata.get("retrieval_lane", ""),
         "forward_subtopic": metadata.get("forward_subtopic", ""),
@@ -1056,7 +1059,8 @@ def _run_single_query(
     fetched_at = context.now_provider().isoformat()
     status_row = _ddgs_query_status_template(query, news_timelimit, context=context)
     metadata = _query_metadata_for(query, context=context) or {}
-    if metadata.get("date_bucket"):
+    is_annual_discovery = metadata.get("retrieval_lane") == "ddgs_annual_discovery"
+    if metadata.get("date_bucket") and not is_annual_discovery:
         status_row["date_bucket"] = metadata["date_bucket"]
     context.sleep(context.random_uniform(0.1, 0.4))
     result_items: list[dict] = []

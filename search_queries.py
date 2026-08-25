@@ -2,8 +2,33 @@
 
 from config import *
 import urllib.parse
+from dataclasses import dataclass
 from urllib.parse import urlparse
 from search_service import google_news_search_url, google_news_site_proxy_url
+
+
+@dataclass(frozen=True)
+class QuerySpec:
+    """Provider-neutral query metadata owned by the search template module."""
+
+    template_id: str
+    family: str
+    query: str
+    lang: str = "en"
+    use_news: bool = True
+    topic: str = ""
+    retrieval_lane: str = ""
+
+    def as_dict(self) -> dict:
+        return {
+            "template_id": self.template_id,
+            "family": self.family,
+            "query": self.query,
+            "lang": self.lang,
+            "use_news": self.use_news,
+            "topic": self.topic,
+            "retrieval_lane": self.retrieval_lane,
+        }
 
 # Complete DDGS query families and language metadata (moved verbatim).
 SEARCH_QUERY_SPECS = [
@@ -238,6 +263,66 @@ ANNUAL_TECHNOLOGY_BREAKTHROUGH_QUERY_SPECS = [
     {"family": "technology", "lang": "en", "query": "metro subway MRT light rail SiC semiconductor traction energy storage battery technology"},
     {"family": "technology", "lang": "en", "query": "metro subway MRT light rail breakthrough novel sensor advanced signalling"},
 ]
+
+
+def selected_query_families(selected_types: list[str] | tuple[str, ...]) -> list[str]:
+    """Return active DDGS families without duplicating taxonomy in temporal routing."""
+    selected = set(selected_types or ())
+    families: list[str] = []
+    for type_index, family in QUERY_FAMILY_BY_TYPE_INDEX.items():
+        if type_index < len(ADVANCED_TYPES) and ADVANCED_TYPES[type_index] in selected:
+            families.append(family)
+    if "major_accident" in families:
+        families.append("official_investigation")
+    if ELECTROMECHANICAL_PROCUREMENT_CATEGORY_LABEL in selected:
+        families.append(ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY)
+    if SERVICE_OPENING_CATEGORY_KEY in selected:
+        families.append(SERVICE_OPENING_CATEGORY_KEY)
+    return list(dict.fromkeys(families))
+
+
+def active_query_specs_for_family(family: str) -> list[dict]:
+    """Expose existing active templates to provider-neutral planners."""
+    specs = [spec for spec in SEARCH_QUERY_SPECS if spec.get("family") == family]
+    if family == ELECTROMECHANICAL_PROCUREMENT_CATEGORY_KEY:
+        specs.extend(ELECTROMECHANICAL_PROCUREMENT_QUERY_SPECS)
+    if family == SERVICE_OPENING_CATEGORY_KEY:
+        specs.extend(SERVICE_OPENING_QUERY_SPECS)
+    if family == "forward_technology":
+        specs.extend(FORWARD_TECHNOLOGY_QUERY_SPECS)
+    return specs
+
+
+def build_temporal_query_specs(families: list[str] | tuple[str, ...]) -> list[QuerySpec]:
+    """Select one canonical active template per family for each temporal bucket.
+
+    This only wraps existing templates; it does not add or alter keywords.
+    """
+    result: list[QuerySpec] = []
+    for family in dict.fromkeys(families or ()):
+        active = active_query_specs_for_family(family)
+        if not active:
+            continue
+        preferred_index, preferred = next(
+            (
+                (index, spec)
+                for index, spec in enumerate(active)
+                if spec.get("lang", "en") == "en"
+            ),
+            (0, active[0]),
+        )
+        result.append(
+            QuerySpec(
+                template_id=f"{family}:{preferred_index}",
+                family=str(preferred.get("family", family)),
+                query=str(preferred.get("query", "")),
+                lang=str(preferred.get("lang", "en")),
+                use_news=bool(preferred.get("use_news", True)),
+                topic=str(preferred.get("topic", "")),
+                retrieval_lane=str(preferred.get("retrieval_lane", "")),
+            )
+        )
+    return result
 
 REGION_QUERY_LANGUAGES = {
     "日本": "ja", "韓國": "ko", "香港": "zh", "法國": "fr", "德國": "de",

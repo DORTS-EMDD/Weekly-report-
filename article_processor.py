@@ -1484,6 +1484,45 @@ def _make_news_candidate(
             ),
             "raw_ingest_id": raw_ingest_id,
         })
+        temporal_fields = (
+            "temporal_plan_id",
+            "route_id",
+            "provider",
+            "query_family",
+            "query_template_id",
+            "requested_bucket",
+            "requested_start",
+            "requested_end_exclusive",
+            "verified_bucket",
+            "date_source",
+            "date_verification_status",
+            "normalized_publication_date",
+        )
+        for field_name in temporal_fields:
+            if raw_provenance.get(field_name) not in (None, ""):
+                candidate[field_name] = raw_provenance[field_name]
+        if raw_provenance.get("query_family"):
+            candidate["search_family"] = str(raw_provenance["query_family"])
+        if raw_provenance.get("query"):
+            candidate["search_query"] = _clean_text(raw_provenance["query"])
+        if raw_provenance.get("verified_bucket"):
+            candidate["date_bucket"] = raw_provenance["verified_bucket"]
+        route_provenance = list(raw_provenance.get("retrieval_provenance") or [])
+        if route_provenance:
+            bounded_routes = [
+                dict(row)
+                for row in route_provenance[:10]
+                if isinstance(row, dict)
+            ]
+            candidate["retrieval_provenance"] = bounded_routes
+            route_ids = [
+                str(row.get("route_id") or "")
+                for row in bounded_routes
+                if row.get("route_id")
+            ]
+            if route_ids:
+                candidate["retrieval_lane"] = route_ids[0]
+                candidate["retrieval_lanes"] = list(dict.fromkeys(route_ids))
     proxy_url = next(
         (
             value.strip()
@@ -1500,8 +1539,8 @@ def _make_news_candidate(
         candidate["query_selected_regions"] = list(query_metadata["selected_regions"])
     if query_metadata.get("region_group"):
         candidate["query_region_group"] = list(query_metadata["region_group"])
-    if query_metadata.get("date_bucket"):
-        candidate["date_bucket"] = query_metadata["date_bucket"]
+    # Provider query metadata is not publication-date verification.  Only a
+    # verified bucket carried by raw provenance may become canonical date_bucket.
     if query_metadata.get("annual_bucket_families"):
         candidate["annual_bucket_families"] = list(query_metadata["annual_bucket_families"])
     if query_metadata.get("topic"):

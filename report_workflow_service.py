@@ -49,6 +49,12 @@ from ddgs_search_service import (
     build_search_queries,
     run_duckduckgo_searches,
 )
+from temporal_retrieval_service import (
+    MODE_BUCKETED_ABSOLUTE,
+    TemporalRetrievalRouter,
+    temporal_request_for_workflow,
+    verify_route_metadata,
+)
 from maiagent_service import (
     build_report_retry_prompt,
     ensure_selected_candidate_ids,
@@ -251,6 +257,9 @@ class WorkflowRuntime:
         self.config = config
         self.dependencies = dependencies
         self.query_metadata: dict[str, dict] = dependencies.query_metadata or {}
+        self.temporal_router = TemporalRetrievalRouter()
+        self.temporal_plan = None
+        self.temporal_route_metadata_by_url: dict[str, dict] = {}
         self.selector_api = build_selector_api(
             selected_types=config.selected_types,
             active_regions=config.active_regions,
@@ -322,6 +331,36 @@ class WorkflowRuntime:
             lambda **kwargs: self._make_candidate(**kwargs),
         )
 
+    def _temporal_verify_result(
+        self,
+        route_metadata: dict,
+        raw_publication_value: object,
+        date_source: str,
+    ) -> dict:
+        verification = verify_route_metadata(
+            route_metadata,
+            raw_publication_value,
+            date_source=date_source,
+        )
+        if self.temporal_plan is not None:
+            route_id = str(route_metadata.get("route_id") or "")
+            if route_id:
+                self.temporal_plan.record(route_id, "retrieved")
+                self.temporal_plan.record(route_id, verification.status)
+        return {
+            "status": verification.status,
+            "normalized_publication_date": verification.normalized_publication_date,
+            "date_source": verification.date_source,
+            "verified_bucket": verification.verified_bucket,
+        }
+
+    def _temporal_event(self, route_metadata: dict, status: str) -> None:
+        if self.temporal_plan is None:
+            return
+        route_id = str(route_metadata.get("route_id") or "")
+        if route_id:
+            self.temporal_plan.record(route_id, status)
+
     def _rss_context(self) -> RssFeedContext:
         selector = self.selector_api
         return RssFeedContext(
@@ -351,6 +390,9 @@ class WorkflowRuntime:
             domain_from_url=_domain_from_url,
             status_callback=self.dependencies.status_callback,
             news_scope=self.config.news_scope,
+            temporal_route_metadata_by_url=self.temporal_route_metadata_by_url,
+            temporal_result_verifier=self._temporal_verify_result,
+            temporal_event_callback=self._temporal_event,
         )
 
     def _fallback_google_news_url(self, source_url: str) -> str | None:
@@ -410,7 +452,7 @@ class WorkflowRuntime:
             if self.config.standards_enabled
             else []
         )
-        return build_run_news_sources(
+        sources, skipped = build_run_news_sources(
             region_sources,
             standards_sources,
             self.config.fast_mode_enabled,
@@ -420,6 +462,22 @@ class WorkflowRuntime:
             standards_enabled=self.config.standards_enabled,
             return_skipped=True,
         )
+        request = temporal_request_for_workflow(
+            report_date=self.config.today,
+            lookback_days=self.config.lookback_days,
+            selected_types=self.config.selected_types,
+            active_regions=self.config.active_regions,
+            include_forward_technology="技術新知" in self.config.selected_types,
+        )
+        self.temporal_plan = self.temporal_router.build_plan(request)
+        self.temporal_route_metadata_by_url = {}
+        if self.temporal_plan.mode == MODE_BUCKETED_ABSOLUTE:
+            temporal_sources = []
+            for route in self.temporal_plan.routes:
+                temporal_sources.append((route.source_name, route.url))
+                self.temporal_route_metadata_by_url[route.url] = route.metadata
+            sources.extend(temporal_sources)
+        return sources, skipped
 
     def search(self) -> tuple[str, str, list[dict], list[dict], int]:
         sources, skipped = self.build_sources()
@@ -460,6 +518,15 @@ class WorkflowRuntime:
             ddgs_statuses,
             len(queries),
         )
+
+    def _record_temporal_candidate_stage(self, candidate: dict, field: str) -> None:
+        if self.temporal_plan is None or self.temporal_plan.mode != MODE_BUCKETED_ABSOLUTE:
+            return
+        route_ids = list(candidate.get("retrieval_lanes") or [])
+        if not route_ids and candidate.get("route_id"):
+            route_ids = [str(candidate.get("route_id"))]
+        for route_id in dict.fromkeys(str(value) for value in route_ids if value):
+            self.temporal_plan.record(route_id, field)
 
     def prepare_candidate_pool(self, raw_rss: str, raw_ddg: str) -> dict:
         pool_started = time.perf_counter()
@@ -560,9 +627,12 @@ class WorkflowRuntime:
                 candidate.update(refreshed)
             keep, reason = selector["preliminary_filter_candidate"](candidate)
             if keep:
+                if any((candidate.get("category_gates") or {}).values()):
+                    self._record_temporal_candidate_stage(candidate, "gate_pass")
                 candidate["exclude_reason"] = ""
                 candidate["final_exclude_reason"] = ""
                 candidate["selection_stage"] = "candidate_pool"
+                self._record_temporal_candidate_stage(candidate, "selector_input")
                 filtered_candidates.append(candidate)
             else:
                 candidate["exclude_reason"] = reason
@@ -658,6 +728,9 @@ class WorkflowRuntime:
             "final": 0,
         })
         pipeline_debug_stats["event_consolidation_stats"] = event_consolidation_stats
+        pipeline_debug_stats["temporal_retrieval"] = self.temporal_router.diagnostics(
+            self.temporal_plan
+        )
         return {
             "raw_candidates": raw_candidates,
             "deduped_candidates": deduped_candidates,
@@ -675,6 +748,7 @@ class WorkflowRuntime:
             "raw_count": len(raw_candidates),
             "deduped_count": len(deduped_candidates),
             "filtered_count": len(model_candidates),
+            "temporal_diagnostics": self.temporal_router.diagnostics(self.temporal_plan),
         }
 
     def select_candidates(self, model_candidates: list[dict]) -> list[dict]:
@@ -690,6 +764,8 @@ class WorkflowRuntime:
                 "duplicate_event_records": [],
                 "stage": "post_selection",
             }
+            for candidate in selected:
+                self._record_temporal_candidate_stage(candidate, "selected")
             return selected
 
         selected_ids_before = [
@@ -715,6 +791,8 @@ class WorkflowRuntime:
                 for item in selected
             ]
         self.last_selection_event_consolidation_stats = stats
+        for candidate in selected:
+            self._record_temporal_candidate_stage(candidate, "selected")
         return ensure_selected_candidate_ids(selected)
 
     def _prompt_context(self) -> ReportPromptContext:

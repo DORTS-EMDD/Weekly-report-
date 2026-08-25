@@ -2,7 +2,7 @@
 
 import datetime
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from article_processor import RawSearchText, build_raw_ingest_id
@@ -37,6 +37,10 @@ class RssFeedContext:
         lambda: datetime.datetime.now(datetime.timezone.utc)
     )
     news_scope: str = "international"
+    temporal_route_metadata_by_url: dict[str, dict] = field(default_factory=dict)
+    temporal_result_verifier: Callable[[dict, object, str], dict] | None = None
+    temporal_event_callback: Callable[[dict, str], None] | None = None
+    raw_provenance_by_key: dict[str, dict] = field(default_factory=dict)
 
 
 def _fallback_google_news_url(
@@ -78,6 +82,10 @@ def _items_from_parsed_feed(
     duplicate_count = 0
     topic_filtered_count = 0
 
+    temporal_metadata = (context.temporal_route_metadata_by_url or {}).get(feed_url)
+    effective_fetched_at = fetched_at or context.now_provider().isoformat()
+    if temporal_metadata:
+        temporal_metadata["fetched_at"] = effective_fetched_at
     for provider_record_index, entry in enumerate(getattr(parsed_feed, "entries", [])):
         raw_title = str(entry.get("title") or "")
         raw_url = str(entry.get("link") or "")
@@ -101,8 +109,34 @@ def _items_from_parsed_feed(
         if publisher is not None:
             publisher = str(publisher)[:300]
 
-        if not title or not context.is_recent(pub_str, cutoff):
+        if not title:
             continue
+
+        date_source = (
+            "rss_published"
+            if entry.get("published") is not None
+            else "rss_updated"
+            if entry.get("updated") is not None
+            else "missing"
+        )
+        temporal_result: dict = {}
+        if temporal_metadata and context.temporal_result_verifier:
+            temporal_result = context.temporal_result_verifier(
+                temporal_metadata,
+                raw_publication_value,
+                date_source,
+            ) or {}
+            if temporal_result.get("status") != "verified":
+                continue
+        elif not context.is_recent(pub_str, cutoff):
+            continue
+
+        if temporal_result.get("normalized_publication_date"):
+            normalized_temporal_date = temporal_result["normalized_publication_date"]
+            if hasattr(normalized_temporal_date, "isoformat"):
+                normalized_temporal_date = normalized_temporal_date.isoformat()
+        else:
+            normalized_temporal_date = context.parse_pub_date(pub_str)
 
         candidate_text = f"{title} {desc} {link} {source_href} {pub_str}"
 
@@ -139,6 +173,41 @@ def _items_from_parsed_feed(
         url_key = context.dedupe_url(link)
         if title_key in seen_titles or url_key in seen_urls:
             duplicate_count += 1
+            if temporal_metadata and context.temporal_event_callback:
+                context.temporal_event_callback(temporal_metadata, "dedup")
+            existing_provenance = (
+                (context.raw_provenance_by_key or {}).get(title_key)
+                or (context.raw_provenance_by_key or {}).get(url_key)
+            )
+            if existing_provenance is not None and temporal_metadata:
+                if not existing_provenance.get("verified_bucket"):
+                    existing_provenance.update({
+                        "temporal_plan_id": temporal_metadata.get("temporal_plan_id", ""),
+                        "route_id": temporal_metadata.get("route_id", ""),
+                        "query_family": temporal_metadata.get("query_family", ""),
+                        "query_template_id": temporal_metadata.get("query_template_id", ""),
+                        "query": temporal_metadata.get("query", ""),
+                        "requested_bucket": temporal_metadata.get("requested_bucket", ""),
+                        "requested_start": temporal_metadata.get("requested_start", ""),
+                        "requested_end_exclusive": temporal_metadata.get("requested_end_exclusive", ""),
+                        "verified_bucket": temporal_result.get("verified_bucket", ""),
+                        "date_source": temporal_result.get("date_source", date_source),
+                        "date_verification_status": temporal_result.get("status", ""),
+                        "normalized_publication_date": temporal_result.get("normalized_publication_date", ""),
+                    })
+                route_row = dict(temporal_metadata)
+                route_row.update({
+                    "retrieval_lane": temporal_metadata.get("route_id", ""),
+                    "query": temporal_metadata.get("query", ""),
+                    "source_domain": "news.google.com",
+                    "verified_bucket": temporal_result.get("verified_bucket", ""),
+                    "date_source": temporal_result.get("date_source", date_source),
+                    "date_verification_status": temporal_result.get("status", ""),
+                })
+                routes = list(existing_provenance.get("retrieval_provenance") or [])
+                if route_row not in routes:
+                    routes.append(route_row)
+                existing_provenance["retrieval_provenance"] = routes[:10]
             continue
         seen_titles.add(title_key)
         seen_urls.add(url_key)
@@ -156,7 +225,7 @@ def _items_from_parsed_feed(
             "raw_title": raw_title,
             "raw_url": raw_url,
             "raw_publication_value": raw_publication_value,
-            "fetched_at": fetched_at,
+            "fetched_at": effective_fetched_at,
             "search_provider": "RSS",
             "publisher": publisher,
             "query": None,
@@ -172,11 +241,41 @@ def _items_from_parsed_feed(
                 provider_record_index=provider_record_index,
             ),
         }
+        if temporal_metadata:
+            raw_provenance.update({
+                "temporal_plan_id": temporal_metadata.get("temporal_plan_id", ""),
+                "route_id": temporal_metadata.get("route_id", ""),
+                "provider": temporal_metadata.get("provider", "Google News RSS"),
+                "query_family": temporal_metadata.get("query_family", ""),
+                "query_template_id": temporal_metadata.get("query_template_id", ""),
+                "query": temporal_metadata.get("query", ""),
+                "requested_bucket": temporal_metadata.get("requested_bucket", ""),
+                "requested_start": temporal_metadata.get("requested_start", ""),
+                "requested_end_exclusive": temporal_metadata.get("requested_end_exclusive", ""),
+                "verified_bucket": temporal_result.get("verified_bucket", ""),
+                "date_source": temporal_result.get("date_source", date_source),
+                "date_verification_status": temporal_result.get("status", ""),
+                "normalized_publication_date": normalized_temporal_date,
+                "retrieval_provenance": [
+                    {
+                        **dict(temporal_metadata),
+                        "retrieval_lane": temporal_metadata.get("route_id", ""),
+                        "query": temporal_metadata.get("query", ""),
+                        "source_domain": "news.google.com",
+                        "verified_bucket": temporal_result.get("verified_bucket", ""),
+                        "date_source": temporal_result.get("date_source", date_source),
+                        "date_verification_status": temporal_result.get("status", ""),
+                    }
+                ],
+            })
+        provenance_key = title_key or url_key
+        if provenance_key:
+            context.raw_provenance_by_key[provenance_key] = raw_provenance
         items.append({
             "title": title,
             "link": link,
             "summary": re.sub(r"<[^>]+>", " ", desc)[:500],
-            "date": context.parse_pub_date(pub_str),
+            "date": normalized_temporal_date,
             "source_href": source_href,
             "_raw_provenance": raw_provenance,
         })
@@ -282,6 +381,8 @@ def fetch_rss_feeds(
         if context.status_callback:
             context.status_callback("正在蒐集國際捷運新聞")
 
+        temporal_metadata = (context.temporal_route_metadata_by_url or {}).get(url)
+
         method = _method_for_url(url, domain_from_url=context.domain_from_url)
         if context.known_bad_source_checker(source_name, url):
             source_statuses.append(_status_record(
@@ -321,11 +422,23 @@ def fetch_rss_feeds(
                 )
                 source_statuses.append(_status_record(source_name, method, "成功", min(len(items_found), MAX_ITEMS_PER_SOURCE)))
             else:
+                if temporal_metadata and context.temporal_event_callback:
+                    context.temporal_event_callback(temporal_metadata, "no_results")
                 status = "非都市軌道" if topic_filtered_count and not (invalid_count or blocked_count) else "被安全規則排除" if blocked_count and not invalid_count else "無文章"
                 message = f"無有效候選；非都市軌道 {topic_filtered_count}、無效連結 {invalid_count}、安全排除 {blocked_count}、重複 {duplicate_count}"
                 all_blocks.append(f"【RSS來源：{source_name}】（{status}）")
                 source_statuses.append(_status_record(source_name, method, status, 0, message))
         except FeedFetchError as exc:
+            # Annual temporal routes are fail-closed.  The existing direct RSS
+            # fallback remains available for continuous discovery only.
+            if temporal_metadata:
+                if context.temporal_event_callback:
+                    context.temporal_event_callback(temporal_metadata, "provider_error")
+                all_blocks.append(f"【RSS來源：{source_name}】（{exc.status}）")
+                source_statuses.append(
+                    _status_record(source_name, method, exc.status, 0, exc.message)
+                )
+                continue
             fallback_url = context.fallback_url_builder(url)
             if fallback_url:
                 try:

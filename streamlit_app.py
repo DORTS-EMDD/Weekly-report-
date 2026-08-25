@@ -1592,8 +1592,8 @@ def _profile_timing_add(timings: dict | None, key: str, elapsed: float) -> None:
         timings[key] = float(timings.get(key, 0.0) or 0.0) + max(0.0, elapsed)
 
 
-def prepare_candidate_pool(raw_rss: str, raw_ddg: str) -> dict:
-    runtime = workflow_service.make_runtime(
+def prepare_candidate_pool(raw_rss: str, raw_ddg: str, runtime=None) -> dict:
+    runtime = runtime or workflow_service.make_runtime(
         _workflow_config(),
         _workflow_dependencies(prefetch_enabled=True),
     )
@@ -2728,37 +2728,40 @@ if generate_btn:
                 "elapsed_seconds_pdf": 0.0,
             }
 
-            # Step 1：RSS 訂閱源 + 指定模式地區代理 + 規範更新代理
-            region_sources = build_region_news_sources(active_regions, int(lookback_days), fast_mode=fast_mode_enabled)
-            standards_sources = build_standards_news_sources(int(lookback_days)) if standards_enabled else []
-            combined_sources, skipped_source_statuses = build_run_news_sources(
-                region_sources,
-                standards_sources,
-                fast_mode_enabled,
-                return_skipped=True,
+            # Step 1：所有 retrieval lanes 由 shared WorkflowRuntime 執行。
+            # Annual temporal routing must not be reimplemented in Streamlit.
+            retrieval_runtime = workflow_service.make_runtime(
+                _workflow_config(),
+                _workflow_dependencies(prefetch_enabled=True),
             )
             status_text.text("正在蒐集國際捷運新聞")
             stage_start = time.perf_counter()
-            rss_results, fetched_source_statuses = fetch_rss_feeds(
-                combined_sources, status_text=status_text, return_status=True
+            (
+                rss_results,
+                ddg_results,
+                source_statuses,
+                ddgs_statuses,
+                search_count,
+            ) = retrieval_runtime.search()
+            LAST_DDGS_QUERY_METADATA = dict(retrieval_runtime.query_metadata)
+            LAST_DDGS_QUERY_STATUSES = list(ddgs_statuses or [])
+            LAST_DDGS_SEARCH_SUMMARY = build_ddgs_search_summary(
+                LAST_DDGS_QUERY_STATUSES,
+                planned_query_count=search_count,
             )
-            source_statuses = skipped_source_statuses + fetched_source_statuses
             source_health_summary = build_source_health_summary(source_statuses)
             timings["elapsed_seconds_rss"] = round(time.perf_counter() - stage_start, 2)
-            progress_bar.progress(0.25)
-            st.session_state["latest_source_statuses"] = source_statuses
-
-            status_text.text("正在蒐集國際捷運新聞")
-            ddg_progress = ProgressRange(progress_bar, 0.25, 0.40)
-            search_count = len(build_search_queries()[0])
-            stage_start = time.perf_counter()
-            ddg_results = run_duckduckgo_searches(ddg_progress, status_text)
-            timings["elapsed_seconds_ddgs"] = round(time.perf_counter() - stage_start, 2)
+            timings["elapsed_seconds_ddgs"] = 0.0
             progress_bar.progress(0.42)
+            st.session_state["latest_source_statuses"] = source_statuses
 
             status_text.text("正在整理候選資料")
             stage_start = time.perf_counter()
-            candidate_pool = prepare_candidate_pool(rss_results, ddg_results)
+            candidate_pool = prepare_candidate_pool(
+                rss_results,
+                ddg_results,
+                runtime=retrieval_runtime,
+            )
             timings["elapsed_seconds_candidate_pool"] = round(time.perf_counter() - stage_start, 2)
             model_candidates = candidate_pool["model_candidates"]
             long_term_coverage = build_long_term_coverage_warning(candidate_pool["filtered_candidates"])
@@ -3276,7 +3279,7 @@ if generate_btn:
                 "category_counts": category_counts,
                 "journal_count": len(journal_candidates),
                 "model_candidate_count": len(selected_candidates),
-                "source_count": len(combined_sources),
+                "source_count": len(source_statuses),
                 "ddgs_query_count": search_count,
                 "ddgs_general_only_query_count": len(ddgs_general_only_queries(LAST_DDGS_QUERY_STATUSES)),
                 "ddgs_search_summary": LAST_DDGS_SEARCH_SUMMARY,
@@ -3454,6 +3457,7 @@ if generate_btn:
                 "journal_summary_conclusion_chars": count_journal_summary_conclusion_chars(clean_report),
                 "selection_debug": LAST_PYTHON_SELECTION_DEBUG,
                 "pipeline_debug_stats": pipeline_debug_stats,
+                "temporal_retrieval": candidate_pool.get("temporal_diagnostics", pipeline_debug_stats.get("temporal_retrieval", {})),
                 "candidate_pool_timings": candidate_pool.get("candidate_pool_timings", {}),
                 "ddgs_query_statuses": LAST_DDGS_QUERY_STATUSES,
                 "ddgs_search_summary": LAST_DDGS_SEARCH_SUMMARY,
