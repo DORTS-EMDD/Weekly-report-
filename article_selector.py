@@ -43,6 +43,11 @@ from electromechanical_taxonomy import (
     classify_candidate_electromechanical,
 )
 from category_conflict_resolver import resolve_primary_category
+from event_identity import (
+    annotate_event_identity,
+    compare_event_candidates,
+    mark_duplicate,
+)
 
 LOW_VALUE_POLICY_TERMS = [
     "holiday service", "weekend service", "weekender", "service advisory",
@@ -4749,6 +4754,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "score_reason": candidate.get("score_reason", ""),
             "candidate_flags": candidate.get("candidate_flags", []),
             "event_fingerprint": candidate.get("event_fingerprint", {}),
+            "canonical_event_id": candidate.get("canonical_event_id", ""),
+            "event_identity_components": candidate.get("event_identity_components", {}),
+            "duplicate_type": candidate.get("duplicate_type", ""),
+            "matched_event_id": candidate.get("matched_event_id", ""),
+            "same_event_reason": candidate.get("same_event_reason", ""),
+            "conflicting_evidence": candidate.get("conflicting_evidence", [])[:8],
             "supplemental_sources": candidate.get("supplemental_sources", []),
             "event_source_merge_count": candidate.get("event_source_merge_count", 0),
             "duplicate_of": candidate.get("duplicate_of", ""),
@@ -5113,27 +5124,17 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def build_event_fingerprint(candidate: dict) -> dict:
-        analysis_cache = _candidate_analysis_cache(candidate)
-        cached = analysis_cache.get("event_fingerprint")
-        if isinstance(cached, dict):
-            return dict(cached)
-        date_obj = _candidate_date_obj(candidate.get("date", ""))
-        date_bucket = ""
-        if date_obj:
-            bucket_start = date_obj - datetime.timedelta(days=date_obj.toordinal() % 7)
-            date_bucket = bucket_start.isoformat()
-        result = {
-            "operator_key": _candidate_operator_key(candidate),
-            "geo_key": _canonical_event_geo(candidate),
-            "asset_key": _candidate_system_theme(candidate),
-            "action_key": _candidate_action_key(candidate),
-            "incident_key": _candidate_incident_type(candidate),
-            "injury_band": _candidate_injury_band(candidate),
-            "category_key": candidate.get("classification") or candidate.get("primary_category") or candidate.get("preliminary_type", ""),
-            "date_bucket": date_bucket,
-        }
-        analysis_cache["event_fingerprint"] = dict(result)
-        return result
+        # Preserve the selector's established geography normalization side effect
+        # before delegating identity construction to the shared A5 owner.
+        _canonical_candidate_region(candidate)
+        annotate_event_identity(candidate)
+        return dict(candidate.get("event_fingerprint") or {})
+
+
+    def _compare_report_event(candidate: dict, selected_item: dict) -> dict:
+        build_event_fingerprint(candidate)
+        build_event_fingerprint(selected_item)
+        return compare_event_candidates(candidate, selected_item)
 
 
     def _candidate_specific_event_location(candidate: dict) -> str:
@@ -5203,11 +5204,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _duplicate_event_reason(candidate: dict, selected_item: dict) -> str:
-        if int(lookback_int) in ADVANCED_LOOKBACK_OPTIONS and _is_project_series_candidate(candidate) and _is_project_series_candidate(selected_item):
-            return "同一城市/地點、相同系統主題與相近專案階段，長期回顧視為同一專案系列。"
-        if candidate.get("classification") == "重大事故":
-            return "同一城市/地點、相近日期與相同事故/安全主題，事件級重複排除。"
-        return "相同城市/地點、相近日期與相同系統主題，事件級重複排除。"
+        return _compare_report_event(candidate, selected_item)["same_event_reason"]
 
 
     def _event_category_preference(candidate: dict) -> tuple[int, str]:
@@ -5229,107 +5226,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _is_same_report_event(candidate: dict, selected_item: dict) -> bool:
-        candidate_fp = build_event_fingerprint(candidate)
-        selected_fp = build_event_fingerprint(selected_item)
-        candidate_operator = candidate_fp.get("operator_key", "")
-        selected_operator = selected_fp.get("operator_key", "")
-        if candidate_operator and selected_operator and candidate_operator != selected_operator:
-            return False
-        candidate_geo = candidate_fp.get("geo_key", "")
-        selected_geo = selected_fp.get("geo_key", "")
-        if candidate_geo and selected_geo and candidate_geo != selected_geo:
-            if candidate_geo.split("/", 1)[0] != selected_geo.split("/", 1)[0]:
-                return False
-        candidate_lines = _dedupe_route_line_tokens(candidate)
-        selected_lines = _dedupe_route_line_tokens(selected_item)
-        is_accident = "重大事故" in {
-            candidate.get("classification"), selected_item.get("classification"),
-            candidate.get("primary_category"), selected_item.get("primary_category"),
-        }
-        if is_accident and _injury_bands_conflict(candidate, selected_item):
-            return False
-        date_close = _event_date_close(candidate, selected_item, days=3)
-        geo_compatible = bool(
-            candidate_geo
-            and selected_geo
-            and (
-                candidate_geo == selected_geo
-                or candidate_geo.split("/", 1)[0] == selected_geo.split("/", 1)[0]
-            )
-        )
-        shared_specific_location = bool(
-            _candidate_specific_event_location(candidate)
-            and _candidate_specific_event_location(candidate)
-            == _candidate_specific_event_location(selected_item)
-        )
-        same_operational_event = (
-            date_close
-            and bool(candidate_operator and selected_operator and candidate_operator == selected_operator)
-            and geo_compatible
-            and (
-                bool(candidate_lines and selected_lines and not candidate_lines.isdisjoint(selected_lines))
-                or shared_specific_location
-                or difflib.SequenceMatcher(
-                    None,
-                    _event_similarity_text(candidate),
-                    _event_similarity_text(selected_item),
-                ).ratio() >= 0.58
-            )
-            and bool(candidate_fp.get("incident_key"))
-            and candidate_fp.get("incident_key") == selected_fp.get("incident_key")
-            and candidate_fp.get("incident_key") in {
-                "environmental_safety",
-                "signal_or_switch",
-                "power_supply",
-                "platform_door",
-                "service_disruption",
-            }
-        )
-        if same_operational_event:
-            return True
-        candidate_asset = candidate_fp.get("asset_key", "")
-        selected_asset = selected_fp.get("asset_key", "")
-        if candidate_asset and selected_asset and candidate_asset != selected_asset:
-            return False
-        if candidate_lines and selected_lines and candidate_lines.isdisjoint(selected_lines):
-            return False
-        if (
-            date_close
-            and candidate_geo
-            and candidate_geo == selected_geo
-            and candidate_asset
-            and candidate_asset == selected_asset
-            and candidate_fp.get("action_key") == selected_fp.get("action_key")
-            and (candidate_operator == selected_operator or not candidate_operator or not selected_operator)
-        ):
-            return True
-
-        if _dedupe_titles_conflict_on_entities(candidate, selected_item):
-            return False
-        candidate_location = _candidate_event_location(candidate)
-        selected_location = _candidate_event_location(selected_item)
-        similarity = difflib.SequenceMatcher(
-            None,
-            _event_similarity_text(candidate),
-            _event_similarity_text(selected_item),
-        ).ratio()
-        candidate_specific_location = _candidate_specific_event_location(candidate)
-        selected_specific_location = _candidate_specific_event_location(selected_item)
-        same_specific_location = bool(candidate_specific_location and selected_specific_location and candidate_specific_location == selected_specific_location)
-        if candidate_specific_location and selected_specific_location and candidate_specific_location != selected_specific_location:
-            return False
-        if int(lookback_int) in ADVANCED_LOOKBACK_OPTIONS and same_specific_location:
-            if is_accident and (date_close or similarity >= 0.70):
-                return True
-            if _is_project_series_candidate(candidate) and _is_project_series_candidate(selected_item) and _same_project_stage_or_unspecified(candidate, selected_item):
-                return True
-            if similarity >= 0.76:
-                return True
-        if not date_close:
-            return False
-        if same_specific_location:
-            return True
-        return similarity >= 0.62
+        return bool(_compare_report_event(candidate, selected_item)["same_event"])
 
 
     def _is_duplicate_selected_event(candidate: dict, selected: list[dict]) -> bool:
@@ -5587,10 +5484,15 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         consolidated: list[dict] = []
         duplicate_records: list[dict] = []
         for candidate in candidates or []:
-            duplicate_of = next(
-                (item for item in consolidated if _is_same_report_event(candidate, item)),
-                None,
-            )
+            build_event_fingerprint(candidate)
+            duplicate_of = None
+            comparison = None
+            for item in consolidated:
+                result = _compare_report_event(candidate, item)
+                if result["same_event"]:
+                    duplicate_of = item
+                    comparison = result
+                    break
             if duplicate_of is None:
                 candidate.setdefault("supporting_sources", [_supplemental_source_record(candidate)])
                 candidate.setdefault("consolidated_candidate_ids", [
@@ -5600,6 +5502,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 consolidated.append(candidate)
                 continue
             source_replaced = _merge_duplicate_event_sources(duplicate_of, candidate)
+            mark_duplicate(candidate, duplicate_of, comparison or {})
             candidate["duplicate_of"] = duplicate_of.get("candidate_id", duplicate_of.get("id", ""))
             candidate["selection_stage"] = "event_consolidated_duplicate"
             duplicate_records.append({
@@ -5610,6 +5513,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 "source_replaced_by_higher_priority": source_replaced,
                 "supporting_source_count": len(duplicate_of.get("supporting_sources", []) or []),
                 "supporting_sources": list(duplicate_of.get("supporting_sources", []) or []),
+                "canonical_event_id": candidate.get("canonical_event_id", ""),
+                "event_identity_components": candidate.get("event_identity_components", {}),
+                "duplicate_type": candidate.get("duplicate_type", ""),
+                "matched_event_id": candidate.get("matched_event_id", ""),
+                "same_event_reason": candidate.get("same_event_reason", ""),
+                "conflicting_evidence": candidate.get("conflicting_evidence", [])[:8],
             })
         return consolidated, {
             "input_count": len(candidates or []),
@@ -5623,9 +5532,17 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         while pool:
             candidate = min(pool, key=lambda item: _python_selection_dynamic_key(item, selected))
             pool.remove(candidate)
-            duplicate_of = next((item for item in selected if _is_same_report_event(candidate, item)), None)
+            duplicate_of = None
+            comparison = None
+            for item in selected:
+                result = _compare_report_event(candidate, item)
+                if result["same_event"]:
+                    duplicate_of = item
+                    comparison = result
+                    break
             if duplicate_of:
                 source_replaced = _merge_duplicate_event_sources(duplicate_of, candidate)
+                mark_duplicate(candidate, duplicate_of, comparison or {})
                 candidate["duplicate_of"] = duplicate_of.get("id", "")
                 candidate["selection_stage"] = "duplicate_suppressed"
                 try:
@@ -5646,6 +5563,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                         "kept_primary_source": duplicate_of.get("source_display") or duplicate_of.get("source", ""),
                         "source_replaced_by_higher_priority": source_replaced,
                         "supplemental_source_count": len(duplicate_of.get("supplemental_sources", []) or []),
+                        "canonical_event_id": candidate.get("canonical_event_id", ""),
+                        "event_identity_components": candidate.get("event_identity_components", {}),
+                        "duplicate_type": candidate.get("duplicate_type", ""),
+                        "matched_event_id": candidate.get("matched_event_id", ""),
+                        "same_event_reason": candidate.get("same_event_reason", ""),
+                        "conflicting_evidence": candidate.get("conflicting_evidence", [])[:8],
                     })
                 except Exception:
                     pass

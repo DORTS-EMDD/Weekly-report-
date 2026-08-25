@@ -127,6 +127,21 @@ def _debug_candidate_rows(items: list[dict]) -> list[dict]:
         if any(
             key in item
             for key in (
+                "canonical_event_id", "event_identity_components", "duplicate_type",
+                "matched_event_id", "same_event_reason", "conflicting_evidence",
+            )
+        ):
+            row.update({
+                "canonical_event_id": item.get("canonical_event_id", ""),
+                "event_identity_components": item.get("event_identity_components", {}),
+                "duplicate_type": item.get("duplicate_type", ""),
+                "matched_event_id": item.get("matched_event_id", ""),
+                "same_event_reason": item.get("same_event_reason", ""),
+                "conflicting_evidence": list(item.get("conflicting_evidence", []) or [])[:8],
+            })
+        if any(
+            key in item
+            for key in (
                 "raw_ingest_id",
                 "search_provider",
                 "raw_title",

@@ -13,6 +13,12 @@ from urllib.parse import parse_qs, unquote, urlparse, urlunparse
 from email.utils import parsedate_to_datetime
 
 from config import *
+from event_identity import (
+    annotate_event_identity,
+    canonical_article_key,
+    compare_event_candidates,
+    mark_duplicate,
+)
 from search_queries import FORMAL_SOURCE_PROXY_LABELS
 
 
@@ -1738,111 +1744,6 @@ def _is_similar_title_duplicate(candidate: dict, existing: dict, threshold: floa
     return not _dedupe_titles_conflict_on_entities(candidate, existing)
 
 
-_SAME_EVENT_ENTITY_STOPWORDS = {
-    "after",
-    "announced",
-    "appointed",
-    "city",
-    "collision",
-    "company",
-    "contract",
-    "design",
-    "driver",
-    "fire",
-    "for",
-    "hurt",
-    "injured",
-    "line",
-    "metro",
-    "new",
-    "passengers",
-    "selected",
-    "several",
-    "station",
-    "study",
-    "support",
-    "tram",
-    "upgrade",
-    "wins",
-}
-
-_SAME_EVENT_TOPIC_TERMS = {
-    "collision": ("collision", "accident", "unfall", "crash", "derailment"),
-    "fire": ("fire", "brand", "feuer"),
-    "upgrade": ("upgrade", "modernisation", "modernization", "renewal", "更新"),
-    "study": ("study", "feasibility", "research", "studie"),
-    "contract": ("contract", "procurement", "tender", "selected", "appointed"),
-    "deployment": ("deploy", "deployment", "install", "installation", "einführung"),
-    "testing": ("test", "trial", "pilot", "validation", "versuch"),
-}
-
-
-def _same_event_text(candidate: dict) -> str:
-    return urllib.parse.unquote(
-        " ".join(str(candidate.get(key, "") or "") for key in ("title", "snippet"))
-    ).casefold()
-
-
-def _same_event_route_tokens(candidate: dict) -> set[str]:
-    text = _same_event_text(candidate).replace("_", "-")
-    tokens: set[str] = set()
-    for pattern in (
-        r"\b[a-z][a-z0-9-]{2,}\s+line\b",
-        r"\bline\s*[-#]?\s*[a-z0-9]{1,6}\b",
-    ):
-        for match in re.findall(pattern, text, flags=re.IGNORECASE):
-            token = re.sub(r"\s+", "-", match).strip("-")
-            if token not in {"metro-line", "red-line", "blue-line", "green-line"}:
-                tokens.add(token)
-    return tokens
-
-
-def _same_event_named_entities(candidate: dict) -> set[str]:
-    raw_text = " ".join(str(candidate.get(key, "") or "") for key in ("title", "snippet"))
-    entities: set[str] = set()
-    for match in re.findall(r"\b[A-Z][A-Za-zÀ-ÖØ-öø-ÿ]{2,}\b", raw_text):
-        token = match.casefold()
-        if token not in _SAME_EVENT_ENTITY_STOPWORDS and not token.isdigit():
-            entities.add(token)
-    return entities
-
-
-def _same_event_topic_term_present(text: str, term: str) -> bool:
-    if any(ord(character) > 127 for character in term) or len(term) >= 5:
-        return term in text
-    pattern = rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])"
-    return re.search(pattern, text) is not None
-
-
-def _same_event_topics(candidate: dict) -> set[str]:
-    text = _same_event_text(candidate)
-    return {
-        topic
-        for topic, terms in _SAME_EVENT_TOPIC_TERMS.items()
-        if any(_same_event_topic_term_present(text, term) for term in terms)
-    }
-
-
-def _is_same_event_duplicate(candidate: dict, existing: dict, max_days: int = 3) -> bool:
-    left_date = _candidate_date_obj(candidate.get("date", ""))
-    right_date = _candidate_date_obj(existing.get("date", ""))
-    if not left_date or not right_date or abs((left_date - right_date).days) > max_days:
-        return False
-    left_region = candidate.get("region", "")
-    right_region = existing.get("region", "")
-    if left_region and right_region and left_region != right_region:
-        return False
-    left_routes = _same_event_route_tokens(candidate)
-    right_routes = _same_event_route_tokens(existing)
-    if left_routes and right_routes and left_routes.isdisjoint(right_routes):
-        return False
-    if not _same_event_named_entities(candidate) & _same_event_named_entities(existing):
-        return False
-    if not _same_event_topics(candidate) & _same_event_topics(existing):
-        return False
-    return True
-
-
 def _merge_retrieval_provenance(existing: dict, duplicate: dict) -> bool:
     existing_lanes = list(existing.get("retrieval_lanes") or ([existing.get("retrieval_lane")] if existing.get("retrieval_lane") else []))
     duplicate_lanes = list(duplicate.get("retrieval_lanes") or ([duplicate.get("retrieval_lane")] if duplicate.get("retrieval_lane") else []))
@@ -1886,6 +1787,8 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
         "標題正規化重複": 0,
         "標題相似重複": 0,
         "同事件重複": 0,
+        "ARTICLE DUPLICATE": 0,
+        "EVENT DUPLICATE": 0,
         "multi_lane_candidates": 0,
     }
     seen_urls: set[str] = set()
@@ -1905,20 +1808,50 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
     )
 
     for candidate in sorted_candidates:
-        url_key = _dedupe_url(candidate.get("url", ""))
+        annotate_event_identity(candidate)
+        url_key = canonical_article_key(candidate) or _dedupe_url(candidate.get("url", ""))
         title_key = _normalize_title(candidate.get("title", ""))
         if url_key and url_key in seen_urls:
-            existing = next((item for item in deduped if _dedupe_url(item.get("url", "")) == url_key), None)
+            existing = next((
+                item
+                for item in deduped
+                if (canonical_article_key(item) or _dedupe_url(item.get("url", ""))) == url_key
+            ), None)
+            comparison = compare_event_candidates(candidate, existing or {})
+            comparison.update({
+                "same_event": True,
+                "article_duplicate": True,
+                "duplicate_type": "ARTICLE_DUPLICATE",
+                "same_event_reason": "canonical article URL matched",
+            })
+            if existing:
+                mark_duplicate(candidate, existing, comparison)
+                candidate["selection_stage"] = "article_duplicate"
             if existing and _merge_retrieval_provenance(existing, candidate):
                 stats["multi_lane_candidates"] += 1
             stats["URL 重複"] += 1
+            stats["ARTICLE DUPLICATE"] += 1
             continue
         if title_key and title_key in seen_title_keys:
             existing = next((item for item in title_entries if _normalize_title(item.get("title", "")) == title_key), None)
+            comparison = compare_event_candidates(candidate, existing or {})
+            if comparison.get("conflicting_evidence"):
+                existing = None
+            if existing:
+                comparison.update({
+                    "same_event": True,
+                    "article_duplicate": True,
+                    "duplicate_type": "ARTICLE_DUPLICATE",
+                    "same_event_reason": "normalized article title matched without structured event conflict",
+                })
+                mark_duplicate(candidate, existing, comparison)
+                candidate["selection_stage"] = "article_duplicate"
             if existing and _merge_retrieval_provenance(existing, candidate):
                 stats["multi_lane_candidates"] += 1
-            stats["標題正規化重複"] += 1
-            continue
+            if existing:
+                stats["標題正規化重複"] += 1
+                stats["ARTICLE DUPLICATE"] += 1
+                continue
         similar_existing = next(
             (
                 existing
@@ -1928,18 +1861,31 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
             None,
         )
         if title_key and similar_existing:
-            if _merge_retrieval_provenance(similar_existing, candidate):
-                stats["multi_lane_candidates"] += 1
-            stats["標題相似重複"] += 1
-            continue
-        same_event_existing = next(
-            (existing for existing in deduped if _is_same_event_duplicate(candidate, existing)),
-            None,
-        )
+            comparison = compare_event_candidates(candidate, similar_existing)
+            if comparison.get("same_event"):
+                mark_duplicate(candidate, similar_existing, comparison)
+                candidate["selection_stage"] = "event_duplicate"
+                if _merge_retrieval_provenance(similar_existing, candidate):
+                    stats["multi_lane_candidates"] += 1
+                stats["標題相似重複"] += 1
+                stats["同事件重複"] += 1
+                stats["EVENT DUPLICATE"] += 1
+                continue
+        same_event_existing = None
+        same_event_comparison = None
+        for existing in deduped:
+            comparison = compare_event_candidates(candidate, existing)
+            if comparison.get("same_event"):
+                same_event_existing = existing
+                same_event_comparison = comparison
+                break
         if same_event_existing:
+            mark_duplicate(candidate, same_event_existing, same_event_comparison or {})
+            candidate["selection_stage"] = "event_duplicate"
             if _merge_retrieval_provenance(same_event_existing, candidate):
                 stats["multi_lane_candidates"] += 1
             stats["同事件重複"] += 1
+            stats["EVENT DUPLICATE"] += 1
             continue
         if url_key:
             seen_urls.add(url_key)

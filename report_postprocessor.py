@@ -37,6 +37,7 @@ from electromechanical_taxonomy import (
     classify_electromechanical_evidence,
     report_labels_for_core_systems,
 )
+from event_identity import canonical_event_id
 from journal_service import _parse_full_research_date
 from maiagent_service import (
     REPORT_CANDIDATE_ID_PATTERN,
@@ -3063,19 +3064,7 @@ def _fallback_report_block(candidate: dict, *, context: ReportPostprocessContext
 
 
 def _candidate_event_identity(candidate: dict) -> str:
-    fingerprint = candidate.get("event_fingerprint") or {}
-    if isinstance(fingerprint, dict):
-        values = [
-            str(fingerprint.get(key, "") or "").strip()
-            for key in ("operator_key", "geo_key", "asset_key", "action_key", "incident_key", "date_bucket")
-        ]
-        values = [value.casefold() for value in values if value]
-        if len(values) >= 3:
-            return "|".join(values)
-    source_url = _effective_source_url(candidate)
-    if source_url:
-        return f"url:{source_url.casefold()}"
-    return f"candidate:{int(candidate.get('candidate_id') or candidate.get('id') or 0)}"
+    return canonical_event_id(candidate)
 
 def _force_candidate_fields_in_block(block: str, candidate: dict | list[dict], *, context: ReportPostprocessContext) -> str:
     candidates = candidate if isinstance(candidate, list) else [candidate]
