@@ -43,6 +43,12 @@ _COUNTRY_ALIASES = {
     "switzerland": "switzerland",
     "新加坡": "singapore",
     "singapore": "singapore",
+    # Canonicalize the upstream geography owner output; Jakarta city
+    # inference remains intentionally outside this module.
+    "印尼": "indonesia",
+    "印度尼西亞": "indonesia",
+    "indonesia": "indonesia",
+    "indonesian": "indonesia",
     "香港": "hong-kong",
     "hong kong": "hong-kong",
     "台灣": "taiwan",

@@ -244,6 +244,7 @@ EVENT_REGION_PRIORITY_HINTS: list[tuple[str, list[str]]] = [
     ("桃園", ["桃園捷運", "桃園機場捷運", "taoyuan metro", "taoyuan mrt", "taoyuan airport mrt", "桃捷"]),
     ("臺中", ["臺中捷運", "台中捷運", "taichung metro", "taichung mrt", "中捷"]),
     ("高雄", ["高雄捷運", "kaohsiung metro", "kaohsiung mrt", "krtc", "高捷"]),
+    ("Indonesia", ["Jakarta", "Jakarta MRT", "MRT Jakarta", "PT MRT Jakarta", "Indonesia", "Indonesian", "印尼", "印度尼西亞"]),
     ("澳洲", ["gold coast", "gold coast light rail", "g:link"]),
     ("瑞士", ["basel", "basel tram", "bvb", "zürich", "zurich", "lausanne", "瑞士", "巴塞爾", "蘇黎世", "洛桑"]),
     ("美國", ["austin transit partnership", "austin light rail", "houston", "metrorail", "houston metrorail", "metro rail houston", "wmata", "washington metro", "mta", "nyct", "new york subway", "休士頓", "休斯頓"]),
@@ -271,6 +272,14 @@ GEOGRAPHY_EVIDENCE_PRECEDENCE = {
 }
 
 METRO_SYSTEM_OWNERSHIP_RULES = (
+    {
+        "region": "Indonesia",
+        "location_aliases": ("jakarta", "jakarta mrt", "mrt jakarta"),
+        "operator_aliases": ("jakarta mrt", "mrt jakarta", "pt mrt jakarta"),
+        # Require the Jakarta MRT/system anchor for high-precedence ownership;
+        # a publisher/query mention of Jakarta alone remains low-confidence.
+        "system_terms": ("mrt", "mass rapid transit"),
+    },
     {
         "region": "澳洲",
         "location_aliases": (

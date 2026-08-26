@@ -881,6 +881,10 @@ _COUNTRY_BY_REGION = {
     "澳洲": "澳洲",
     "Chennai": "印度",
     "印度": "印度",
+    "Indonesia": "Indonesia",
+    "Indonesian": "Indonesia",
+    "印尼": "Indonesia",
+    "印度尼西亞": "Indonesia",
     "Moscow": "俄羅斯",
     "俄羅斯": "俄羅斯",
 }
