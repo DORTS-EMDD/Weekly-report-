@@ -262,6 +262,7 @@ from maiagent_service import (
     remove_internal_candidate_markers as service_remove_internal_candidate_markers,
     validate_report_candidate_ids as service_validate_report_candidate_ids,
     build_report_retry_prompt as service_build_report_retry_prompt,
+    is_maiagent_configuration_or_connectivity_error,
     REPORT_CANDIDATE_ID_PATTERN as SERVICE_REPORT_CANDIDATE_ID_PATTERN,
     REPORT_ESCAPED_CANDIDATE_ID_PATTERN as SERVICE_REPORT_ESCAPED_CANDIDATE_ID_PATTERN,
     INTERNAL_CANDIDATE_MARKER_PATTERN as SERVICE_INTERNAL_CANDIDATE_MARKER_PATTERN,
@@ -2762,6 +2763,7 @@ if generate_btn:
                 ddg_results,
                 runtime=retrieval_runtime,
             )
+            pipeline_debug_stats = candidate_pool.get("pipeline_debug_stats", {})
             timings["elapsed_seconds_candidate_pool"] = round(time.perf_counter() - stage_start, 2)
             model_candidates = candidate_pool["model_candidates"]
             long_term_coverage = build_long_term_coverage_warning(candidate_pool["filtered_candidates"])
@@ -3039,7 +3041,6 @@ if generate_btn:
             )
             prompt_chars = len(report_prompt)
             raw_chars = len(rss_results) + len(ddg_results)
-            pipeline_debug_stats = candidate_pool.get("pipeline_debug_stats", {})
             selected_event_consolidation_stats = dict(
                 LAST_PYTHON_SELECTION_DEBUG.get(
                     "selected_event_consolidation_stats", {}
@@ -3532,7 +3533,8 @@ if generate_btn:
         except Exception as e:
             progress_placeholder.empty()
             status_text.error(f"❌ 發生錯誤：{e}")
-            st.info("請確認 MaiAgent API Key、Chatbot ID 與 API Base 正確，且該雲端 API 可由目前執行環境連線。")
+            if is_maiagent_configuration_or_connectivity_error(e):
+                st.info("請確認 MaiAgent API Key、Chatbot ID 與 API Base 正確，且該雲端 API 可由目前執行環境連線。")
 
 # ── 報告顯示區 ──────────────────────────────────────
 report_display = render_report_display(

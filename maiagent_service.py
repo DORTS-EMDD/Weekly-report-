@@ -28,6 +28,23 @@ MAIAGENT_READ_TIMEOUT_MIN_SECONDS = 1
 MAIAGENT_READ_TIMEOUT_MAX_SECONDS = 1800
 
 
+def is_maiagent_configuration_or_connectivity_error(exc: BaseException) -> bool:
+    """Identify the explicit MaiAgent configuration/network error contract.
+
+    The Streamlit UI uses this narrow predicate so unrelated Python failures are
+    shown as their original error instead of being misreported as API settings
+    problems.
+    """
+    if not isinstance(exc, RuntimeError):
+        return False
+    message = str(exc).strip()
+    return message.startswith((
+        "未設定 MAIAGENT_API_KEY",
+        "未設定 MAIAGENT_CHATBOT_ID",
+        "MaiAgent API 所有嘗試均失敗。",
+    ))
+
+
 def _bounded_timeout_seconds(
     env_name: str,
     default: int,

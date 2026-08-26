@@ -8,6 +8,30 @@ import maiagent_service
 
 
 class MaiAgentTimeoutTests(unittest.TestCase):
+    def test_error_classifier_accepts_configuration_and_connectivity_failures(self):
+        self.assertTrue(
+            maiagent_service.is_maiagent_configuration_or_connectivity_error(
+                RuntimeError("未設定 MAIAGENT_API_KEY")
+            )
+        )
+        self.assertTrue(
+            maiagent_service.is_maiagent_configuration_or_connectivity_error(
+                RuntimeError("MaiAgent API 所有嘗試均失敗。\nAttempt 1: HTTP status: 503")
+            )
+        )
+
+    def test_error_classifier_rejects_unrelated_python_failures(self):
+        self.assertFalse(
+            maiagent_service.is_maiagent_configuration_or_connectivity_error(
+                NameError("pipeline_debug_stats is not defined")
+            )
+        )
+        self.assertFalse(
+            maiagent_service.is_maiagent_configuration_or_connectivity_error(
+                ValueError("invalid report fixture")
+            )
+        )
+
     def test_retry_prompt_is_complete_replacement_with_runtime_category_lock(self):
         prompt = maiagent_service.build_report_retry_prompt(
             "original prompt",
