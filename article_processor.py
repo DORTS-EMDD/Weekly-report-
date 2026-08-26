@@ -16,7 +16,7 @@ from config import *
 from event_identity import (
     annotate_event_identity,
     canonical_article_key,
-    compare_event_candidates,
+    compare_materialized_event_identities,
     mark_duplicate,
 )
 from search_queries import FORMAL_SOURCE_PROXY_LABELS
@@ -1824,6 +1824,72 @@ def _merge_retrieval_provenance(existing: dict, duplicate: dict) -> bool:
     return len(existing_lanes) > 1 and len(before_lanes) < 2
 
 
+def _event_identity_blocking_keys(identity: dict) -> tuple[tuple, ...]:
+    """Return necessary-condition blocks for the A5 comparison contract."""
+    event_class = str(identity.get("event_class") or "")
+    keys: list[tuple] = []
+    if event_class == "procurement":
+        action = str(identity.get("action") or "")
+        project = str(identity.get("project") or "")
+        if action and project:
+            keys.append(("procurement", action, project))
+        return tuple(keys)
+
+    if event_class == "incident":
+        incident_type = str(identity.get("incident_type") or "")
+        if incident_type:
+            for component in ("city", "country"):
+                value = str(identity.get(component) or "")
+                if value:
+                    keys.append(("incident", incident_type, component, value))
+            for station in tuple(identity.get("stations") or ()):
+                station = str(station or "")
+                if station:
+                    keys.append(("incident", incident_type, "station", station))
+            return tuple(keys)
+        # compare_event_candidates falls through to the general-event branch
+        # when an incident-class candidate has no incident_type.  Keep that
+        # existing semantics by applying the same general blocking rules.
+
+    if not event_class or event_class == "mixed":
+        return ()
+
+    anchors = (
+        ("city", str(identity.get("city") or "")),
+        ("operator", str(identity.get("operator") or "")),
+        ("project", str(identity.get("project") or "")),
+        ("event_object", str(identity.get("event_object") or "")),
+        ("action", str(identity.get("action") or "")),
+    )
+    scope_components = {"city", "operator", "project"}
+    for index, (left_name, left_value) in enumerate(anchors):
+        if not left_value:
+            continue
+        for right_name, right_value in anchors[index + 1:]:
+            if not right_value:
+                continue
+            if left_name not in scope_components and right_name not in scope_components:
+                continue
+            keys.append(("general", event_class, left_name, left_value, right_name, right_value))
+    return tuple(keys)
+
+
+def _ordered_blocking_candidates(
+    keys: tuple[tuple, ...],
+    index: dict[tuple, list[dict]],
+    positions: dict[int, int],
+    ordered_candidates: list[dict],
+) -> list[dict]:
+    """Union indexed candidates while retaining deduped insertion order."""
+    candidate_positions: set[int] = set()
+    for key in keys:
+        for candidate in index.get(key, ()):
+            position = positions.get(id(candidate))
+            if position is not None:
+                candidate_positions.add(position)
+    return [ordered_candidates[position] for position in sorted(candidate_positions)]
+
+
 def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[dict], dict[str, int]]:
     stats = {
         "URL 重複": 0,
@@ -1833,11 +1899,18 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
         "ARTICLE DUPLICATE": 0,
         "EVENT DUPLICATE": 0,
         "multi_lane_candidates": 0,
+        "event_dedupe_candidate_count": len(candidates or []),
+        "event_dedupe_comparison_count": 0,
+        "event_identity_build_count": 0,
+        "event_dedupe_max_bucket_size": 0,
+        "event_dedupe_possible_bucket_candidates": 0,
     }
-    seen_urls: set[str] = set()
-    seen_title_keys: set[str] = set()
-    title_entries: list[dict] = []
+    article_index: dict[str, list[dict]] = {}
+    title_index: dict[str, list[dict]] = {}
+    structured_index: dict[tuple, list[dict]] = {}
     deduped: list[dict] = []
+    positions: dict[int, int] = {}
+    materialized_identities: dict[int, dict] = {}
     similarity_threshold = 0.84 if int(lookback_days) in ADVANCED_LOOKBACK_OPTIONS else 0.90
 
     sorted_candidates = sorted(
@@ -1850,17 +1923,28 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
         ),
     )
 
+    def _compare(candidate: dict, existing: dict) -> dict:
+        stats["event_dedupe_comparison_count"] += 1
+        return compare_materialized_event_identities(
+            candidate,
+            existing,
+            materialized_identities[id(candidate)],
+            materialized_identities[id(existing)],
+        )
+
+    def _first(index: dict[str, list[dict]], key: str) -> dict | None:
+        values = index.get(key, ())
+        return values[0] if values else None
+
     for candidate in sorted_candidates:
-        annotate_event_identity(candidate)
+        identity = annotate_event_identity(candidate)
+        materialized_identities[id(candidate)] = identity
+        stats["event_identity_build_count"] += 1
         url_key = canonical_article_key(candidate) or _dedupe_url(candidate.get("url", ""))
         title_key = _normalize_title(candidate.get("title", ""))
-        if url_key and url_key in seen_urls:
-            existing = next((
-                item
-                for item in deduped
-                if (canonical_article_key(item) or _dedupe_url(item.get("url", ""))) == url_key
-            ), None)
-            comparison = compare_event_candidates(candidate, existing or {})
+        if url_key and url_key in article_index:
+            existing = _first(article_index, url_key)
+            comparison = _compare(candidate, existing)
             comparison.update({
                 "same_event": True,
                 "article_duplicate": True,
@@ -1868,16 +1952,22 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
                 "same_event_reason": "canonical article URL matched",
             })
             if existing:
-                mark_duplicate(candidate, existing, comparison)
+                mark_duplicate(
+                    candidate,
+                    existing,
+                    comparison,
+                    candidate_identity=identity,
+                    matched_identity=materialized_identities[id(existing)],
+                )
                 candidate["selection_stage"] = "article_duplicate"
             if existing and _merge_retrieval_provenance(existing, candidate):
                 stats["multi_lane_candidates"] += 1
             stats["URL 重複"] += 1
             stats["ARTICLE DUPLICATE"] += 1
             continue
-        if title_key and title_key in seen_title_keys:
-            existing = next((item for item in title_entries if _normalize_title(item.get("title", "")) == title_key), None)
-            comparison = compare_event_candidates(candidate, existing or {})
+        if title_key and title_key in title_index:
+            existing = _first(title_index, title_key)
+            comparison = _compare(candidate, existing)
             if comparison.get("conflicting_evidence"):
                 existing = None
             if existing:
@@ -1887,7 +1977,13 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
                     "duplicate_type": "ARTICLE_DUPLICATE",
                     "same_event_reason": "normalized article title matched without structured event conflict",
                 })
-                mark_duplicate(candidate, existing, comparison)
+                mark_duplicate(
+                    candidate,
+                    existing,
+                    comparison,
+                    candidate_identity=identity,
+                    matched_identity=materialized_identities[id(existing)],
+                )
                 candidate["selection_stage"] = "article_duplicate"
             if existing and _merge_retrieval_provenance(existing, candidate):
                 stats["multi_lane_candidates"] += 1
@@ -1895,18 +1991,36 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
                 stats["標題正規化重複"] += 1
                 stats["ARTICLE DUPLICATE"] += 1
                 continue
+        blocking_keys = _event_identity_blocking_keys(identity)
+        possible_candidates = _ordered_blocking_candidates(
+            blocking_keys,
+            structured_index,
+            positions,
+            deduped,
+        )
+        stats["event_dedupe_possible_bucket_candidates"] += len(possible_candidates)
+        stats["event_dedupe_max_bucket_size"] = max(
+            stats["event_dedupe_max_bucket_size"],
+            len(possible_candidates),
+        )
         similar_existing = next(
             (
                 existing
-                for existing in title_entries
+                for existing in possible_candidates
                 if _is_similar_title_duplicate(candidate, existing, similarity_threshold)
             ),
             None,
         )
         if title_key and similar_existing:
-            comparison = compare_event_candidates(candidate, similar_existing)
+            comparison = _compare(candidate, similar_existing)
             if comparison.get("same_event"):
-                mark_duplicate(candidate, similar_existing, comparison)
+                mark_duplicate(
+                    candidate,
+                    similar_existing,
+                    comparison,
+                    candidate_identity=identity,
+                    matched_identity=materialized_identities[id(similar_existing)],
+                )
                 candidate["selection_stage"] = "event_duplicate"
                 if _merge_retrieval_provenance(similar_existing, candidate):
                     stats["multi_lane_candidates"] += 1
@@ -1916,14 +2030,20 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
                 continue
         same_event_existing = None
         same_event_comparison = None
-        for existing in deduped:
-            comparison = compare_event_candidates(candidate, existing)
+        for existing in possible_candidates:
+            comparison = _compare(candidate, existing)
             if comparison.get("same_event"):
                 same_event_existing = existing
                 same_event_comparison = comparison
                 break
         if same_event_existing:
-            mark_duplicate(candidate, same_event_existing, same_event_comparison or {})
+            mark_duplicate(
+                candidate,
+                same_event_existing,
+                same_event_comparison or {},
+                candidate_identity=identity,
+                matched_identity=materialized_identities[id(same_event_existing)],
+            )
             candidate["selection_stage"] = "event_duplicate"
             if _merge_retrieval_provenance(same_event_existing, candidate):
                 stats["multi_lane_candidates"] += 1
@@ -1931,11 +2051,14 @@ def dedupe_candidates(candidates: list[dict], lookback_days: int) -> tuple[list[
             stats["EVENT DUPLICATE"] += 1
             continue
         if url_key:
-            seen_urls.add(url_key)
+            article_index.setdefault(url_key, []).append(candidate)
         if title_key:
-            seen_title_keys.add(title_key)
-            title_entries.append(candidate)
+            title_index.setdefault(title_key, []).append(candidate)
+        position = len(deduped)
+        positions[id(candidate)] = position
         deduped.append(candidate)
+        for key in blocking_keys:
+            structured_index.setdefault(key, []).append(candidate)
     return deduped, stats
 
 

@@ -476,10 +476,13 @@ def _conflict(component: str, left: Any, right: Any) -> dict:
     return {"component": component, "left": left, "right": right}
 
 
-def compare_event_candidates(left_candidate: dict, right_candidate: dict) -> dict:
-    """Compare two structured identities and return a bounded explainable decision."""
-    left = build_event_identity(left_candidate)
-    right = build_event_identity(right_candidate)
+def compare_materialized_event_identities(
+    left_candidate: dict,
+    right_candidate: dict,
+    left: dict,
+    right: dict,
+) -> dict:
+    """Compare already materialized identities without rebuilding either side."""
     left_article = canonical_article_key(left_candidate)
     right_article = canonical_article_key(right_candidate)
     article_url_match = bool(left_article and left_article == right_article)
@@ -612,10 +615,27 @@ def compare_event_candidates(left_candidate: dict, right_candidate: dict) -> dic
     }
 
 
-def mark_duplicate(candidate: dict, matched: dict, comparison: dict) -> None:
+def compare_event_candidates(left_candidate: dict, right_candidate: dict) -> dict:
+    """Compare two structured identities and return a bounded explainable decision."""
+    return compare_materialized_event_identities(
+        left_candidate,
+        right_candidate,
+        build_event_identity(left_candidate),
+        build_event_identity(right_candidate),
+    )
+
+
+def mark_duplicate(
+    candidate: dict,
+    matched: dict,
+    comparison: dict,
+    *,
+    candidate_identity: dict | None = None,
+    matched_identity: dict | None = None,
+) -> None:
     """Attach bounded diagnostics to a suppressed candidate."""
-    matched_identity = annotate_event_identity(matched)
-    annotate_event_identity(candidate)
+    matched_identity = matched_identity or annotate_event_identity(matched)
+    candidate_identity = candidate_identity or annotate_event_identity(candidate)
     candidate["duplicate_type"] = comparison.get("duplicate_type", "")
     candidate["matched_event_id"] = matched_identity["canonical_event_id"]
     candidate["same_event_reason"] = comparison.get("same_event_reason", "")[:240]
