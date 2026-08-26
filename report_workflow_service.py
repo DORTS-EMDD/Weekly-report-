@@ -2,6 +2,7 @@
 
 import datetime
 from copy import deepcopy
+import json
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -138,6 +139,8 @@ def _category_gate_change_reason(before: dict, after: dict) -> str:
     if before.get("category_gate_reasons") != after.get("category_gate_reasons"):
         return "category_gate_reasons_changed"
     return "no_category_gate_change"
+
+
 from report_prompt_service import (
     ReportPromptContext,
     build_report_prompt as service_build_report_prompt,
@@ -161,6 +164,57 @@ from search_service import (
     fetch_feed,
     google_news_site_proxy_url,
 )
+
+
+_AUTHORITATIVE_EVIDENCE_FIELDS = (
+    "raw_title",
+    "title",
+    "raw_snippet",
+    "snippet",
+    "body",
+    "content",
+    "text",
+    "prefetched_text_snippet",
+    "url",
+    "raw_url",
+    "source_href",
+    "resolved_article_url",
+    "canonical_url",
+    "source",
+    "source_domain",
+    "source_type",
+    "source_tier",
+    "source_quality",
+    "publisher",
+    "region",
+    "query_region",
+    "region_query_override",
+    "region_resolution_evidence",
+    "region_resolution_conflicting_evidence",
+    "original_provider_metadata",
+    "date",
+    "published_date",
+    "publication_date",
+    "raw_publication_value",
+    "query",
+)
+
+
+def _authoritative_evidence_fingerprint(candidate: dict) -> tuple[tuple[str, str], ...]:
+    """Capture only inputs consumed by authoritative inference owners."""
+    return tuple(
+        (
+            field,
+            json.dumps(
+                candidate.get(field),
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+                separators=(",", ":"),
+            ),
+        )
+        for field in _AUTHORITATIVE_EVIDENCE_FIELDS
+    )
 
 
 @dataclass(frozen=True)
@@ -289,6 +343,19 @@ class WorkflowRuntime:
             "duplicate_count": 0,
             "duplicate_event_records": [],
         }
+        self._materialized_evidence_fingerprints: dict[int, tuple[tuple[str, str], ...]] = {}
+
+    def _remember_materialized_evidence(self, candidate: dict) -> None:
+        self._materialized_evidence_fingerprints[id(candidate)] = _authoritative_evidence_fingerprint(candidate)
+
+    def _transfer_materialized_evidence(self, source: dict, target: dict) -> None:
+        fingerprint = self._materialized_evidence_fingerprints.pop(id(source), None)
+        if fingerprint is not None:
+            self._materialized_evidence_fingerprints[id(target)] = fingerprint
+
+    def _authoritative_evidence_changed(self, candidate: dict) -> bool:
+        previous = self._materialized_evidence_fingerprints.get(id(candidate))
+        return previous is None or previous != _authoritative_evidence_fingerprint(candidate)
 
     def _search_family_from_query(self, query: str) -> str:
         return _search_family_from_query(
@@ -567,6 +634,7 @@ class WorkflowRuntime:
 
         # The A5 owner is the only place that materializes/reconciles event IDs.
         annotate_event_identity(candidate)
+        self._remember_materialized_evidence(candidate)
         return candidate
 
     def _selector_temporal_mode(self) -> str:
@@ -600,6 +668,7 @@ class WorkflowRuntime:
 
     def prepare_candidate_pool(self, raw_rss: str, raw_ddg: str) -> dict:
         pool_started = time.perf_counter()
+        self._materialized_evidence_fingerprints = {}
         selector = self.selector_api
         parse_started = time.perf_counter()
         parsed_candidates = self.parse_candidates(raw_rss, raw_ddg)
@@ -607,6 +676,11 @@ class WorkflowRuntime:
         raw_candidates: list[dict] = []
         excluded_candidates: list[dict] = []
         exclusion_stats: dict[str, int] = {}
+        materialization_lifecycle = {
+            "initial_materialization_count": 0,
+            "refresh_count": 0,
+            "unchanged_skip_count": 0,
+        }
         timings = {
             "candidate_count": len(parsed_candidates),
             "parse_candidates": parse_elapsed,
@@ -617,6 +691,7 @@ class WorkflowRuntime:
                 "_compute_candidate_page_type"
             ](candidate)
             self._materialize_authoritative_candidate(candidate, authoritative=False)
+            materialization_lifecycle["initial_materialization_count"] += 1
             initial_gate_snapshot = _category_gate_snapshot(candidate)
             candidate["category_gate_before_enrichment"] = initial_gate_snapshot
             candidate["category_gate_after_enrichment"] = deepcopy(initial_gate_snapshot)
@@ -624,14 +699,17 @@ class WorkflowRuntime:
             candidate["category_change_reason"] = "not_enriched"
             reason = selector["hard_low_value_candidate_reason"](candidate)
             if reason:
-                excluded_candidates.append(
-                    selector["annotate_candidate_for_scheme_d"](candidate, reason, timings)
-                )
+                annotated = selector["annotate_candidate_for_scheme_d"](candidate, reason, timings)
+                self._transfer_materialized_evidence(candidate, annotated)
+                excluded_candidates.append(annotated)
                 exclusion_stats[reason] = exclusion_stats.get(reason, 0) + 1
             else:
-                raw_candidates.append(
-                    selector["annotate_candidate_for_scheme_d"](candidate, profile_timings=timings)
+                annotated = selector["annotate_candidate_for_scheme_d"](
+                    candidate,
+                    profile_timings=timings,
                 )
+                self._transfer_materialized_evidence(candidate, annotated)
+                raw_candidates.append(annotated)
         timings["page_type_and_category_gates"] = time.perf_counter() - gate_started
 
         dedupe_started = time.perf_counter()
@@ -674,7 +752,8 @@ class WorkflowRuntime:
         filtered_candidates: list[dict] = []
         preliminary_started = time.perf_counter()
         for candidate in deduped_candidates:
-            if candidate.get("prefetch_status") == "success":
+            if self._authoritative_evidence_changed(candidate):
+                materialization_lifecycle["refresh_count"] += 1
                 before_enrichment = candidate.get("category_gate_before_enrichment") or _category_gate_snapshot(
                     candidate
                 )
@@ -694,7 +773,7 @@ class WorkflowRuntime:
                 candidate.clear()
                 candidate.update(refreshed)
             else:
-                self._materialize_authoritative_candidate(candidate)
+                materialization_lifecycle["unchanged_skip_count"] += 1
             keep, reason = selector["preliminary_filter_candidate"](candidate)
             if keep:
                 if any((candidate.get("category_gates") or {}).values()):
@@ -823,6 +902,7 @@ class WorkflowRuntime:
         })
         pipeline_debug_stats["event_consolidation_stats"] = event_consolidation_stats
         pipeline_debug_stats["post_enrichment_dedupe_stats"] = post_enrichment_dedupe_stats
+        pipeline_debug_stats["authoritative_materialization_lifecycle"] = materialization_lifecycle
         pipeline_debug_stats["temporal_retrieval"] = self.temporal_router.diagnostics(
             self.temporal_plan
         )
@@ -836,6 +916,7 @@ class WorkflowRuntime:
             "candidate_card_limit": candidate_limit,
             "dedupe_stats": dedupe_stats,
             "post_enrichment_dedupe_stats": post_enrichment_dedupe_stats,
+            "authoritative_materialization_lifecycle": materialization_lifecycle,
             "event_consolidation_stats": event_consolidation_stats,
             "prefetch_stats": prefetch_stats,
             "exclusion_stats": exclusion_stats,
