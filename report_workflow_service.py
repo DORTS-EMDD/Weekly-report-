@@ -63,6 +63,7 @@ from temporal_retrieval_service import (
     MODE_BUCKETED_ABSOLUTE,
     TemporalRetrievalRouter,
     temporal_request_for_workflow,
+    verify_candidate_publication,
     verify_route_metadata,
 )
 from maiagent_service import (
@@ -437,6 +438,19 @@ class WorkflowRuntime:
         if route_id:
             self.temporal_plan.record(route_id, status)
 
+    def _verify_annual_candidate(self, candidate: dict) -> None:
+        """Apply the temporal owner's candidate contract before materialization."""
+        verification = verify_candidate_publication(self.temporal_plan, candidate)
+        normalized = verification.normalized_publication_date
+        candidate["normalized_publication_date"] = (
+            normalized.isoformat() if hasattr(normalized, "isoformat") else ""
+        )
+        candidate["date_source"] = verification.date_source
+        candidate["date_verification_status"] = verification.status
+        candidate["verified_bucket"] = verification.verified_bucket
+        candidate["date_bucket"] = verification.verified_bucket
+        candidate["temporal_verification_reason"] = verification.reason
+
     def _rss_context(self) -> RssFeedContext:
         selector = self.selector_api
         return RssFeedContext(
@@ -685,6 +699,16 @@ class WorkflowRuntime:
             "candidate_count": len(parsed_candidates),
             "parse_candidates": parse_elapsed,
         }
+        temporal_verification_started = time.perf_counter()
+        temporal_verification_calls = 0
+        if self.temporal_plan is not None and self.temporal_plan.mode == MODE_BUCKETED_ABSOLUTE:
+            for candidate in parsed_candidates:
+                self._verify_annual_candidate(candidate)
+                temporal_verification_calls += 1
+        timings["temporal_candidate_verification"] = (
+            time.perf_counter() - temporal_verification_started
+        )
+        timings["temporal_candidate_verification_calls"] = temporal_verification_calls
         gate_started = time.perf_counter()
         for candidate in parsed_candidates:
             candidate["page_type"], candidate["page_type_reason"] = selector[

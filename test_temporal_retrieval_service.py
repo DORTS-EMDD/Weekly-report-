@@ -12,6 +12,7 @@ from temporal_retrieval_service import (
     TemporalRetrievalRouter,
     TemporalRetrievalRequest,
     build_calendar_quarter_buckets,
+    verify_candidate_publication,
     verify_route_metadata,
 )
 
@@ -204,6 +205,101 @@ class TemporalRetrievalServiceTests(unittest.TestCase):
             TemporalRetrievalRouter.verify_route_result(route, publication_date).status,
             "out_of_window",
         )
+
+    def test_candidate_verification_general_rss_assigns_matching_bucket(self):
+        result = verify_candidate_publication(
+            self.make_plan(),
+            {
+                "search_provider": "RSS",
+                "raw_publication_value": "2026-08-21",
+                "original_provider_metadata": {"published": "2026-08-21"},
+            },
+        )
+        self.assertEqual(result.status, "verified")
+        self.assertEqual(result.date_source, "rss_published")
+        self.assertEqual(result.verified_bucket, "2026-Q3")
+
+    def test_candidate_verification_missing_future_and_outside_fail_closed(self):
+        plan = self.make_plan()
+        missing = verify_candidate_publication(plan, {"search_provider": "RSS"})
+        future = verify_candidate_publication(
+            plan,
+            {
+                "search_provider": "RSS",
+                "raw_publication_value": "2026-08-27",
+                "original_provider_metadata": {"published": "2026-08-27"},
+            },
+        )
+        outside = verify_candidate_publication(
+            plan,
+            {
+                "search_provider": "RSS",
+                "raw_publication_value": "2025-08-01",
+                "original_provider_metadata": {"published": "2025-08-01"},
+            },
+        )
+        self.assertEqual(missing.status, "missing_date")
+        self.assertNotEqual(future.status, "verified")
+        self.assertNotEqual(outside.status, "verified")
+
+    def test_candidate_verification_conflicting_publication_evidence_fails(self):
+        result = verify_candidate_publication(
+            self.make_plan(),
+            {
+                "search_provider": "RSS",
+                "raw_publication_value": "2026-08-21",
+                "original_provider_metadata": {
+                    "published": "2026-08-21",
+                },
+                "page_parsed_publication_date": "2026-08-20",
+            },
+        )
+        self.assertEqual(result.status, "conflicting_date_evidence")
+        self.assertEqual(result.verified_bucket, "")
+
+    def test_candidate_verification_route_origin_requires_matching_window(self):
+        plan = self.make_plan()
+        route = next(row for row in plan.routes if row.bucket.label == "2026-Q3")
+        matching = verify_candidate_publication(
+            plan,
+            {
+                **route.metadata,
+                "search_provider": "RSS",
+                "raw_publication_value": "2026-08-21",
+                "original_provider_metadata": {"published": "2026-08-21"},
+            },
+        )
+        conflicting = verify_candidate_publication(
+            plan,
+            {
+                **route.metadata,
+                "search_provider": "RSS",
+                "raw_publication_value": "2025-09-12",
+                "original_provider_metadata": {"published": "2025-09-12"},
+            },
+        )
+        self.assertEqual(matching.status, "verified")
+        self.assertNotEqual(conflicting.status, "verified")
+
+    def test_candidate_verification_ddgs_query_date_is_not_evidence(self):
+        query_only = verify_candidate_publication(
+            self.make_plan(),
+            {
+                "search_provider": "DDGS",
+                "raw_publication_value": "2026-08-21",
+                "original_provider_metadata": {"date": "2026-08-21"},
+            },
+        )
+        published = verify_candidate_publication(
+            self.make_plan(),
+            {
+                "search_provider": "DDGS",
+                "raw_publication_value": "2026-08-21",
+                "original_provider_metadata": {"published": "2026-08-21"},
+            },
+        )
+        self.assertNotEqual(query_only.status, "verified")
+        self.assertEqual(published.status, "verified")
 
     @staticmethod
     def entry(title, link, published):

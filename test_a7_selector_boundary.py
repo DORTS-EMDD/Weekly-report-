@@ -110,6 +110,19 @@ class A7SelectorBoundaryTests(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertIn("verified_bucket_missing", result["selector_contract_failures"])
 
+    def test_a7_t6b_annual_verified_temporal_contract_is_consumed(self):
+        result = validate_selector_candidate(
+            self.candidate(
+                verified_bucket="2026-Q3",
+                date_verification_status="verified",
+                date_source="rss_published",
+                normalized_publication_date="2026-08-20",
+            ),
+            temporal_mode=MODE_BUCKETED_ABSOLUTE,
+        )
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["selector_contract_failures"], [])
+
     def test_a7_t7_missing_category_is_diagnostic_exclude(self):
         result = validate_selector_candidate(
             self.candidate(primary_category="", classification=""),

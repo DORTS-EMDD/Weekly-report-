@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as _dt
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
+from collections.abc import Mapping
 from typing import Any
 
 from config import REGION_SEARCH_TERMS
@@ -163,6 +164,7 @@ class TemporalVerification:
     normalized_publication_date: _dt.date | None
     date_source: str
     verified_bucket: str
+    reason: str = ""
 
 
 PROVIDER_CAPABILITIES: dict[str, dict[str, Any]] = {
@@ -277,6 +279,223 @@ def verify_route_metadata(
         raw_publication_value,
         bucket,
         date_source=date_source,
+    )
+
+
+_ALLOWED_PUBLICATION_DATE_SOURCES = {
+    "rss_published",
+    "rss_updated",
+    "provider_published",
+    "ddgs_published",
+    "page_parsed_publication_date",
+    "page_parsed",
+}
+
+
+def _nonempty_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _candidate_provider(candidate: Mapping[str, Any]) -> str:
+    return _nonempty_text(
+        candidate.get("search_provider")
+        or candidate.get("provider")
+        or (candidate.get("original_provider_metadata") or {}).get("provider")
+    ).casefold()
+
+
+def _candidate_provider_metadata(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = candidate.get("original_provider_metadata")
+    return dict(metadata) if isinstance(metadata, Mapping) else {}
+
+
+def _publication_evidence(
+    candidate: Mapping[str, Any],
+) -> tuple[object, str, list[object]]:
+    """Return primary publication evidence and independently parsed dates.
+
+    Query dates and generic candidate ``date`` values are intentionally not
+    evidence.  The raw provenance must identify a provider publication field
+    or an already page-parsed publication date.
+    """
+
+    metadata = _candidate_provider_metadata(candidate)
+    provider = _candidate_provider(candidate)
+    explicit_source = _nonempty_text(candidate.get("date_source"))
+    raw_value = candidate.get("raw_publication_value")
+    page_value = next(
+        (
+            candidate.get(key)
+            for key in (
+                "page_parsed_publication_date",
+                "page_publication_date",
+                "publication_date",
+            )
+            if _nonempty_text(candidate.get(key))
+        ),
+        None,
+    )
+
+    published = metadata.get("published")
+    updated = metadata.get("updated")
+    provider_published = metadata.get("publication_date")
+    if provider_published is None:
+        provider_published = metadata.get("provider_publication_date")
+
+    # RSS adapters already preserve whether the raw value came from
+    # published or updated.  Reconstruct the same distinction for normal RSS
+    # candidates that have not gone through an A6 route.
+    if provider in {"rss", "google news rss"}:
+        if raw_value is not None and _nonempty_text(published) and _nonempty_text(raw_value) == _nonempty_text(published):
+            return raw_value, "rss_published", [page_value]
+        if raw_value is not None and _nonempty_text(updated) and _nonempty_text(raw_value) == _nonempty_text(updated):
+            return raw_value, "rss_updated", [page_value]
+        if _nonempty_text(published):
+            return published, "rss_published", [page_value]
+        if _nonempty_text(updated):
+            return updated, "rss_updated", [page_value]
+        if _nonempty_text(provider_published):
+            return provider_published, "provider_published", [page_value]
+        if explicit_source in _ALLOWED_PUBLICATION_DATE_SOURCES and raw_value is not None:
+            return raw_value, explicit_source, [page_value]
+        if page_value is not None:
+            return page_value, "page_parsed_publication_date", [published, updated]
+        return None, "", [published, updated]
+
+    # DDGS query/result metadata is not trusted merely because it contains a
+    # generic ``date`` field.  An explicit published field or page-parsed
+    # publication date is required for annual candidate verification.
+    if provider == "ddgs":
+        if raw_value is not None and _nonempty_text(published) and _nonempty_text(raw_value) == _nonempty_text(published):
+            return raw_value, "ddgs_published", [page_value]
+        if _nonempty_text(published):
+            return published, "ddgs_published", [page_value]
+        if _nonempty_text(provider_published):
+            return provider_published, "provider_published", [page_value]
+        if page_value is not None:
+            return page_value, "page_parsed_publication_date", [published]
+        if explicit_source in _ALLOWED_PUBLICATION_DATE_SOURCES and raw_value is not None:
+            return raw_value, explicit_source, [page_value]
+        return None, "", [published]
+
+    if page_value is not None:
+        return page_value, "page_parsed_publication_date", [raw_value, provider_published]
+    if explicit_source in _ALLOWED_PUBLICATION_DATE_SOURCES and raw_value is not None:
+        return raw_value, explicit_source, [page_value]
+    if provider_published is not None:
+        return provider_published, "provider_published", [page_value, raw_value]
+    return None, "", [raw_value]
+
+
+def _candidate_route_metadata(candidate: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
+    explicit = candidate.get("temporal_route_metadata") or candidate.get("route_metadata")
+    if isinstance(explicit, Mapping):
+        return dict(explicit), True
+
+    route_id = _nonempty_text(candidate.get("route_id"))
+    provenance = candidate.get("retrieval_provenance")
+    if isinstance(provenance, (list, tuple)):
+        for row in provenance:
+            if not isinstance(row, Mapping):
+                continue
+            if route_id and _nonempty_text(row.get("route_id")) == route_id:
+                return dict(row), True
+            if _nonempty_text(row.get("route_id")):
+                return dict(row), True
+
+    route_fields = {
+        key: candidate.get(key)
+        for key in (
+            "route_id",
+            "temporal_plan_id",
+            "requested_bucket",
+            "requested_start",
+            "requested_end_exclusive",
+        )
+        if candidate.get(key) not in (None, "")
+    }
+    return route_fields, bool(route_fields.get("route_id") or route_fields.get("requested_start"))
+
+
+def verify_candidate_publication(
+    plan: "TemporalRetrievalPlan",
+    candidate: Mapping[str, Any],
+) -> TemporalVerification:
+    """Verify one annual candidate using the single temporal owner.
+
+    This function classifies publication evidence into the plan's existing
+    buckets.  It never grants route coverage credit to general RSS/DDGS
+    candidates; route diagnostics remain owned by the route verifier.
+    """
+
+    if plan is None or plan.mode != MODE_BUCKETED_ABSOLUTE:
+        return TemporalVerification("not_applicable", None, "", "", "non_annual_mode")
+
+    raw_value, date_source, conflicting_values = _publication_evidence(candidate)
+    normalized = normalize_publication_date(raw_value)
+    if normalized is None:
+        return TemporalVerification("missing_date", None, date_source, "", "publication_evidence_missing_or_unparseable")
+
+    for conflicting_value in conflicting_values:
+        conflicting_date = normalize_publication_date(conflicting_value)
+        if conflicting_date is not None and conflicting_date != normalized:
+            return TemporalVerification(
+                "conflicting_date_evidence",
+                normalized,
+                date_source,
+                "",
+                "authoritative_publication_dates_disagree",
+            )
+
+    matching_buckets = [bucket for bucket in plan.buckets if bucket.contains(normalized)]
+    if len(matching_buckets) != 1:
+        return TemporalVerification(
+            "out_of_window",
+            normalized,
+            date_source,
+            "",
+            "publication_date_outside_annual_period",
+        )
+    matching_bucket = matching_buckets[0]
+
+    route_metadata, route_origin = _candidate_route_metadata(candidate)
+    if route_origin:
+        if not route_metadata.get("requested_start") or not route_metadata.get("requested_end_exclusive"):
+            return TemporalVerification(
+                "route_metadata_invalid",
+                normalized,
+                date_source,
+                "",
+                "route_requested_window_missing",
+            )
+        route_verification = verify_route_metadata(
+            route_metadata,
+            raw_value,
+            date_source=date_source,
+        )
+        if route_verification.status != "verified":
+            return TemporalVerification(
+                route_verification.status,
+                route_verification.normalized_publication_date,
+                route_verification.date_source,
+                "",
+                "route_publication_window_conflict",
+            )
+        if route_verification.verified_bucket != matching_bucket.label:
+            return TemporalVerification(
+                "route_bucket_conflict",
+                normalized,
+                date_source,
+                "",
+                "route_bucket_differs_from_publication_bucket",
+            )
+
+    return TemporalVerification(
+        "verified",
+        normalized,
+        date_source,
+        matching_bucket.label,
+        "route_verified" if route_origin else "candidate_publication_verified",
     )
 
 
