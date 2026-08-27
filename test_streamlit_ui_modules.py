@@ -14,7 +14,7 @@ import streamlit_sidebar_ui
 
 
 EXPECTED_SIDEBAR_SHA256 = (
-    "943a7335e97ddf84a1c5155d5b3cadb7272c7bb477d3a1126f143c3a9d01a9df"
+    "e2b112702324191e78ec8ce09ca12ceffeab76635cd06d2bac7b30bb73f86656"
 )
 EXPECTED_DASHBOARD_SHA256 = (
     "360a44823e3701510200ad38cd16cc4e2dfc04e05587750875e917ad79241a7f"
@@ -425,7 +425,6 @@ class StreamlitUiModuleTests(unittest.TestCase):
             "📚 規範追蹤",
             "國際追蹤範圍",
             "指定先進國家",
-            "開發者資訊顯示",
             "展覽快速版",
             "國際捷運技術期刊",
         ):

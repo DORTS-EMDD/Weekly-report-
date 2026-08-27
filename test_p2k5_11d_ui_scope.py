@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import report_postprocessor
 import run_config_service
+import streamlit_debug_ui
 import streamlit_report_ui
 import streamlit_sidebar_ui
 
@@ -110,6 +111,12 @@ class P2K5_11DScopeTests(unittest.TestCase):
         self.assertFalse(result.generate_requested)
         self.assertFalse(
             any(call["name"] == "form_submit_button" for call in recorder.calls)
+        )
+
+    def test_debug_display_has_an_independent_runtime_boundary(self):
+        self.assertIsNot(
+            streamlit_debug_ui.render_developer_debug_fragment,
+            streamlit_debug_ui._render_developer_debug_fragment,
         )
 
     def test_fragment_resolver_prefers_stable_and_supports_legacy_api(self):

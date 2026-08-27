@@ -176,6 +176,7 @@ from run_config_service import (
 )
 from streamlit_sidebar_ui import (
     SidebarContext,
+    format_runtime_version_label,
     render_sidebar,
     render_sidebar_fragment,
 )
@@ -185,7 +186,10 @@ from streamlit_report_ui import (
     render_main_dashboard as service_render_main_dashboard,
     render_report_display,
 )
-from streamlit_debug_ui import DebugUiContext, render_developer_debug_ui
+from streamlit_debug_ui import (
+    DebugDisplayFragmentContext,
+    render_developer_debug_fragment,
+)
 from diagnostics.p2_k5_12r_global_category import (
     build_major_accident_diagnostic,
     build_operational_diagnostic,
@@ -478,6 +482,7 @@ sidebar_context = SidebarContext(
 )
 with st.sidebar:
     sidebar_selection = render_sidebar_fragment(sidebar_context)
+    st.caption(format_runtime_version_label(current_runtime_version))
 if sidebar_selection is None:
     sidebar_selection = render_sidebar(sidebar_context)
 recipient_input = sidebar_selection.recipient_input
@@ -490,7 +495,6 @@ scope_mode = sidebar_selection.scope_mode
 selected_regions = sidebar_selection.selected_regions
 long_term_mode = sidebar_selection.long_term_mode
 include_research_supplement = sidebar_selection.include_research_supplement
-show_developer_info = sidebar_selection.show_developer_info
 demo_cache_mode = sidebar_selection.demo_cache_mode
 send_after_generate = sidebar_selection.send_after_generate
 
@@ -3802,14 +3806,13 @@ def build_developer_debug_payload(debug_info: dict, report_stats: dict, source_s
     )
 
 
-debug_info = st.session_state.get("latest_debug_info", {})
-render_developer_debug_ui(
-    DebugUiContext(
-        show_developer_info=show_developer_info,
-        report_stats=report_stats,
-        source_statuses=source_statuses,
-        display_run_config=display_run_config,
-        payload_builder=build_developer_debug_payload,
-        download_filename_builder=build_report_download_filename,
+with st.sidebar:
+    render_developer_debug_fragment(
+        DebugDisplayFragmentContext(
+            report_stats=report_stats,
+            source_statuses=source_statuses,
+            display_run_config=display_run_config,
+            payload_builder=build_developer_debug_payload,
+            download_filename_builder=build_report_download_filename,
+        )
     )
-)

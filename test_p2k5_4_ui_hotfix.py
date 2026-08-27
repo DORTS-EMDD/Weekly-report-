@@ -101,21 +101,85 @@ class P2K54UiHotfixTests(unittest.TestCase):
 
     def test_developer_toggle_is_outside_settings_form(self):
         recorder = FakeStreamlit(
-            responses={"show_developer_info": True},
+            session_state={"show_developer_info": True},
         )
         with patch.object(streamlit_sidebar_ui, "st", recorder):
             result = streamlit_sidebar_ui.render_sidebar(_sidebar_context())
 
         self.assertTrue(result.show_developer_info)
+        self.assertNotIn(
+            "show_developer_info",
+            recorder.session_state.get("_sidebar_settings_snapshot", {}),
+        )
         toggle_calls = [
             call
             for call in recorder.calls
             if call["name"] == "checkbox"
             and call["kwargs"].get("key") == "show_developer_info"
         ]
-        self.assertEqual(len(toggle_calls), 1)
-        self.assertEqual(toggle_calls[0]["receiver"], "sidebar")
-        self.assertNotEqual(toggle_calls[0]["receiver"], "form:1")
+        self.assertEqual(toggle_calls, [])
+
+    def test_debug_display_fragment_on_exposes_existing_debug_without_workflow(self):
+        recorder = FakeStreamlit(
+            session_state={
+                "latest_report_md": "completed report",
+                "latest_debug_info": {"selected": [{"id": 1}]},
+            },
+            responses={"show_developer_info": True},
+        )
+        context = streamlit_debug_ui.DebugDisplayFragmentContext(
+            report_stats={},
+            source_statuses=[],
+            display_run_config={"report_label": "週報"},
+            payload_builder=lambda debug, stats, statuses: {"debug": debug},
+            download_filename_builder=lambda prefix, extension, config: f"{prefix}.{extension}",
+        )
+        with patch.object(streamlit_debug_ui, "st", recorder):
+            streamlit_debug_ui._render_developer_debug_fragment(context)
+
+        self.assertEqual(recorder.session_state["latest_report_md"], "completed report")
+        self.assertIn("latest_debug_payload", recorder.session_state)
+        self.assertEqual(
+            [call for call in recorder.calls if call["name"] == "download_button"].__len__(),
+            1,
+        )
+        self.assertFalse(any(call["name"] == "button" for call in recorder.calls))
+
+    def test_debug_display_fragment_off_hides_only_debug(self):
+        recorder = FakeStreamlit(
+            session_state={
+                "latest_report_md": "completed report",
+                "latest_debug_info": {"selected": [{"id": 1}]},
+                "latest_debug_payload": {"debug": {"selected": [{"id": 1}]}},
+            },
+            responses={"show_developer_info": False},
+        )
+        context = streamlit_debug_ui.DebugDisplayFragmentContext(
+            report_stats={},
+            source_statuses=[],
+            display_run_config={"report_label": "週報"},
+            payload_builder=lambda debug, stats, statuses: {"debug": debug},
+            download_filename_builder=lambda prefix, extension, config: f"{prefix}.{extension}",
+        )
+        with patch.object(streamlit_debug_ui, "st", recorder):
+            streamlit_debug_ui._render_developer_debug_fragment(context)
+
+        self.assertEqual(recorder.session_state["latest_report_md"], "completed report")
+        self.assertFalse(any(call["name"] == "download_button" for call in recorder.calls))
+
+    def test_runtime_version_label_uses_existing_sha(self):
+        self.assertEqual(
+            streamlit_sidebar_ui.format_runtime_version_label(
+                {"git_commit_sha": "9f7f69c33c32e491025fff291025624e95ac4013"}
+            ),
+            "目前執行版本：9f7f69c",
+        )
+
+    def test_runtime_version_label_shows_unavailable_without_sha(self):
+        self.assertEqual(
+            streamlit_sidebar_ui.format_runtime_version_label({}),
+            "目前執行版本：無法取得",
+        )
 
     def test_debug_toggle_preserves_completed_report(self):
         recorder = FakeStreamlit(

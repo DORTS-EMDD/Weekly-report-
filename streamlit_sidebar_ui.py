@@ -1,6 +1,7 @@
 """Streamlit sidebar rendering with an explicit structured result."""
 
 from contextlib import nullcontext
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable
 
@@ -83,10 +84,17 @@ def build_sidebar_settings_snapshot(selection: SidebarSelection) -> dict:
         "scope_mode": selection.scope_mode,
         "selected_regions": list(selection.selected_regions),
         "include_research_supplement": bool(selection.include_research_supplement),
-        "show_developer_info": bool(selection.show_developer_info),
         "demo_cache_mode": bool(selection.demo_cache_mode),
         "send_after_generate": bool(selection.send_after_generate),
     }
+
+
+def format_runtime_version_label(runtime_version: Mapping[str, object]) -> str:
+    """Format the already-materialized runtime version for the sidebar footer."""
+
+    commit_sha = str(runtime_version.get("git_commit_sha") or "").strip()
+    short_sha = commit_sha[:7] if commit_sha else "無法取得"
+    return f"目前執行版本：{short_sha}"
 
 
 def render_sidebar(
@@ -366,12 +374,10 @@ def render_sidebar(
                 st.warning("⚠️ 請至少選擇一種新聞類型。")
             st.caption("🏛️ 台北市政府捷運工程局\nAI 競賽展示系統")
 
-        show_developer_info = st.checkbox(
-            "開發者資訊顯示",
-            value=False,
-            key="show_developer_info",
-            help="啟用後只顯示 AI 校正資料 JSON 下載按鈕，供排錯使用。",
-        )
+        # Display-only debug state is owned by its own fragment.  Preserve the
+        # session-state key and return field for compatibility with callers,
+        # but keep it out of run configuration and this fragment's widgets.
+        show_developer_info = bool(st.session_state.get("show_developer_info", False))
 
     selection = SidebarSelection(
         recipient_input=recipient_input,

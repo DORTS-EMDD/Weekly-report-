@@ -73,7 +73,7 @@ class V21OperationalTopicTests(unittest.TestCase):
                 and call["kwargs"].get("key") == "show_developer_info"
                 and call["receiver"] == "sidebar"
             },
-            {"show_developer_info"},
+            set(),
         )
         checkbox_labels = {
             call["args"][0]
