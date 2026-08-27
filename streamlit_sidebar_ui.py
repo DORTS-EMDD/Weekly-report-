@@ -16,6 +16,29 @@ VISIBLE_REPORT_TYPE_GROUPS = (
     ("營運動態", ("營運政策", "營運爭議", "service_opening")),
     ("機電標案", ("機電標案",)),
 )
+
+
+def _resolve_fragment_decorator(streamlit_module=None):
+    """Return the Streamlit fragment decorator supported by this runtime.
+
+    Fragment API compatibility intentionally lives in this module so the
+    sidebar has one owner for the rerun boundary.  Attribute lookup is used
+    instead of a broad exception fallback: an unsupported runtime should fail
+    explicitly rather than silently reverting to a full-script rerun.
+    """
+    runtime = st if streamlit_module is None else streamlit_module
+    fragment = getattr(runtime, "fragment", None)
+    if callable(fragment):
+        return fragment
+    experimental_fragment = getattr(runtime, "experimental_fragment", None)
+    if callable(experimental_fragment):
+        return experimental_fragment
+    raise RuntimeError(
+        "This Streamlit runtime does not provide st.fragment or "
+        "st.experimental_fragment; sidebar rerun isolation is unavailable."
+    )
+
+
 @dataclass(frozen=True)
 class SidebarContext:
     default_recipients: str
@@ -374,4 +397,6 @@ def _render_sidebar_fragment(context: SidebarContext) -> SidebarSelection:
     return render_sidebar(context, _inside_sidebar=True)
 
 
-render_sidebar_fragment = _render_sidebar_fragment
+# Keep the decorated entry point distinct from the implementation so the
+# actual Streamlit fragment boundary remains explicit and testable.
+render_sidebar_fragment = _resolve_fragment_decorator()(_render_sidebar_fragment)

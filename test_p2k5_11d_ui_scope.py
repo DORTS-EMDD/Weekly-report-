@@ -1,11 +1,14 @@
 import datetime
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import report_postprocessor
 import run_config_service
 import streamlit_report_ui
 import streamlit_sidebar_ui
+
+from test_streamlit_ui_modules import FakeStreamlit, _sidebar_context
 
 
 FIXED_DATE = datetime.date(2026, 8, 20)
@@ -81,11 +84,56 @@ class P2K5_11DScopeTests(unittest.TestCase):
         self.assertEqual(settings.active_regions, ["臺灣"])
         self.assertEqual(settings.news_scope, "domestic")
 
-    def test_sidebar_fragment_is_not_used_for_generation_state(self):
-        self.assertIs(
+    def test_sidebar_fragment_is_a_real_runtime_boundary(self):
+        self.assertIsNot(
             streamlit_sidebar_ui.render_sidebar_fragment,
             streamlit_sidebar_ui._render_sidebar_fragment,
         )
+
+        fragment_calls = []
+
+        def fragment_decorator(function):
+            def wrapped(*args, **kwargs):
+                fragment_calls.append(function.__name__)
+                return function(*args, **kwargs)
+
+            return wrapped
+
+        decorated = streamlit_sidebar_ui._resolve_fragment_decorator(
+            SimpleNamespace(fragment=fragment_decorator)
+        )(streamlit_sidebar_ui._render_sidebar_fragment)
+        recorder = FakeStreamlit()
+        with patch.object(streamlit_sidebar_ui, "st", recorder):
+            result = decorated(_sidebar_context())
+
+        self.assertEqual(fragment_calls, ["_render_sidebar_fragment"])
+        self.assertFalse(result.generate_requested)
+        self.assertFalse(
+            any(call["name"] == "form_submit_button" for call in recorder.calls)
+        )
+
+    def test_fragment_resolver_prefers_stable_and_supports_legacy_api(self):
+        stable = lambda function: function
+        experimental = lambda function: function
+        runtime = SimpleNamespace(
+            fragment=stable,
+            experimental_fragment=experimental,
+        )
+        self.assertIs(
+            streamlit_sidebar_ui._resolve_fragment_decorator(runtime),
+            stable,
+        )
+        legacy_runtime = SimpleNamespace(
+            fragment=None,
+            experimental_fragment=experimental,
+        )
+        self.assertIs(
+            streamlit_sidebar_ui._resolve_fragment_decorator(legacy_runtime),
+            experimental,
+        )
+        unsupported_runtime = SimpleNamespace(fragment=None, experimental_fragment=None)
+        with self.assertRaisesRegex(RuntimeError, "st.fragment"):
+            streamlit_sidebar_ui._resolve_fragment_decorator(unsupported_runtime)
 
     def test_generate_button_single_click_is_forwarded_once(self):
         context = streamlit_report_ui.MainDashboardContext(
