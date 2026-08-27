@@ -152,6 +152,63 @@ class ReportWorkflowServiceTests(unittest.TestCase):
         )
         self.assertNotIn("verified_bucket_missing", verified.get("selector_contract_failures", []))
 
+    def test_annual_unverified_candidate_survives_pre_a7_selector_boundary(self):
+        config = workflow_service.WorkflowConfig(
+            today=datetime.date(2026, 8, 24),
+            lookback_days=365,
+            selected_types=["技術新知"],
+            active_regions=[],
+            is_global_scope=True,
+            standards_enabled=False,
+            include_research_supplement=False,
+            fast_mode_enabled=False,
+            date_range="2025年08月24日 至 2026年08月24日",
+            report_title="annual unverified fixture",
+            report_scope_label="全球",
+            report_period_label="年報",
+        )
+        runtime = workflow_service.make_runtime(
+            config,
+            workflow_service.WorkflowDependencies(prefetch_enabled=False),
+        )
+        candidate = runtime._make_candidate(
+            title="Metro deploys CBTC moving-block control increasing capacity",
+            date="2026-08-21",
+            source="Example Professional",
+            url="https://example.com/annual-unverified-fixture",
+            snippet="The metro rail system deployed moving-block CBTC after testing, improving capacity and reliability.",
+            query="metro signalling",
+            region="美國",
+            source_type="DDGS",
+            raw_provenance={
+                "raw_title": "Metro deploys CBTC moving-block control increasing capacity",
+                "raw_url": "https://example.com/annual-unverified-fixture",
+                "raw_publication_value": "2026-08-21",
+                "search_provider": "DDGS",
+                "original_provider_metadata": {"date": "2026-08-21"},
+            },
+        )
+        runtime.parse_candidates = lambda _raw_rss, _raw_ddg: [candidate]
+        runtime.temporal_plan = runtime.temporal_router.build_plan(
+            TemporalRetrievalRequest(
+                report_date=config.today,
+                lookback_days=config.lookback_days,
+                selected_types=tuple(config.selected_types),
+            )
+        )
+
+        pool = runtime.prepare_candidate_pool("", "")
+
+        self.assertEqual(len(pool["model_candidates"]), 1)
+        admitted = pool["model_candidates"][0]
+        self.assertEqual(admitted["date_validation"], "valid_in_range")
+        self.assertEqual(admitted["date_verification_status"], "missing_date")
+        self.assertEqual(admitted.get("verified_bucket", ""), "")
+        self.assertNotIn(
+            "verified_bucket_missing",
+            admitted.get("selector_contract_failures", []),
+        )
+
     def test_automation_project_only_gate_and_technical_retention(self):
         config = _fixture_config()
         runtime = workflow_service.make_runtime(

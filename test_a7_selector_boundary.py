@@ -103,12 +103,12 @@ class A7SelectorBoundaryTests(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(stats["duplicate_count"], 0)
 
-    def test_a7_t6_annual_missing_verified_bucket_is_diagnostic_exclude(self):
+    def test_a7_t6_annual_unverified_candidate_keeps_pre_a7_survival(self):
         result = validate_selector_candidate(
             self.candidate(), temporal_mode=MODE_BUCKETED_ABSOLUTE
         )
-        self.assertFalse(result["valid"])
-        self.assertIn("verified_bucket_missing", result["selector_contract_failures"])
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["selector_contract_failures"], [])
 
     def test_a7_t6b_annual_verified_temporal_contract_is_consumed(self):
         result = validate_selector_candidate(
@@ -122,6 +122,69 @@ class A7SelectorBoundaryTests(unittest.TestCase):
         )
         self.assertTrue(result["valid"])
         self.assertEqual(result["selector_contract_failures"], [])
+
+    def test_a7_t6c_annual_unverified_status_is_truthful_and_not_fabricated(self):
+        candidate = self.candidate(date_verification_status="missing_date")
+        result = validate_selector_candidate(
+            candidate, temporal_mode=MODE_BUCKETED_ABSOLUTE
+        )
+        self.assertTrue(result["valid"])
+        self.assertEqual(candidate["date_verification_status"], "missing_date")
+        self.assertEqual(candidate.get("verified_bucket", ""), "")
+
+    def test_a7_t6d_missing_upstream_validation_is_not_recovered_by_selector(self):
+        candidate = self.candidate(
+            date_verification_status="missing_date",
+            page_parsed_publication_date="2026-08-20",
+            date_validation="",
+        )
+        result = validate_selector_candidate(
+            candidate, temporal_mode=MODE_BUCKETED_ABSOLUTE
+        )
+        self.assertFalse(result["valid"])
+        self.assertIn("date_validation_missing", result["selector_contract_failures"])
+        self.assertEqual(candidate["date_verification_status"], "missing_date")
+        self.assertEqual(candidate.get("verified_bucket", ""), "")
+
+    def test_a7_t6e_future_date_remains_rejected(self):
+        result = validate_selector_candidate(
+            self.candidate(date="2026-08-26", date_validation="future_date"),
+            temporal_mode=MODE_BUCKETED_ABSOLUTE,
+            today=datetime.date(2026, 8, 24),
+            lookback_days=365,
+        )
+        self.assertFalse(result["valid"])
+        self.assertIn("future_date", result["selector_contract_failures"])
+
+    def test_a7_t6f_out_of_range_date_remains_rejected(self):
+        result = validate_selector_candidate(
+            self.candidate(date="2025-08-01", date_validation="out_of_range_old"),
+            temporal_mode=MODE_BUCKETED_ABSOLUTE,
+            today=datetime.date(2026, 8, 24),
+            lookback_days=365,
+        )
+        self.assertFalse(result["valid"])
+        self.assertIn("date_out_of_range_old", result["selector_contract_failures"])
+
+    def test_a7_t6g_invalid_date_remains_rejected(self):
+        result = validate_selector_candidate(
+            self.candidate(date="not-a-date", date_validation="invalid_or_missing"),
+            temporal_mode=MODE_BUCKETED_ABSOLUTE,
+            today=datetime.date(2026, 8, 24),
+            lookback_days=365,
+        )
+        self.assertFalse(result["valid"])
+        self.assertIn("date_invalid_or_missing", result["selector_contract_failures"])
+
+    def test_a7_t6h_non_urban_rail_candidate_remains_rejected_upstream(self):
+        candidate = self.candidate(
+            title="City bus fleet procurement contract",
+            snippet="The city awarded a contract for a new bus fleet and depot operations.",
+            category_gates={"technology": True},
+        )
+        keep, reason = self.api["preliminary_filter_candidate"](candidate)
+        self.assertFalse(keep)
+        self.assertEqual(reason, "非捷運/都市軌道")
 
     def test_a7_t7_missing_category_is_diagnostic_exclude(self):
         result = validate_selector_candidate(
@@ -139,6 +202,24 @@ class A7SelectorBoundaryTests(unittest.TestCase):
     def test_a7_t9_recent_mode_does_not_require_verified_bucket(self):
         result = validate_selector_candidate(
             self.candidate(), temporal_mode=MODE_CONTINUOUS_RECENT
+        )
+        self.assertTrue(result["valid"])
+
+    def test_a7_t9b_seven_day_recent_survival_is_unchanged(self):
+        result = validate_selector_candidate(
+            self.candidate(),
+            temporal_mode=MODE_CONTINUOUS_RECENT,
+            today=datetime.date(2026, 8, 24),
+            lookback_days=7,
+        )
+        self.assertTrue(result["valid"])
+
+    def test_a7_t9c_thirty_day_recent_survival_is_unchanged(self):
+        result = validate_selector_candidate(
+            self.candidate(),
+            temporal_mode=MODE_CONTINUOUS_RECENT,
+            today=datetime.date(2026, 8, 24),
+            lookback_days=30,
         )
         self.assertTrue(result["valid"])
 

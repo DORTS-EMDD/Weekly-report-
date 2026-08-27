@@ -25,6 +25,20 @@ _FORMAL_CATEGORIES = {
 }
 
 
+_ANNUAL_INVALID_TEMPORAL_STATUSES = {
+    "out_of_window": "date_verification_out_of_window",
+    "conflicting_date_evidence": "date_verification_conflict",
+    "route_metadata_invalid": "date_verification_route_invalid",
+    "route_bucket_conflict": "date_verification_route_bucket_conflict",
+}
+
+_ANNUAL_DATE_VALIDATION_FAILURES = {
+    "invalid_or_missing": "date_invalid_or_missing",
+    "out_of_range_old": "date_out_of_range_old",
+    "future_date": "future_date",
+}
+
+
 def _as_date(value: object) -> _dt.date | None:
     if isinstance(value, _dt.datetime):
         return value.date()
@@ -66,10 +80,21 @@ def validate_selector_candidate(
         failures.append("canonical_event_id_missing")
 
     if temporal_mode == MODE_BUCKETED_ABSOLUTE:
-        if not str(candidate.get("verified_bucket") or "").strip():
+        temporal_status = str(candidate.get("date_verification_status") or "").strip()
+        verified_bucket = str(candidate.get("verified_bucket") or "").strip()
+        date_validation = str(candidate.get("date_validation") or "").strip()
+        if temporal_status == "verified" and not verified_bucket:
             failures.append("verified_bucket_missing")
-        if str(candidate.get("date_verification_status") or "").strip() != "verified":
-            failures.append("date_verification_not_verified")
+        elif verified_bucket and temporal_status != "verified":
+            failures.append("verified_bucket_status_inconsistent")
+        elif temporal_status in _ANNUAL_INVALID_TEMPORAL_STATUSES:
+            failures.append(_ANNUAL_INVALID_TEMPORAL_STATUSES[temporal_status])
+        if date_validation in _ANNUAL_DATE_VALIDATION_FAILURES:
+            failures.append(_ANNUAL_DATE_VALIDATION_FAILURES[date_validation])
+        elif not date_validation:
+            failures.append("date_validation_missing")
+        elif date_validation != "valid_in_range":
+            failures.append("date_validation_invalid")
     elif temporal_mode == MODE_CONTINUOUS_RECENT:
         if str(candidate.get("verified_bucket") or "").strip():
             failures.append("verified_bucket_not_applicable_in_recent_mode")
