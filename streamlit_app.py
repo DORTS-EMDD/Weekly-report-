@@ -88,7 +88,12 @@ from report_postprocessor import (
     strip_unselected_types_from_title as service_strip_unselected_types_from_title,
 )
 import report_postprocessor as report_postprocess_service
-from streamlit_report_state import record_failed_report_attempt
+from streamlit_report_state import (
+    begin_report_run,
+    build_maiagent_failure_diagnostics,
+    persist_current_run_debug_checkpoint,
+    record_failed_report_attempt,
+)
 from journal_service import (
     JournalServiceContext,
     _first_meta_content,
@@ -1945,6 +1950,148 @@ def call_maiagent_cloud(prompt: str) -> str:
     )
 
 
+def _persist_pre_maiagent_debug_checkpoint(
+    *,
+    run_config: dict,
+    candidate_pool: dict,
+    model_candidates: list[dict],
+    selected_candidates: list[dict],
+    selected_ids: list[int],
+    selection_debug: dict,
+    source_statuses: list[dict],
+    source_health_summary: dict,
+    report_prompt: str,
+    journal_candidates: list[dict],
+    journal_statuses: list[dict],
+    journal_excluded_candidates: list[dict],
+    search_count: int,
+    timings: dict,
+    long_term_coverage: dict,
+) -> tuple[dict, dict]:
+    """Persist truthful Python diagnostics before the first report-model call."""
+    pipeline_debug_stats = candidate_pool.get("pipeline_debug_stats") or {}
+    checkpoint_time = datetime.datetime.now().isoformat(timespec="seconds")
+    temporal_retrieval = candidate_pool.get(
+        "temporal_diagnostics",
+        pipeline_debug_stats.get("temporal_retrieval", {}),
+    )
+    prefetch_stats = candidate_pool.get("prefetch_stats", {})
+    checkpoint_stats = {
+        "raw_count": candidate_pool.get("raw_count", 0),
+        "deduped_count": candidate_pool.get("deduped_count", 0),
+        "filtered_count": candidate_pool.get("filtered_count", 0),
+        "ai_selected_count": len(selected_candidates),
+        "selected_count": len(selected_candidates),
+        "formal_count": 0,
+        "model_candidate_count": len(model_candidates),
+        "source_count": len(source_statuses),
+        "ddgs_query_count": search_count,
+        "ddgs_query_statuses": LAST_DDGS_QUERY_STATUSES,
+        "ddgs_search_summary": LAST_DDGS_SEARCH_SUMMARY,
+        "candidate_card_limit": candidate_pool.get(
+            "candidate_card_limit", len(candidate_pool.get("candidate_cards", []))
+        ),
+        "candidate_card_count": len(candidate_pool.get("candidate_cards", [])),
+        "candidate_pool_timings": candidate_pool.get("candidate_pool_timings", {}),
+        "source_health_summary": source_health_summary,
+        "pipeline_counts": pipeline_debug_stats.get("pipeline_counts", {}),
+        "pipeline_stages": pipeline_debug_stats.get("pipeline_stages", {}),
+        "prefetch_stats": prefetch_stats,
+        "temporal_retrieval": temporal_retrieval,
+        "annual_gate_pass_by_bucket": pipeline_debug_stats.get(
+            "annual_gate_pass_by_bucket", selection_debug.get("annual_gate_pass_by_bucket", {})
+        ),
+        "annual_selected_by_bucket": pipeline_debug_stats.get(
+            "annual_selected_by_bucket", selection_debug.get("annual_selected_by_bucket", {})
+        ),
+        "selection_method": "python_score_rules",
+        "long_term_coverage": long_term_coverage,
+        "run_config": run_config,
+        "report_generation_stage": "pre_maiagent_checkpoint",
+        "checkpoint_generated_at": checkpoint_time,
+        "report_validation_passed": None,
+        **timings,
+    }
+    checkpoint_debug_info = {
+        "run_config": run_config,
+        "raw_candidates": candidate_pool.get("raw_candidates", []),
+        "deduped_candidates": candidate_pool.get("deduped_candidates", []),
+        "filtered_candidates": candidate_pool.get("filtered_candidates", []),
+        "excluded_candidates": candidate_pool.get("excluded_candidates", []),
+        "model_candidates": model_candidates,
+        "candidate_cards": candidate_pool.get("candidate_cards", []),
+        "selected_candidates": selected_candidates,
+        "selected_ids": selected_ids,
+        "selection_debug": selection_debug,
+        "pipeline_debug_stats": pipeline_debug_stats,
+        "temporal_retrieval": temporal_retrieval,
+        "candidate_pool_timings": candidate_pool.get("candidate_pool_timings", {}),
+        "source_statuses": source_statuses,
+        "source_health_summary": source_health_summary,
+        "ddgs_query_statuses": LAST_DDGS_QUERY_STATUSES,
+        "ddgs_search_summary": LAST_DDGS_SEARCH_SUMMARY,
+        "ddgs_no_backend_result_queries": ddgs_queries_by_outcome(
+            LAST_DDGS_QUERY_STATUSES, "no_backend_result"
+        ),
+        "ddgs_all_results_basic_excluded_queries": ddgs_queries_by_outcome(
+            LAST_DDGS_QUERY_STATUSES, "all_results_basic_excluded"
+        ),
+        "ddgs_query_errors": ddgs_queries_by_outcome(LAST_DDGS_QUERY_STATUSES, "query_error"),
+        "ddgs_added_zero_queries": ddgs_queries_by_outcome(
+            LAST_DDGS_QUERY_STATUSES, "added_zero"
+        ),
+        "ddgs_success_with_raw_queries": ddgs_queries_by_outcome(
+            LAST_DDGS_QUERY_STATUSES, "success_with_raw"
+        ),
+        "ddgs_general_only_queries": ddgs_general_only_queries(LAST_DDGS_QUERY_STATUSES),
+        "prefetch_stats": prefetch_stats,
+        "journal_candidates": journal_candidates,
+        "journal_selected_candidates": journal_candidates,
+        "journal_statuses": journal_statuses,
+        "journal_source_statuses": journal_statuses,
+        "journal_excluded_candidates": journal_excluded_candidates,
+        "selection_prompt": "",
+        "selection_response": "",
+        "selection_method": "python_score_rules",
+        "ai_selection_response": "",
+        "python_unselected_stats": {},
+        "report_prompt": report_prompt,
+        "initial_raw_report": "",
+        "raw_report": "",
+        "initial_report_response": "",
+        "report_response": "",
+        "raw_report_candidate_ids": [],
+        "report_validation_passed": None,
+        "report_generation_stage": "pre_maiagent_checkpoint",
+        "checkpoint_generated_at": checkpoint_time,
+        "long_term_coverage": long_term_coverage,
+    }
+    checkpoint_context = DeveloperDebugContext(
+        current_run_config=run_config,
+        latest_run_config=run_config,
+        app_source_hash=st.session_state.get("_app_source_hash", current_app_hash),
+        latest_report_md="",
+        source_health_summary_builder=build_source_health_summary,
+        candidate_marker_remover=remove_internal_candidate_markers,
+        now_provider=datetime.datetime.now,
+    )
+    checkpoint_payload = service_build_developer_debug_payload(
+        checkpoint_debug_info,
+        checkpoint_stats,
+        source_statuses,
+        context=checkpoint_context,
+    )
+    persist_current_run_debug_checkpoint(
+        st.session_state,
+        debug_info=checkpoint_debug_info,
+        debug_payload=checkpoint_payload,
+        report_stats=checkpoint_stats,
+        source_statuses=source_statuses,
+        run_config=run_config,
+    )
+    return checkpoint_debug_info, checkpoint_stats
+
+
 def markdown_to_html(md: str) -> str:
     return streamlit_html_renderer(md, remove_internal_candidate_markers)
 
@@ -2545,6 +2692,7 @@ if generate_btn:
     run_snapshot = _build_run_snapshot()
     _ACTIVE_WORKFLOW_CONFIG = run_snapshot["workflow_config"]
     st.session_state["_active_run_snapshot"] = copy.deepcopy(run_snapshot)
+    begin_report_run(st.session_state)
     run_config = copy.deepcopy(run_snapshot["run_config"])
     if demo_cache_mode_enabled:
         progress_bar = progress_placeholder.progress(0.15)
@@ -2716,6 +2864,10 @@ if generate_btn:
 
         try:
             maiagent_call_count = 0
+            maiagent_attempt_count = 0
+            report_generation_stage = "python_selection"
+            checkpoint_debug_info = None
+            checkpoint_report_stats = None
             run_start = time.perf_counter()
             timings = {
                 "elapsed_seconds_total": 0.0,
@@ -2801,7 +2953,26 @@ if generate_btn:
             # Step 3：MaiAgent 第二階段正式報告
             status_text.text("正在進行報告撰寫")
             report_prompt = build_report_prompt(selected_candidates, journal_candidates, search_count)
+            checkpoint_debug_info, checkpoint_report_stats = _persist_pre_maiagent_debug_checkpoint(
+                run_config=run_config,
+                candidate_pool=candidate_pool,
+                model_candidates=model_candidates,
+                selected_candidates=selected_candidates,
+                selected_ids=selected_ids,
+                selection_debug=LAST_PYTHON_SELECTION_DEBUG,
+                source_statuses=source_statuses,
+                source_health_summary=source_health_summary,
+                report_prompt=report_prompt,
+                journal_candidates=journal_candidates,
+                journal_statuses=journal_statuses,
+                journal_excluded_candidates=journal_excluded_candidates,
+                search_count=search_count,
+                timings=timings,
+                long_term_coverage=long_term_coverage,
+            )
+            report_generation_stage = "maiagent"
             stage_start = time.perf_counter()
+            maiagent_attempt_count += 1
             raw_report = call_maiagent_cloud(report_prompt)
             initial_raw_report = raw_report
             report_id_validation_before_retry = service_validate_authoritative_report(
@@ -2818,6 +2989,7 @@ if generate_btn:
                     report_id_validation_before_retry,
                     selected_candidates=selected_candidates,
                 )
+                maiagent_attempt_count += 1
                 raw_report = call_maiagent_cloud(retry_prompt)
                 maiagent_call_count += 1
             report_id_validation_after_retry = service_validate_authoritative_report(
@@ -2979,6 +3151,7 @@ if generate_btn:
             progress_bar.progress(0.88)
 
             status_text.text("正在進行報告撰寫")
+            report_generation_stage = "post_maiagent"
             pdf_stage_start = time.perf_counter()
             postprocess_runtime = workflow_service.make_runtime(
                 _workflow_config(),
@@ -3532,6 +3705,41 @@ if generate_btn:
             status_text.error(str(e))
         except Exception as e:
             progress_placeholder.empty()
+            if checkpoint_debug_info is not None and checkpoint_report_stats is not None:
+                failure_debug_info, failure_report_stats = build_maiagent_failure_diagnostics(
+                    checkpoint_debug_info,
+                    checkpoint_report_stats,
+                    e,
+                    attempted_call_count=max(
+                        maiagent_attempt_count,
+                        maiagent_call_count,
+                    ),
+                    stage=report_generation_stage,
+                )
+                failure_debug_context = DeveloperDebugContext(
+                    current_run_config=run_config,
+                    latest_run_config=run_config,
+                    app_source_hash=st.session_state.get("_app_source_hash", current_app_hash),
+                    latest_report_md="",
+                    source_health_summary_builder=build_source_health_summary,
+                    candidate_marker_remover=remove_internal_candidate_markers,
+                    now_provider=datetime.datetime.now,
+                )
+                failure_debug_payload = service_build_developer_debug_payload(
+                    failure_debug_info,
+                    failure_report_stats,
+                    source_statuses,
+                    context=failure_debug_context,
+                )
+                record_failed_report_attempt(
+                    st.session_state,
+                    failure_debug_info["failure_diagnostics"],
+                    debug_info=failure_debug_info,
+                    debug_payload=failure_debug_payload,
+                    report_stats=failure_report_stats,
+                    source_statuses=source_statuses,
+                    run_config=run_config,
+                )
             status_text.error(f"❌ 發生錯誤：{e}")
             if is_maiagent_configuration_or_connectivity_error(e):
                 st.info("請確認 MaiAgent API Key、Chatbot ID 與 API Base 正確，且該雲端 API 可由目前執行環境連線。")
