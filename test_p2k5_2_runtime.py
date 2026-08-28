@@ -131,6 +131,11 @@ class P2K52RuntimeTests(unittest.TestCase):
                 "verified_bucket": verified_bucket,
                 "date_verification_status": "verified",
                 "normalized_publication_date": date_value,
+                # The provisional materialization has no supported category;
+                # enrichment is responsible for discovering the gate evidence.
+                "primary_category": "excluded",
+                "classification": "excluded",
+                "category_gates": {"technology": False},
             })
             candidates.append(candidate)
 
@@ -154,6 +159,14 @@ class P2K52RuntimeTests(unittest.TestCase):
             "Urban rail metro CBTC modernization",
             "2025-09-10",
         )
+        candidate.update({
+            "verified_bucket": "2025-Q3",
+            "date_verification_status": "verified",
+            "normalized_publication_date": "2025-09-10",
+            "primary_category": "excluded",
+            "classification": "excluded",
+            "category_gates": {"technology": False},
+        })
 
         def enrich(candidate, _session):
             candidate["snippet"] += " deploys system integration and improves reliability."
@@ -163,6 +176,133 @@ class P2K52RuntimeTests(unittest.TestCase):
             stats = api["prefetch_candidates_before_filter"]([candidate])
         self.assertEqual(stats["success_count"], 1)
         self.assertTrue(api["_passes_technical_triad"](candidate))
+
+    def test_annual_thin_verified_candidate_enters_without_final_gate_evidence(self):
+        api = _selector()
+        candidate = _candidate(
+            30,
+            "Toronto NST system update",
+            "Toronto urban rail",
+            "2025-12-10",
+        )
+        candidate.update({
+            "verified_bucket": "2025-Q4",
+            "date_verification_status": "verified",
+            "normalized_publication_date": "2025-12-10",
+            "primary_category": "excluded",
+            "classification": "excluded",
+            "category_gates": {"technology": False},
+        })
+        self.assertTrue(api["_is_annual_quality_rescue_candidate"](candidate))
+        self.assertTrue(api["_candidate_prefetch_signal"](candidate))
+
+    def test_annual_bucket_ownership_precedes_score_with_q4_q1_q2_q3(self):
+        api = _selector()
+        fixtures = [
+            (40, "2025-12-10", "2025-Q4"),
+            (41, "2026-01-10", "2026-Q1"),
+            (42, "2026-04-10", "2026-Q2"),
+            (43, "2026-07-10", "2026-Q3"),
+            (44, "2026-07-11", "2026-Q3"),
+            (45, "2026-07-12", "2026-Q3"),
+        ]
+        candidates = []
+        for identifier, date_value, verified_bucket in fixtures:
+            candidate = _candidate(
+                identifier,
+                f"Metro {identifier} event update",
+                "Urban rail metro",
+                date_value,
+            )
+            candidate.update({
+                "verified_bucket": verified_bucket,
+                "date_verification_status": "verified",
+                "normalized_publication_date": date_value,
+                "primary_category": "excluded",
+                "classification": "excluded",
+                "category_gates": {"technology": False},
+                # Make the crowded Q3 bucket score higher; score must not
+                # erase the first opportunity for older represented buckets.
+                "final_selection_score": (
+                    101 - (identifier - 43) if verified_bucket == "2026-Q3" else 40
+                ),
+                "python_score": (
+                    101 - (identifier - 43) if verified_bucket == "2026-Q3" else 40
+                ),
+            })
+            candidates.append(candidate)
+
+        attempted_ids = []
+
+        def enrich(candidate, _session):
+            attempted_ids.append(candidate["id"])
+            return {"status": "success", "chars": 120, "elapsed_seconds": 0.0, "reason": "fixture"}
+
+        with patch.object(article_selector, "_prefetch_candidate_article", side_effect=enrich):
+            stats = api["prefetch_candidates_before_filter"](candidates)
+
+        self.assertEqual(
+            attempted_ids[:4],
+            [40, 41, 42, 43],
+        )
+        self.assertEqual(
+            set(stats["annual_rescue_attempted_by_bucket"]),
+            {"2025-Q4", "2026-Q1", "2026-Q2", "2026-Q3"},
+        )
+
+    def test_annual_verified_low_value_notice_stays_out_of_rescue(self):
+        api = _selector()
+        candidate = _candidate(
+            46,
+            "Piccadilly line weekend timetable notice",
+            "Piccadilly line weekend timetable",
+            "2026-07-10",
+        )
+        candidate.update({
+            "verified_bucket": "2026-Q3",
+            "date_verification_status": "verified",
+            "normalized_publication_date": "2026-07-10",
+            "primary_category": "excluded",
+            "classification": "excluded",
+            "category_gates": {"technology": False},
+        })
+        self.assertFalse(api["_is_annual_quality_rescue_candidate"](candidate))
+
+    def test_annual_case_families_can_enter_before_enrichment(self):
+        api = _selector()
+        cases = [
+            (49, "Piccadilly line signalling renewal", "Piccadilly line urban rail"),
+            (50, "Madrid Metro Line 6 renewal", "Madrid Metro Line 6 urban rail"),
+            (51, "SMRT AI inspection trial", "Singapore MRT urban rail"),
+            (52, "DLR regenerative braking study", "London DLR urban rail"),
+        ]
+        for identifier, title, snippet in cases:
+            candidate = _candidate(identifier, title, snippet, "2026-04-10")
+            candidate.update({
+                "verified_bucket": "2026-Q2",
+                "date_verification_status": "verified",
+                "normalized_publication_date": "2026-04-10",
+                "primary_category": "excluded",
+                "classification": "excluded",
+                "category_gates": {"technology": False},
+            })
+            with self.subTest(title=title):
+                self.assertTrue(api["_is_annual_quality_rescue_candidate"](candidate))
+
+    def test_annual_candidate_with_existing_category_evidence_skips_rescue(self):
+        api = _selector()
+        candidate = _candidate(
+            53,
+            "Metro CBTC modernization deployment",
+            "Urban rail metro CBTC modernization deploys system integration and improves reliability.",
+            "2026-04-10",
+        )
+        candidate.update({
+            "verified_bucket": "2026-Q2",
+            "date_verification_status": "verified",
+            "normalized_publication_date": "2026-04-10",
+        })
+        self.assertFalse(api["_is_annual_quality_rescue_candidate"](candidate))
 
     def test_weak_annual_candidate_is_not_rescued(self):
         api = _selector()

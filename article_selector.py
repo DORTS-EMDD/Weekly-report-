@@ -1664,8 +1664,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return False
         if candidate.get("search_family") == "forward_technology":
             return _is_forward_enrichment_candidate(candidate)
-        if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
-            return True
+        if lookback_int >= 365:
+            # Annual candidates must cross the temporal owner's verified
+            # bucket contract before entering any general rescue lane.  Do
+            # not let the weekly/monthly high-priority heuristics bypass
+            # annual coverage ownership.
+            return _is_annual_quality_rescue_candidate(candidate)
         if _is_high_priority_rescue_candidate(candidate) or _is_procurement_rescue_candidate(candidate):
             return True
         source = candidate.get("source", "")
@@ -1717,23 +1721,58 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _is_annual_quality_rescue_candidate(candidate: dict) -> bool:
-        """Prioritize older, evidence-bearing candidates without relaxing gates."""
-        if candidate.get("source_tier") not in {"A_official", "B_professional"}:
+        """Admit annual evidence-deficit candidates using upstream facts only.
+
+        The historical function name is retained because it is part of the
+        selector debug API.  Eligibility must not depend on the technical,
+        action, or system evidence that the enrichment request is intended to
+        discover.  Those category gates are re-evaluated after enrichment by
+        ``WorkflowRuntime``.
+        """
+        if candidate.get("source_tier") not in {"A_official", "B_professional", "C_media"}:
             return False
-        if not _candidate_date_obj(candidate.get("date", "")) or not _has_source_reference(candidate):
+        # Temporal verification is owned by report_workflow_service.  Trust
+        # its contract instead of parsing or deriving dates again here.
+        if candidate.get("date_verification_status") != "verified":
             return False
+        if not str(candidate.get("verified_bucket", "") or "").strip():
+            return False
+        if not _has_source_reference(candidate):
+            return False
+
         text = _candidate_selection_text(candidate)
-        if not _has_clear_urban_rail_context(text, candidate.get("source", "")):
+        source = candidate.get("source", "")
+        if not _has_clear_urban_rail_context(text, source):
             return False
-        if _contains_any_term(text, RESCUE_LOW_VALUE_TERMS):
+
+        # Keep legitimate low-value exclusions at the rescue boundary.  These
+        # checks are intentionally independent of final category evidence.
+        if any((
+            candidate.get("source_tier") == "D_proxy_low_value",
+            _contains_any_term(text, FINANCIAL_MARKET_TERMS),
+            _is_airport_people_mover_only_text(text, source),
+            _contains_any_term(text, RESCUE_LOW_VALUE_TERMS),
+            _contains_any_term(text, LOW_QUALITY_CONTENT_TERMS + LOW_INFORMATION_PAGE_TERMS + HARD_LOW_VALUE_CANDIDATE_TERMS),
+            _is_generic_ai_marketing(candidate),
+            _is_low_value_service_notice_text(text) and not _has_high_value_operational_detail(text),
+            candidate.get("page_type") in {
+                "home_page", "index_or_search_page", "login_or_policy_page",
+                "route_schedule_or_bus_page", "ticketing_promotion_or_product_page",
+                "event_or_recruiting_page", "financial_market_page", "low_information_page",
+                "airport_people_mover_page",
+            },
+        )):
             return False
-        high_value_terms = (
-            TECH_NEWS_REQUIRED_TERMS
-            + STRONG_TECHNICAL_DETAIL_TERMS
-            + SUBSTANTIVE_TECHNICAL_DETAIL_TERMS
-            + ["rams", "reliability", "availability", "maintainability", "safety case", "urban rail"]
+
+        # Rescue is for an evidence deficit or failed provisional material-
+        # ization.  A candidate that already has a supported category should
+        # proceed through the normal path and must not consume rescue budget.
+        gates = candidate.get("category_gates") or {}
+        no_category_gate = (
+            candidate.get("primary_category") in {None, "", "excluded"}
+            or not any(bool(value) for value in gates.values())
         )
-        return _contains_any_term(text, high_value_terms)
+        return bool(no_category_gate or _information_quality_issue(candidate))
 
 
     def _is_high_priority_rescue_candidate(candidate: dict) -> bool:
@@ -1901,8 +1940,12 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         stats["procurement_rescue_candidate_count"] = len(procurement_eligible)
         stats["rescue_enrichment_attempted_count"] = 0
         stats["rescue_enrichment_success_count"] = 0
+        # In annual mode the general rescue population is the complete set of
+        # verified, evidence-deficit candidates.  Procurement remains a
+        # bounded lane, but it participates in the same bucket ownership pass
+        # so one lane cannot consume all opportunities from a quarter.
         annual_rescue_candidates = [
-            candidate for candidate in non_procurement_general_eligible
+            candidate for candidate in general_eligible
             if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate)
         ]
         stats["annual_rescue_candidate_count"] = len(annual_rescue_candidates)
@@ -1976,52 +2019,45 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         for bucket in annual_candidates_by_bucket:
             annual_candidates_by_bucket[bucket].sort(key=_rescue_priority)
 
-        ordered_general: list[dict] = sorted(
-            procurement_eligible,
-            key=_rescue_priority,
-        )[:procurement_budget]
-        remaining_general_budget = max(0, general_budget - len(ordered_general))
+        ordered_general: list[dict] = []
         if lookback_int >= 365 and annual_candidates_by_bucket:
             buckets = sorted(annual_candidates_by_bucket)
-            base_budget, remainder = divmod(remaining_general_budget, len(buckets))
-            bucket_budgets = {
-                bucket: base_budget + (1 if index < remainder else 0)
-                for index, bucket in enumerate(buckets)
-            }
-            while len(ordered_general) < general_budget and any(bucket_budgets.values()):
+            procurement_selected = 0
+            # Round-robin over bucket-owned queues.  The queue is score-sorted
+            # only within its own bucket; allocation order owns the coverage
+            # decision and therefore cannot be erased by a global score sort.
+            while len(ordered_general) < general_budget and any(annual_candidates_by_bucket.values()):
                 added = False
                 for bucket in buckets:
-                    if bucket_budgets[bucket] <= 0:
-                        continue
                     bucket_candidates = annual_candidates_by_bucket[bucket]
-                    if not bucket_candidates:
-                        bucket_budgets[bucket] = 0
-                        continue
-                    ordered_general.append(bucket_candidates.pop(0))
-                    bucket_budgets[bucket] -= 1
-                    added = True
+                    while bucket_candidates:
+                        candidate = bucket_candidates.pop(0)
+                        is_procurement = candidate.get("rescue_type") == "procurement_rescue_candidate"
+                        if is_procurement and procurement_selected >= procurement_budget:
+                            # Procurement has its existing cap.  Discarding a
+                            # capped item here lets a non-procurement item in
+                            # the same bucket retain its opportunity.
+                            continue
+                        ordered_general.append(candidate)
+                        if is_procurement:
+                            procurement_selected += 1
+                        added = True
+                        break
                     if len(ordered_general) >= general_budget:
                         break
                 if not added:
                     break
-            if len(ordered_general) < general_budget:
-                remaining_annual = [
-                    candidate
-                    for candidates_in_bucket in annual_candidates_by_bucket.values()
-                    for candidate in candidates_in_bucket
-                ]
-                ordered_general.extend(
-                    sorted(remaining_annual, key=_rescue_priority)[: general_budget - len(ordered_general)]
-                )
-        ordered_general.extend(
-            sorted(
-                [candidate for candidate in non_procurement_general_eligible if candidate not in ordered_general],
-                key=lambda item: (
-                    0 if lookback_int >= 365 and _is_annual_quality_rescue_candidate(item) else 1,
-                    _rescue_priority(item),
-                ),
-            )[: max(0, general_budget - len(ordered_general))]
-        )
+        else:
+            ordered_general = sorted(
+                procurement_eligible,
+                key=_rescue_priority,
+            )[:procurement_budget]
+            ordered_general.extend(
+                sorted(
+                    [candidate for candidate in non_procurement_general_eligible if candidate not in ordered_general],
+                    key=_rescue_priority,
+                )[: max(0, general_budget - len(ordered_general))]
+            )
         ordered_forward = sorted(forward_eligible, key=_forward_rescue_priority)[:forward_budget]
         ordered_eligible = ordered_forward + ordered_general
         selected_ids = {id(candidate) for candidate in ordered_eligible}
