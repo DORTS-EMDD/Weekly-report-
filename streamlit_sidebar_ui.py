@@ -97,6 +97,20 @@ def format_runtime_version_label(runtime_version: Mapping[str, object]) -> str:
     return f"目前執行版本：{short_sha}"
 
 
+def _handle_lookback_days_change() -> None:
+    """Synchronize idle full-app state without interrupting an active run.
+
+    The selectbox remains the only editable period owner.  A fragment widget
+    callback can request an app-scoped rerun while idle, but an active run is
+    deliberately isolated behind ``_active_run_snapshot`` and reconciled only
+    after that immutable snapshot has completed.
+    """
+    if st.session_state.get("_active_run_snapshot") is not None:
+        st.session_state["_period_sync_deferred"] = True
+        return
+    st.rerun(scope="app")
+
+
 def render_sidebar(
     context: SidebarContext,
     *,
@@ -203,6 +217,7 @@ def render_sidebar(
                 "報告期間",
                 visible_lookback_options,
                 key="lookback_days_state",
+                on_change=_handle_lookback_days_change,
                 format_func=lambda d: (
                     f"{d} 天（{context.report_period_labels.get(int(d), '報告')}）"
                 ),

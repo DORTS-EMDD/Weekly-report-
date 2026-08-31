@@ -657,6 +657,44 @@ def _build_run_snapshot() -> dict:
     }
 
 
+def _begin_active_run(run_snapshot: dict) -> dict:
+    """Install one immutable execution snapshot and clear prior diagnostics."""
+    global _ACTIVE_WORKFLOW_CONFIG
+
+    _ACTIVE_WORKFLOW_CONFIG = copy.deepcopy(run_snapshot["workflow_config"])
+    st.session_state["_active_run_snapshot"] = copy.deepcopy(run_snapshot)
+    begin_report_run(st.session_state)
+    return copy.deepcopy(run_snapshot["run_config"])
+
+
+def _finish_active_run(run_snapshot: dict) -> bool:
+    """Clear active execution state and report whether the UI needs one rerun."""
+    global _ACTIVE_WORKFLOW_CONFIG
+
+    active_snapshot = st.session_state.get("_active_run_snapshot")
+    completed_snapshot = (
+        active_snapshot if isinstance(active_snapshot, dict) else run_snapshot
+    )
+    try:
+        completed_period = int(
+            completed_snapshot.get("lookback_days", lookback_days)
+        )
+    except (TypeError, ValueError):
+        completed_period = int(lookback_days)
+    try:
+        editable_period = int(
+            st.session_state.get("lookback_days_state", lookback_days)
+        )
+    except (TypeError, ValueError):
+        editable_period = int(lookback_days)
+    period_changed_during_run = editable_period != completed_period
+
+    st.session_state.pop("_active_run_snapshot", None)
+    st.session_state.pop("_period_sync_deferred", None)
+    _ACTIVE_WORKFLOW_CONFIG = None
+    return period_changed_during_run
+
+
 def get_report_type_code(report_label: str, lookback_days: int) -> str:
     return service_get_report_type_code(report_label, lookback_days)
 
@@ -2729,15 +2767,12 @@ def send_current_report_email(report_md: str, status_target=None, progress_targe
 
 if generate_btn:
     run_snapshot = _build_run_snapshot()
-    _ACTIVE_WORKFLOW_CONFIG = run_snapshot["workflow_config"]
-    st.session_state["_active_run_snapshot"] = copy.deepcopy(run_snapshot)
-    begin_report_run(st.session_state)
-    run_config = copy.deepcopy(run_snapshot["run_config"])
     if demo_cache_mode_enabled:
-        progress_bar = progress_placeholder.progress(0.15)
-        status_text = status_placeholder
+        run_config = _begin_active_run(run_snapshot)
 
         try:
+            status_text = status_placeholder
+            progress_bar = progress_placeholder.progress(0.15)
             run_start = time.perf_counter()
             status_text.text("正在進行報告撰寫")
             report_text, pdf_bytes, demo_meta = load_demo_report_cache()
@@ -2879,6 +2914,9 @@ if generate_btn:
         except Exception as e:
             progress_placeholder.empty()
             status_text.error(f"❌ 展覽快速版載入失敗：{e}")
+        finally:
+            if _finish_active_run(run_snapshot):
+                st.rerun(scope="app")
     elif not maiagent_api_key:
         status_placeholder.error("❌ MaiAgent API Key 未設定，請至 Streamlit Cloud App Settings → Secrets 填入 MAIAGENT_API_KEY")
     elif not maiagent_chatbot_id:
@@ -2888,8 +2926,7 @@ if generate_btn:
     elif not is_global_scope and not active_regions:
         status_placeholder.error("❌ 指定先進國家/地區模式下，請至少勾選一個國家/地區。")
     else:
-        progress_bar = progress_placeholder.progress(0.10)
-        status_text = status_placeholder
+        run_config = _begin_active_run(run_snapshot)
 
         class ProgressRange:
             def __init__(self, progress_bar_obj, start: float, end: float):
@@ -2902,6 +2939,8 @@ if generate_btn:
                 self.progress_bar_obj.progress(self.start + (self.end - self.start) * value)
 
         try:
+            status_text = status_placeholder
+            progress_bar = progress_placeholder.progress(0.10)
             maiagent_call_count = 0
             maiagent_attempt_count = 0
             report_generation_stage = "python_selection"
@@ -3782,6 +3821,9 @@ if generate_btn:
             status_text.error(f"❌ 發生錯誤：{e}")
             if is_maiagent_configuration_or_connectivity_error(e):
                 st.info("請確認 MaiAgent API Key、Chatbot ID 與 API Base 正確，且該雲端 API 可由目前執行環境連線。")
+        finally:
+            if _finish_active_run(run_snapshot):
+                st.rerun(scope="app")
 
 # ── 報告顯示區 ──────────────────────────────────────
 report_display = render_report_display(
