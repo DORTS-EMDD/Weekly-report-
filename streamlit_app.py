@@ -317,6 +317,30 @@ def get_app_source_hash() -> str:
         return "unknown"
 
 
+_RUNTIME_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,64}$")
+
+
+def _runtime_revision_from_version(
+    runtime_version: object,
+    fallback_fingerprint: str = "",
+) -> str:
+    """Resolve one runtime revision identity with Git SHA as the authority."""
+    if isinstance(runtime_version, dict):
+        git_commit_sha = str(runtime_version.get("git_commit_sha") or "").strip()
+        if _RUNTIME_SHA_PATTERN.fullmatch(git_commit_sha):
+            return git_commit_sha.lower()
+    return str(fallback_fingerprint or "").strip()
+
+
+def _runtime_revision_changed(
+    previous_runtime_revision: object,
+    current_runtime_revision: object,
+) -> bool:
+    previous = str(previous_runtime_revision or "").strip()
+    current = str(current_runtime_revision or "").strip()
+    return bool(previous and current and previous != current)
+
+
 def clear_old_report_state() -> None:
     keys_to_clear = [
         "latest_report_md", "latest_report_html", "latest_pdf",
@@ -331,11 +355,15 @@ def clear_old_report_state() -> None:
 
 
 current_app_hash = get_app_source_hash()
-previous_app_hash = st.session_state.get("_app_source_hash")
 current_runtime_version = build_runtime_version()
 current_runtime_fingerprint = build_runtime_module_fingerprint(current_runtime_version)
+current_runtime_revision = _runtime_revision_from_version(
+    current_runtime_version,
+    current_runtime_fingerprint,
+)
 previous_runtime_fingerprint = st.session_state.get("_runtime_module_fingerprint")
-if not previous_runtime_fingerprint:
+previous_runtime_revision = st.session_state.get("_runtime_revision")
+if not previous_runtime_revision:
     latest_debug_payload = st.session_state.get("latest_debug_payload")
     if not isinstance(latest_debug_payload, dict):
         latest_debug_payload = {}
@@ -343,14 +371,21 @@ if not previous_runtime_fingerprint:
         st.session_state.get("_runtime_version")
         or latest_debug_payload.get("run_info", {}).get("runtime_version", {})
     )
-    previous_runtime_fingerprint = build_runtime_module_fingerprint(previous_runtime_version)
-runtime_changed = (
-    bool(previous_app_hash and previous_app_hash != current_app_hash)
-    or bool(previous_runtime_fingerprint and previous_runtime_fingerprint != current_runtime_fingerprint)
+    previous_runtime_fingerprint = previous_runtime_fingerprint or build_runtime_module_fingerprint(
+        previous_runtime_version
+    )
+    previous_runtime_revision = _runtime_revision_from_version(
+        previous_runtime_version,
+        previous_runtime_fingerprint,
+    )
+runtime_changed = _runtime_revision_changed(
+    previous_runtime_revision,
+    current_runtime_revision,
 )
 st.session_state["_app_source_hash"] = current_app_hash
 st.session_state["_runtime_module_fingerprint"] = current_runtime_fingerprint
 st.session_state["_runtime_version"] = current_runtime_version
+st.session_state["_runtime_revision"] = current_runtime_revision
 if runtime_changed:
     clear_old_report_state()
     st.session_state["_runtime_change_notice_pending"] = True
