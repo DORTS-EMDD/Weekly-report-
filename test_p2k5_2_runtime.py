@@ -10,14 +10,14 @@ import streamlit_sidebar_ui
 from test_streamlit_ui_modules import FakeStreamlit, _sidebar_context
 
 
-def _selector(lookback=365):
+def _selector(lookback=365, *, active_regions=None, is_global_scope=True):
     return article_selector.build_selector_api(
         selected_types=["技術新知"],
-        active_regions=[],
+        active_regions=[] if active_regions is None else active_regions,
         lookback_days=lookback,
         lookback_int=lookback,
         fast_mode_enabled=False,
-        is_global_scope=True,
+        is_global_scope=is_global_scope,
         today=datetime.date(2026, 8, 18),
         news_scope="both",
         _search_family_from_query=lambda _query: "technology",
@@ -195,6 +195,104 @@ class P2K52RuntimeTests(unittest.TestCase):
         })
         self.assertTrue(api["_is_annual_quality_rescue_candidate"](candidate))
         self.assertTrue(api["_candidate_prefetch_signal"](candidate))
+
+    def test_annual_hard_known_pages_do_not_consume_rescue_slots(self):
+        api = _selector()
+        fixtures = [
+            (60, "Metro service status", "Metro service status and alerts", "/status"),
+            (61, "Metro search results", "Search results for metro technology", "/search"),
+            (62, "Metro route map", "Metro route map and station map", "/map"),
+            (63, "Metro market analysis report", "Financial market analysis report", "/reports/market"),
+            (64, "Metro open day promotion", "Open day promotion and game day travel information", "/events/open-day"),
+        ]
+        for identifier, title, snippet, path in fixtures:
+            candidate = _candidate(identifier, title, snippet, "2026-04-10")
+            candidate.update({
+                "url": f"https://fixture.example.test{path}",
+                "source_href": f"https://fixture.example.test{path}",
+                "verified_bucket": "2026-Q2",
+                "date_verification_status": "verified",
+                "normalized_publication_date": "2026-04-10",
+                "primary_category": "excluded",
+                "classification": "excluded",
+                "category_gates": {"technology": False},
+            })
+            with self.subTest(title=title):
+                self.assertFalse(api["_is_annual_quality_rescue_candidate"](candidate))
+
+    def test_annual_out_of_scope_resolved_region_does_not_consume_slot(self):
+        api = _selector(active_regions=["英國"], is_global_scope=False)
+        candidate = _candidate(
+            65,
+            "New York Metro braking failure during wet weather",
+            "A genuine urban rail braking failure was reported during wet weather.",
+            "2026-04-10",
+        )
+        candidate.update({
+            "resolved_region": "美國",
+            "verified_bucket": "2026-Q2",
+            "date_verification_status": "verified",
+            "normalized_publication_date": "2026-04-10",
+            "primary_category": "excluded",
+            "classification": "excluded",
+            "category_gates": {"technology": False},
+        })
+        self.assertFalse(api["_annual_rescue_scope_eligible"](candidate))
+        self.assertFalse(api["_is_annual_quality_rescue_candidate"](candidate))
+
+    def test_annual_gate_failure_alone_does_not_disqualify_rescue(self):
+        api = _selector()
+        candidate = _candidate(
+            66,
+            "DLR wet-weather braking failure disrupts service",
+            "London DLR reported a braking failure during wet weather and emergency checks.",
+            "2026-04-10",
+        )
+        candidate.update({
+            "verified_bucket": "2026-Q2",
+            "date_verification_status": "verified",
+            "normalized_publication_date": "2026-04-10",
+            "primary_category": "技術新知",
+            "classification": "技術新知",
+            "category_gates": {"technology": False},
+        })
+        self.assertTrue(api["_is_annual_quality_rescue_candidate"](candidate))
+
+    def test_annual_equal_score_prefers_event_evidence_over_retrieval_order(self):
+        api = _selector()
+        strong = _candidate(
+            67,
+            "Metro train collision injures passengers",
+            "Two urban rail trains collided and passengers were evacuated.",
+            "2026-04-10",
+        )
+        generic = _candidate(
+            68,
+            "Metro project update",
+            "Urban rail metro project update was announced.",
+            "2026-04-11",
+        )
+        for candidate in (strong, generic):
+            candidate.update({
+                "verified_bucket": "2026-Q2",
+                "date_verification_status": "verified",
+                "normalized_publication_date": candidate["date"],
+                "primary_category": "excluded",
+                "classification": "excluded",
+                "category_gates": {"technology": False},
+                "python_score": 35,
+                "final_selection_score": 35,
+                "candidate_flags": [],
+            })
+        attempted_ids = []
+
+        def enrich(candidate, _session):
+            attempted_ids.append(candidate["id"])
+            return {"status": "success", "chars": 120, "elapsed_seconds": 0.0, "reason": "fixture"}
+
+        with patch.object(article_selector, "_prefetch_candidate_article", side_effect=enrich):
+            api["prefetch_candidates_before_filter"]([generic, strong])
+        self.assertEqual(attempted_ids[:2], [67, 68])
 
     def test_annual_bucket_ownership_precedes_score_with_q4_q1_q2_q3(self):
         api = _selector()

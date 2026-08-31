@@ -1720,6 +1720,132 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return bool(title_signal or text_signal)
 
 
+    def _annual_rescue_scope_eligible(candidate: dict) -> bool:
+        """Consume the upstream resolved scope without creating a new owner."""
+        if is_global_scope:
+            return True
+        region = str(
+            candidate.get("resolved_region")
+            or candidate.get("region")
+            or "未判定"
+        ).strip()
+        return bool(region and region_matches_selected_regions(region, active_regions))
+
+
+    def _annual_rescue_hard_exclusion_reason(candidate: dict) -> str:
+        """Return an existing, pre-enrichment hard-quality exclusion reason.
+
+        Annual rescue is intentionally allowed to admit evidence-deficit
+        articles, but it must not spend a fetch on a page whose own metadata
+        already proves that it is a portal, status/index page, market report,
+        non-event, or non-urban-rail item.  This helper only composes selector
+        facts that are already authoritative; it does not evaluate category
+        gates or invent an annual-specific score.
+        """
+        if not _annual_rescue_scope_eligible(candidate):
+            return "out_of_scope_region"
+        text = _candidate_selection_text(candidate)
+        source = str(candidate.get("source", "") or "")
+        page_type = str(candidate.get("page_type", "") or "").strip()
+        if not page_type:
+            page_type, _ = _candidate_page_type(candidate)
+        if page_type != "news_article":
+            return f"page_type:{page_type}"
+        if _is_financial_market_candidate(candidate) or _contains_any_term(
+            text,
+            FINANCIAL_MARKET_TERMS + ["market analysis", "market report", "financial report"],
+        ):
+            return "market_analysis_or_financial_report"
+        if _has_general_rail_exclusion(candidate):
+            return "general_rail_or_non_urban"
+        if _has_procurement_list_notice(candidate):
+            return "procurement_list_notice"
+        if _is_airport_people_mover_only_text(text, source):
+            return "airport_people_mover_only"
+        if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
+            return "security_or_crime_without_rail_impact"
+        if _is_generic_ai_marketing(candidate):
+            return "generic_ai_marketing"
+        if _contains_any_term(text, RESCUE_LOW_VALUE_TERMS):
+            return "rescue_low_value_content"
+        if _is_project_only_technical_candidate(candidate):
+            return "project_only_without_operational_detail"
+        if _contains_any_term(text, NON_URBAN_HARD_EXCLUDE_TERMS) and not _contains_any_term(
+            text,
+            URBAN_RAIL_UNAMBIGUOUS_MODE_TERMS + URBAN_RAIL_OPERATOR_TERMS,
+        ):
+            return "non_urban_transport"
+        if _contains_any_term(
+            text,
+            LOW_REPORT_VALUE_TERMS
+            + LOW_QUALITY_CONTENT_TERMS
+            + LOW_INFORMATION_PAGE_TERMS
+            + HARD_LOW_VALUE_CANDIDATE_TERMS,
+        ):
+            return "known_low_information_or_non_event"
+        path_text = " ".join(
+            urlparse(value or "").path.casefold()
+            for value in (candidate.get("url", ""), candidate.get("source_href", ""))
+        )
+        if any(marker in path_text for marker in LOW_INFORMATION_PATH_MARKERS + [
+            "/status", "/statuses", "/status-page", "/statuspage",
+        ]):
+            return "low_information_path"
+        if _contains_any_term(
+            text,
+            ["service status", "network status", "station status", "status page", "map page", "route map"],
+        ):
+            return "status_or_map_page"
+        return ""
+
+
+    def _annual_rescue_quality_priority(item: dict) -> tuple:
+        """Order equal-score annual candidates using existing quality facts.
+
+        ``final_selection_score`` is deliberately absent: a saturated score
+        carries no information in this lane.  The tuple uses categorical facts
+        already owned by the selector/materializer, followed by stable source
+        and date ordering for deterministic ties.
+        """
+        text = _candidate_selection_text(item)
+        flags = set(item.get("candidate_flags", []) or [])
+        event_facts = flags.intersection({
+            "incident_or_safety_signal", "technical_operation_incident",
+            "service_opening_gate", "electromechanical_procurement_gate",
+        }) or _contains_any_term(
+            text,
+            ACCIDENT_SIGNAL_TERMS
+            + SAFETY_INCIDENT_DETAIL_TERMS
+            + EQUIPMENT_FAILURE_TERMS
+            + HIGH_IMPACT_ACCIDENT_TERMS
+            + SYSTEM_DISRUPTION_TERMS,
+        )
+        technical_facts = flags.intersection({
+            "technical_or_system_detail", "core_metro_technical_content",
+            "trusted_title_technical_signal", "high_value_policy",
+        }) or _candidate_has_high_value_operational_detail(item, text)
+        page_type = str(item.get("page_type", "") or "").strip()
+        if not page_type:
+            page_type, _ = _candidate_page_type(item)
+        score = int(item.get("final_selection_score", item.get("python_score", 0)) or 0)
+        # The production annual rescue pool is saturated at score 35.  Keep
+        # a non-saturated score as a deterministic tie-breaker for legacy
+        # callers, but never let the saturated value decide quality order.
+        score_key = -score if score != 35 else 0
+        # Lower values sort first: real event evidence is preferred, followed
+        # by technical/news evidence, then source/article quality and date.
+        return (
+            0 if event_facts else 1,
+            0 if technical_facts else 1,
+            0 if page_type == "news_article" else 1,
+            score_key,
+            _source_tier_rank(item.get("source_tier", "C_media")),
+            _quality_rank(item.get("source_quality", "B")),
+            -_date_sort_key(item),
+            str(item.get("id", item.get("candidate_id", ""))),
+        )
+
+
     def _is_annual_quality_rescue_candidate(candidate: dict) -> bool:
         """Admit annual evidence-deficit candidates using upstream facts only.
 
@@ -1745,34 +1871,19 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         if not _has_clear_urban_rail_context(text, source):
             return False
 
-        # Keep legitimate low-value exclusions at the rescue boundary.  These
-        # checks are intentionally independent of final category evidence.
-        if any((
-            candidate.get("source_tier") == "D_proxy_low_value",
-            _contains_any_term(text, FINANCIAL_MARKET_TERMS),
-            _is_airport_people_mover_only_text(text, source),
-            _contains_any_term(text, RESCUE_LOW_VALUE_TERMS),
-            _contains_any_term(text, LOW_QUALITY_CONTENT_TERMS + LOW_INFORMATION_PAGE_TERMS + HARD_LOW_VALUE_CANDIDATE_TERMS),
-            _is_generic_ai_marketing(candidate),
-            _is_low_value_service_notice_text(text) and not _has_high_value_operational_detail(text),
-            candidate.get("page_type") in {
-                "home_page", "index_or_search_page", "login_or_policy_page",
-                "route_schedule_or_bus_page", "ticketing_promotion_or_product_page",
-                "event_or_recruiting_page", "financial_market_page", "low_information_page",
-                "airport_people_mover_page",
-            },
-        )):
+        if _annual_rescue_hard_exclusion_reason(candidate):
             return False
 
-        # Rescue is for an evidence deficit or failed provisional material-
-        # ization.  A candidate that already has a supported category should
-        # proceed through the normal path and must not consume rescue budget.
+        # Rescue is for an evidence deficit or failed provisional
+        # materialization.  A candidate that already has a supported category
+        # and no information deficit should proceed through the normal path;
+        # a failed category gate by itself is not a reason to reject rescue.
         gates = candidate.get("category_gates") or {}
-        no_category_gate = (
-            candidate.get("primary_category") in {None, "", "excluded"}
-            or not any(bool(value) for value in gates.values())
+        has_supported_category = (
+            candidate.get("primary_category") not in {None, "", "excluded"}
+            and any(bool(value) for value in gates.values())
         )
-        return bool(no_category_gate or _information_quality_issue(candidate))
+        return not has_supported_category or bool(_information_quality_issue(candidate))
 
 
     def _is_high_priority_rescue_candidate(candidate: dict) -> bool:
@@ -1981,12 +2092,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return str(candidate.get("verified_bucket", "") or "").strip()
 
         def _rescue_priority(item: dict) -> tuple:
-            return (
-                -int(item.get("final_selection_score", item.get("python_score", 0)) or 0),
-                _source_tier_rank(item.get("source_tier", "C_media")),
-                _quality_rank(item.get("source_quality", "B")),
-                -_date_sort_key(item),
-            )
+            return _annual_rescue_quality_priority(item)
 
         def _forward_rescue_priority(item: dict) -> tuple:
             title = str(item.get("title", "") or "")
@@ -6259,6 +6365,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_general_rescue_budget_for_period": _general_rescue_budget_for_period,
         "_candidate_prefetch_signal": _candidate_prefetch_signal,
         "_is_forward_enrichment_candidate": _is_forward_enrichment_candidate,
+        "_annual_rescue_scope_eligible": _annual_rescue_scope_eligible,
+        "_annual_rescue_hard_exclusion_reason": _annual_rescue_hard_exclusion_reason,
+        "_annual_rescue_quality_priority": _annual_rescue_quality_priority,
         "_is_annual_quality_rescue_candidate": _is_annual_quality_rescue_candidate,
         "_is_high_priority_rescue_candidate": _is_high_priority_rescue_candidate,
         "_is_short_snippet_rescue_candidate": _is_short_snippet_rescue_candidate,
