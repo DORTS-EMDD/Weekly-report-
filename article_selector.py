@@ -2207,25 +2207,58 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate["prefetch_attempted"] = True
             candidate["rescue_enrichment_attempted"] = True
             stats["rescue_enrichment_attempted_count"] += 1
+            annual_attempt_bucket = ""
             is_procurement_rescue = candidate.get("rescue_type") == "procurement_rescue_candidate"
             if is_procurement_rescue:
                 stats["procurement_rescue_attempted_count"] += 1
             if candidate.get("search_family") == "forward_technology":
                 stats["forward_enrichment_attempted_count"] += 1
-            if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
-                bucket = _annual_rescue_bucket(candidate)
-                annual_rescue_buckets_attempted.add(bucket)
-                annual_rescue_attempted_by_bucket[bucket] = annual_rescue_attempted_by_bucket.get(bucket, 0) + 1
+            if lookback_int >= 365:
+                annual_attempt_bucket = _annual_rescue_bucket(candidate)
+                if (
+                    annual_attempt_bucket
+                    and candidate.get("date_verification_status") == "verified"
+                ):
+                    annual_rescue_buckets_attempted.add(annual_attempt_bucket)
+                    annual_rescue_attempted_by_bucket[annual_attempt_bucket] = (
+                        annual_rescue_attempted_by_bucket.get(annual_attempt_bucket, 0) + 1
+                    )
             result = _prefetch_candidate_article(candidate, session)
-            candidate["prefetch_status"] = result.get("status", "")
+            result_status = result.get("status", "")
+            evidence_valid = result.get("evidence_valid")
+            if evidence_valid is None:
+                # Preserve compatibility with existing injected enrichment
+                # test doubles while production results carry the explicit
+                # evidence-validity contract.
+                evidence_valid = result_status == "success"
+            enrichment_success = result_status == "success" and bool(evidence_valid)
+            candidate["prefetch_status"] = "success" if enrichment_success else result_status
             candidate["prefetch_reason"] = result.get("reason", "")
-            candidate["prefetch_chars"] = result.get("chars", 0)
+            candidate["prefetch_chars"] = result.get("chars", 0) if enrichment_success else 0
             candidate["prefetch_elapsed_seconds"] = result.get("elapsed_seconds", 0.0)
-            candidate["enrichment_method"] = result.get("enrichment_method", candidate.get("enrichment_method", ""))
-            candidate["enrichment_failure_reason"] = result.get("reason", "") if result.get("status") != "success" else ""
-            candidate["enriched_snippet_chars"] = result.get("chars", candidate.get("enriched_snippet_chars", 0))
-            candidate["enriched_content_source"] = result.get("enriched_content_source", candidate.get("enriched_content_source", ""))
-            if result.get("status") == "success":
+            candidate["enrichment_transport_success"] = bool(
+                result.get("transport_success", result_status == "success")
+            )
+            candidate["enrichment_evidence_valid"] = bool(evidence_valid)
+            candidate["enrichment_evidence_failure_reason"] = str(
+                result.get("evidence_failure_reason", "") or ""
+            )
+            candidate["enrichment_method"] = (
+                result.get("enrichment_method", candidate.get("enrichment_method", ""))
+                if enrichment_success else ""
+            )
+            candidate["enrichment_failure_reason"] = (
+                "" if enrichment_success else result.get("reason", "")
+            )
+            candidate["enriched_snippet_chars"] = (
+                result.get("chars", candidate.get("enriched_snippet_chars", 0))
+                if enrichment_success else 0
+            )
+            candidate["enriched_content_source"] = (
+                result.get("enriched_content_source", candidate.get("enriched_content_source", ""))
+                if enrichment_success else ""
+            )
+            if enrichment_success:
                 stats["success_count"] += 1
                 candidate["rescue_enrichment_success"] = True
                 stats["rescue_enrichment_success_count"] += 1
@@ -2233,10 +2266,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                     stats["procurement_rescue_success_count"] += 1
                 if candidate.get("search_family") == "forward_technology":
                     stats["forward_enrichment_success_count"] += 1
-                if lookback_int >= 365 and _is_annual_quality_rescue_candidate(candidate):
-                    bucket = _annual_rescue_bucket(candidate)
-                    annual_rescue_buckets_succeeded.add(bucket)
-                    annual_rescue_success_by_bucket[bucket] = annual_rescue_success_by_bucket.get(bucket, 0) + 1
+                if annual_attempt_bucket:
+                    annual_rescue_buckets_succeeded.add(annual_attempt_bucket)
+                    annual_rescue_success_by_bucket[annual_attempt_bucket] = (
+                        annual_rescue_success_by_bucket.get(annual_attempt_bucket, 0) + 1
+                    )
             else:
                 stats["failed_count"] += 1
                 candidate["rescue_enrichment_success"] = False

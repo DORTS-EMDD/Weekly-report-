@@ -2148,6 +2148,128 @@ def _extract_prefetch_text(html: str) -> str:
     return _shorten(text, PREFETCH_MAX_CHARS)
 
 
+_PREFETCH_TITLE_STOPWORDS = {
+    "a", "an", "and", "for", "from", "in", "is", "of", "on", "the", "to", "with",
+}
+_PREFETCH_SEARCH_SHELL_MARKERS = (
+    "search 0 results",
+    "0 results",
+    "no results found",
+    "no search results",
+    "search results",
+    "results for",
+    "site search",
+)
+_PREFETCH_INDEX_SHELL_MARKERS = (
+    "page 1 for",
+    "return to homepage",
+    "return to home",
+    "all topics",
+    "topics a-z",
+    "all categories",
+    "browse all",
+    "all stories",
+    "alle themen von a bis z",
+    "themen a-z",
+)
+_PREFETCH_NAVIGATION_MARKERS = (
+    "home", "homepage", "menu", "navigation", "search", "sign in", "log in",
+    "subscribe", "newsletter", "contact us", "about us", "privacy policy",
+    "terms of use", "cookie", "latest", "popular", "follow us", "read more",
+    "next", "previous",
+)
+_PREFETCH_INDEX_PATH_SEGMENTS = {
+    "search", "search-results", "results", "topic", "topics", "category",
+    "categories", "tag", "tags", "archive", "archives", "index", "a-z", "az",
+}
+
+
+def _prefetch_title_tokens(value: str) -> set[str]:
+    normalized = _normalize_title(str(value or ""))
+    return {
+        token
+        for token in re.findall(r"[a-z0-9\u3400-\u9fff]+", normalized)
+        if token not in _PREFETCH_TITLE_STOPWORDS and (len(token) >= 3 or any("\u3400" <= char <= "\u9fff" for char in token))
+    }
+
+
+def _prefetch_title_overlap(candidate: dict, text: str) -> tuple[int, int]:
+    title_tokens = _prefetch_title_tokens(candidate.get("title") or candidate.get("raw_title", ""))
+    if not title_tokens:
+        return 0, 0
+    text_tokens = _prefetch_title_tokens(text)
+    return len(title_tokens.intersection(text_tokens)), len(title_tokens)
+
+
+def _prefetch_url_page_kind(url: str) -> str:
+    parsed = urlparse(_clean_candidate_url(url))
+    segments = [
+        unquote(segment).casefold()
+        for segment in (parsed.path or "").split("/")
+        if segment
+    ]
+    if any(segment in {"search", "search-results", "results"} for segment in segments):
+        return "search_results_shell"
+    if any(segment in _PREFETCH_INDEX_PATH_SEGMENTS for segment in segments):
+        return "index_or_navigation_shell"
+    return ""
+
+
+def _prefetch_evidence_validity(
+    candidate: dict,
+    text: str,
+    *,
+    resolved_url: str = "",
+) -> tuple[bool, str]:
+    """Validate fetched content before it becomes authoritative evidence.
+
+    Transport only proves that bytes were obtained.  This owner combines
+    content correspondence with generic page-shell signals so that search,
+    index, and navigation responses cannot be promoted to article evidence.
+    """
+    cleaned = _shorten(_clean_text(text), PREFETCH_MAX_CHARS)
+    if len(cleaned) < 120:
+        return False, "insufficient_text"
+
+    title_overlap, title_token_count = _prefetch_title_overlap(candidate, cleaned)
+    if title_token_count == 0:
+        return False, "missing_target_title"
+    required_overlap = 1 if title_token_count <= 2 else 2
+    title_matches = title_overlap >= required_overlap
+    lowered = cleaned.casefold()
+    evidence_url = resolved_url or candidate.get("resolved_article_url", "") or candidate.get("url", "")
+    if evidence_url and not _is_article_level_url(
+        evidence_url,
+        allow_google_news="news.google.com" in _domain_from_url(evidence_url),
+    ):
+        return False, "non_article_url"
+    url_kind = _prefetch_url_page_kind(evidence_url)
+
+    if url_kind == "search_results_shell":
+        return False, "search_results_page"
+
+    search_marker_hits = {marker for marker in _PREFETCH_SEARCH_SHELL_MARKERS if marker in lowered}
+    if search_marker_hits and (len(search_marker_hits) >= 2 or not title_matches):
+        return False, "search_results_shell"
+
+    index_marker_hits = {marker for marker in _PREFETCH_INDEX_SHELL_MARKERS if marker in lowered}
+    if index_marker_hits and (len(index_marker_hits) >= 2 or not title_matches):
+        return False, "index_or_navigation_shell"
+    if url_kind == "index_or_navigation_shell" and not title_matches:
+        return False, "index_or_navigation_shell"
+
+    navigation_hits = {
+        marker for marker in _PREFETCH_NAVIGATION_MARKERS
+        if marker in lowered
+    }
+    if len(navigation_hits) >= 4 and not title_matches:
+        return False, "generic_navigation_boilerplate"
+
+    if not title_matches:
+        return False, "target_title_mismatch"
+    return True, ""
+
+
 def _invalidate_candidate_selection_caches(candidate: dict) -> None:
     for key in (
         "_selection_text_cache", "_selection_text_fingerprint", "_score_cache",
@@ -2165,7 +2287,19 @@ def _apply_prefetch_evidence(
     resolved_url: str = "",
 ) -> int:
     text = _shorten(_clean_text(text), PREFETCH_MAX_CHARS)
+    candidate["enrichment_transport_success"] = True
+    candidate["enrichment_evidence_valid"] = False
+    candidate["enrichment_evidence_failure_reason"] = ""
     if len(text) < 120:
+        candidate["enrichment_evidence_failure_reason"] = "insufficient_text"
+        return 0
+    evidence_valid, evidence_reason = _prefetch_evidence_validity(
+        candidate,
+        text,
+        resolved_url=resolved_url,
+    )
+    if not evidence_valid:
+        candidate["enrichment_evidence_failure_reason"] = evidence_reason
         return 0
     if resolved_url:
         candidate["resolved_article_url"] = resolved_url
@@ -2178,6 +2312,7 @@ def _apply_prefetch_evidence(
     candidate["enriched_content_source"] = content_source
     candidate["enriched_snippet_chars"] = len(text)
     candidate["enrichment_failure_reason"] = ""
+    candidate["enrichment_evidence_valid"] = True
     _invalidate_candidate_selection_caches(candidate)
     return len(text)
 
@@ -2265,6 +2400,32 @@ def _prefetch_from_source_domain(candidate: dict, session: requests.Session) -> 
         return {"reason": f"source_lookup_exception:{str(exc)[:140]}"}
 
 
+def _prefetch_result(
+    *,
+    status: str,
+    chars: int,
+    elapsed_seconds: float,
+    reason: str,
+    enrichment_method: str = "",
+    enriched_content_source: str = "",
+    transport_success: bool = False,
+    evidence_valid: bool = False,
+    evidence_failure_reason: str = "",
+) -> dict:
+    return {
+        "status": status,
+        "chars": chars,
+        "elapsed_seconds": elapsed_seconds,
+        "reason": reason,
+        "enrichment_method": enrichment_method,
+        "enriched_content_source": enriched_content_source,
+        "transport_success": bool(transport_success),
+        "evidence_valid": bool(evidence_valid),
+        "evidence_validation_status": "valid" if evidence_valid else "rejected",
+        "evidence_failure_reason": str(evidence_failure_reason or ""),
+    }
+
+
 def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> dict:
     started = time.perf_counter()
     candidate.setdefault("enrichment_method", "")
@@ -2272,20 +2433,37 @@ def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> d
     candidate.setdefault("resolved_article_url", "")
     candidate.setdefault("enriched_snippet_chars", 0)
     candidate.setdefault("enriched_content_source", "")
+    candidate["enrichment_transport_success"] = False
+    candidate["enrichment_evidence_valid"] = False
+    candidate["enrichment_evidence_failure_reason"] = ""
     url = _prefetch_url_for_candidate(candidate, session)
     direct_reason = "no_direct_article_url"
+    evidence_rejection_reason = ""
+    transport_success = False
     try:
         resolved_html = candidate.pop("_resolved_article_html", "")
         resolved_content_type = candidate.pop("_resolved_article_content_type", "").casefold()
         if resolved_html and (not resolved_content_type or any(kind in resolved_content_type for kind in ("html", "text", "xml"))):
+            transport_success = True
+            candidate["enrichment_transport_success"] = True
             article_text = _extract_prefetch_text(resolved_html)
             chars = _apply_prefetch_evidence(
                 candidate, article_text, method="resolved_article_url",
                 content_source="resolved_article_html", resolved_url=url,
             )
             if chars:
-                return {"status": "success", "chars": chars, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "resolved_google_news_redirect", "enrichment_method": "resolved_article_url", "enriched_content_source": "resolved_article_html"}
-            direct_reason = "resolved_article_too_short"
+                return _prefetch_result(
+                    status="success",
+                    chars=chars,
+                    elapsed_seconds=round(time.perf_counter() - started, 2),
+                    reason="resolved_google_news_redirect",
+                    enrichment_method="resolved_article_url",
+                    enriched_content_source="resolved_article_html",
+                    transport_success=True,
+                    evidence_valid=True,
+                )
+            evidence_rejection_reason = candidate.get("enrichment_evidence_failure_reason") or "invalid_content"
+            direct_reason = f"evidence_rejected:{evidence_rejection_reason}"
         if url:
             response = session.get(
                 url,
@@ -2298,6 +2476,8 @@ def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> d
             elif content_type and not any(kind in content_type for kind in ("html", "text", "xml")):
                 direct_reason = content_type[:80]
             else:
+                transport_success = True
+                candidate["enrichment_transport_success"] = True
                 article_text = _extract_prefetch_text(response.text)
                 chars = _apply_prefetch_evidence(
                     candidate, article_text,
@@ -2306,13 +2486,25 @@ def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> d
                     resolved_url=url,
                 )
                 if chars:
-                    return {"status": "success", "chars": chars, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "direct_article_url", "enrichment_method": "direct_article_url", "enriched_content_source": "article_html"}
-                direct_reason = "direct_article_too_short"
+                    return _prefetch_result(
+                        status="success",
+                        chars=chars,
+                        elapsed_seconds=round(time.perf_counter() - started, 2),
+                        reason="direct_article_url",
+                        enrichment_method="direct_article_url",
+                        enriched_content_source="article_html",
+                        transport_success=True,
+                        evidence_valid=True,
+                    )
+                evidence_rejection_reason = candidate.get("enrichment_evidence_failure_reason") or "invalid_content"
+                direct_reason = f"evidence_rejected:{evidence_rejection_reason}"
     except Exception as exc:
         direct_reason = f"direct_fetch_exception:{str(exc)[:140]}"
 
     followup = _prefetch_from_source_domain(candidate, session)
     if followup.get("text"):
+        transport_success = True
+        candidate["enrichment_transport_success"] = True
         chars = _apply_prefetch_evidence(
             candidate,
             followup["text"],
@@ -2321,10 +2513,23 @@ def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> d
             resolved_url=followup.get("resolved_url", ""),
         )
         if chars:
-            return {"status": "success", "chars": chars, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": followup.get("reason", "source_domain_followup"), "enrichment_method": "source_domain_followup", "enriched_content_source": "source_domain_search"}
+            return _prefetch_result(
+                status="success",
+                chars=chars,
+                elapsed_seconds=round(time.perf_counter() - started, 2),
+                reason=followup.get("reason", "source_domain_followup"),
+                enrichment_method="source_domain_followup",
+                enriched_content_source="source_domain_search",
+                transport_success=True,
+                evidence_valid=True,
+            )
+        evidence_rejection_reason = candidate.get("enrichment_evidence_failure_reason") or "invalid_content"
+        direct_reason = f"evidence_rejected:{evidence_rejection_reason}"
 
     feed_snippet = _clean_text(str(candidate.get("snippet", "") or ""))
     if len(feed_snippet) >= 120:
+        transport_success = True
+        candidate["enrichment_transport_success"] = True
         chars = _apply_prefetch_evidence(
             candidate,
             feed_snippet,
@@ -2332,8 +2537,32 @@ def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> d
             content_source="candidate_source_feed",
         )
         if chars:
-            return {"status": "success", "chars": chars, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": "source_feed_snippet", "enrichment_method": "source_feed_snippet", "enriched_content_source": "candidate_source_feed"}
+            return _prefetch_result(
+                status="success",
+                chars=chars,
+                elapsed_seconds=round(time.perf_counter() - started, 2),
+                reason="source_feed_snippet",
+                enrichment_method="source_feed_snippet",
+                enriched_content_source="candidate_source_feed",
+                transport_success=True,
+                evidence_valid=True,
+            )
+        evidence_rejection_reason = candidate.get("enrichment_evidence_failure_reason") or "invalid_content"
+        direct_reason = f"evidence_rejected:{evidence_rejection_reason}"
 
-    reason = followup.get("reason") or direct_reason
+    reason = (
+        f"evidence_rejected:{evidence_rejection_reason}"
+        if evidence_rejection_reason
+        else (followup.get("reason") or direct_reason)
+    )
     candidate["enrichment_failure_reason"] = reason
-    return {"status": "failed_enrichment", "chars": 0, "elapsed_seconds": round(time.perf_counter() - started, 2), "reason": reason, "enrichment_method": "", "enriched_content_source": ""}
+    evidence_reason = candidate.get("enrichment_evidence_failure_reason", "")
+    return _prefetch_result(
+        status="failed_enrichment",
+        chars=0,
+        elapsed_seconds=round(time.perf_counter() - started, 2),
+        reason=reason,
+        transport_success=transport_success,
+        evidence_valid=False,
+        evidence_failure_reason=evidence_reason,
+    )
