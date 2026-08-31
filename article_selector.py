@@ -25,6 +25,7 @@ from article_processor import (
     _extract_complete_url,
     _extract_domain_hint,
     _host_matches,
+    _is_article_level_url,
     _is_valid_news_url,
     _normalize_source_domain,
     _original_source_domain,
@@ -1603,9 +1604,21 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return "low_information_page", "旅遊、入口、活動、常設服務或低資訊頁"
         if _is_airport_people_mover_only_text(text, candidate.get("source", "")):
             return "airport_people_mover_page", "機場航廈 people mover 或航空旅遊內容"
+        article_level_evidence = any(
+            _is_article_level_url(value, allow_google_news=allow_google_news)
+            for value, allow_google_news in (
+                (candidate.get("resolved_article_url", ""), False),
+                (candidate.get("canonical_url", ""), False),
+                (candidate.get("url", ""), True),
+                (candidate.get("raw_url", ""), True),
+                (candidate.get("source_href", ""), False),
+            )
+        )
+        if article_level_evidence:
+            return "news_article", "具備文章級 URL 證據"
         if source_href and "news.google.com" not in _domain_from_url(source_href):
-            return "news_article", "Google News 代理已提供原始來源"
-        return "news_article", "具備候選新聞頁基本結構"
+            return "publisher_root_only", "來源網址僅提供出版者根網址，缺少文章級 URL 證據"
+        return "unresolved_page", "缺少文章級 URL 證據"
 
 
     def _candidate_page_type(candidate: dict) -> tuple[str, str]:
