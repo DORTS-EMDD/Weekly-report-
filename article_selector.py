@@ -150,7 +150,13 @@ ACADEMIC_ACCIDENT_NON_EVENT_TERMS = [
     "accident simulation", "accident simulations", "simulation study", "simulation model",
     "simulated collision", "simulated derailment", "numerical simulation", "scenario analysis",
     "research paper", "academic paper", "literature review", "risk assessment model",
+    "research study", "research studies", "research", "study", "studies",
+    "assessment", "assessments", "hazard", "hazards", "hazard analysis",
+    "risk analysis", "evacuation assessment", "evacuation methodology",
+    "methodology", "evaluation", "evaluations", "modeling", "modelling",
+    "academic", "simulation", "simulations",
     "事故模擬", "事故模擬研究", "模擬事故", "數值模擬", "情境分析", "研究論文",
+    "研究", "評估", "危害分析", "風險分析", "疏散評估", "疏散方法",
 ]
 
 OPERATIONAL_EVENT_TERMS = [
@@ -3359,26 +3365,70 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
 
 
+    def _has_explicit_missing_accident_evidence(fragment: str) -> bool:
+        """Reject metadata labels that merely say an accident field is missing."""
+        return bool(re.search(
+            r"(?:\bmissing|\bno\b|\bnone\b|\bn/a\b|\bnot\s+(?:provided|available|found)|"
+            r"\bunknown|\babsent|\bunavailable|缺少|未提供|未列明|不存在)"
+            r"\s*[:：-]\s*[^.;!?\n]{0,140}"
+            r"(?:collision|collided|derailment|derailed|accident|incident|fire|evacuation|"
+            r"碰撞|出軌|脫軌|事故|事件|火災|疏散|避難)",
+            fragment or "",
+            flags=re.IGNORECASE,
+        ))
+
+
+    def _has_affirmative_occurred_major_accident(text: str) -> bool:
+        """Require an occurred event when research language is present."""
+        if _contains_positive_term(
+            text,
+            [
+                "actual accident", "real-world incident", "incident occurred",
+                "accident occurred", "collision occurred", "derailment occurred",
+                "事故發生", "實際事故", "事件發生", "碰撞發生", "出軌發生",
+            ],
+        ):
+            return True
+        patterns = (
+            r"\b(?:train|tram|metro|subway|light\s+rail(?:\s+vehicle)?|railcar)"
+            r"[^.!?;\n]{0,70}\b(?:derailed|collided|caught\s+fire|was\s+on\s+fire)\b",
+            r"\b(?:collision|derailment|accident|incident)"
+            r"[^.!?;\n]{0,70}\b(?:occurred|happened|took\s+place|was\s+reported|"
+            r"caused|injur(?:y|ies|ed)|evacuat(?:e|ed|ion)|fatal|suspend(?:ed|sion))\b",
+            r"\bfire\b[^.!?;\n]{0,70}\b(?:broke\s+out|caused|injur(?:y|ies|ed)|"
+            r"evacuat(?:e|ed|ion)|fatal|suspend(?:ed|sion))\b",
+            r"\b(?:passengers?|people|riders?)\b[^.!?;\n]{0,35}\b"
+            r"(?:were|was|are|been)?\s*(?:injured|killed|evacuated|hospitali[sz]ed)\b",
+            r"(?:列車|電車|地鐵|捷運|輕軌)[^。！？!?；;\n]{0,40}(?:出軌|脫軌|相撞|碰撞|起火|火災)",
+            r"(?:乘客|人員)[^。！？!?；;\n]{0,25}(?:受傷|死亡|疏散|避難)",
+        )
+        return any(re.search(pattern, text or "", flags=re.IGNORECASE) for pattern in patterns)
+
+
     def _has_major_accident_evidence(fragment: str) -> bool:
-        if _contains_any_term(fragment, MAJOR_ACCIDENT_DIRECT_TERMS):
+        if _has_explicit_missing_accident_evidence(fragment):
+            return False
+        if _contains_any_term(fragment, ACADEMIC_ACCIDENT_NON_EVENT_TERMS) and not _has_affirmative_occurred_major_accident(fragment):
+            return False
+        if _contains_positive_term(fragment, MAJOR_ACCIDENT_DIRECT_TERMS):
             return True
         if re.search(r"\b\d{1,3}\+?\s+(?:people\s+)?(?:were\s+)?injured\b", fragment or "", flags=re.IGNORECASE):
             return True
-        if _contains_any_term(fragment, ["dozens injured", "dozens of people injured", "multiple injured", "多人受傷", "數十人受傷"]):
+        if _contains_positive_term(fragment, ["dozens injured", "dozens of people injured", "multiple injured", "多人受傷", "數十人受傷"]):
             return True
-        if _contains_any_term(fragment, ["major safety consequence", "major safety consequences", "重大安全後果", "重大安全影響"]):
+        if _contains_positive_term(fragment, ["major safety consequence", "major safety consequences", "重大安全後果", "重大安全影響"]):
             return True
-        if _contains_any_term(fragment, ENVIRONMENTAL_OPERATION_ABNORMALITY_TERMS):
+        if _contains_positive_term(fragment, ENVIRONMENTAL_OPERATION_ABNORMALITY_TERMS):
             if _contains_any_term(fragment, [
                 "no injury", "no injuries", "no exposure injury", "without injury",
                 "無受傷", "未受傷", "未造成人員受傷",
             ]):
                 return False
-            return _contains_any_term(fragment, [
+            return _contains_positive_term(fragment, [
                 "injury", "injured", "hospitalized", "hospitalised", "emergency",
                 "fatal", "death", "evacuation", "evacuated", "受傷", "送醫", "緊急",
             ])
-        return _contains_any_term(fragment, ["train fire", "station fire", "subway fire", "metro fire", "列車火災", "車站火災"])
+        return _contains_positive_term(fragment, ["train fire", "station fire", "subway fire", "metro fire", "列車火災", "車站火災"])
 
 
     def _compute_passes_major_accident_gate(candidate: dict) -> bool:
@@ -3389,13 +3439,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return False
         if _contains_any_term(text, NON_ACCIDENT_CONTEXT_TERMS):
             return False
-        if _contains_any_term(text, ACADEMIC_ACCIDENT_NON_EVENT_TERMS) and not _contains_any_term(
-            text,
-            [
-                "actual accident", "real-world incident", "incident occurred", "accident occurred",
-                "事故發生", "實際事故", "事件發生",
-            ],
-        ):
+        if _contains_any_term(text, ACADEMIC_ACCIDENT_NON_EVENT_TERMS) and not _has_affirmative_occurred_major_accident(text):
             return False
         if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
             return False

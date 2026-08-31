@@ -306,6 +306,54 @@ class P2K5R2DiagnosticTests(unittest.TestCase):
         gates = _selector()["evaluate_category_gates"](candidate)
         self.assertFalse(gates["category_gates"]["major_accident"])
 
+    def test_missing_accident_metadata_is_not_affirmative_event_evidence(self):
+        candidate = _candidate(
+            19,
+            "Metro evacuation research evidence review",
+            "Missing: tram collision. Fire hazards and evacuation assessment are discussed.",
+        )
+        self.assertFalse(_selector()["_passes_major_accident_gate"](candidate))
+
+    def test_evacuation_fire_hazard_research_is_not_major_accident(self):
+        candidate = _candidate(
+            20,
+            "Metro evacuation and fire hazard assessment",
+            "A research study evaluates evacuation methodology for hypothetical tram collision scenarios.",
+        )
+        self.assertFalse(_selector()["_passes_major_accident_gate"](candidate))
+
+    def test_genuine_tram_collision_still_passes(self):
+        candidate = _candidate(
+            21,
+            "Tram collision injures passengers",
+            "Two urban rail trams collided and passengers were injured.",
+        )
+        self.assertTrue(_selector()["_passes_major_accident_gate"](candidate))
+
+    def test_genuine_metro_fire_with_injuries_still_passes(self):
+        candidate = _candidate(
+            22,
+            "Metro train fire injures passengers",
+            "A train fire broke out and eight passengers were injured during evacuation.",
+        )
+        self.assertTrue(_selector()["_passes_major_accident_gate"](candidate))
+
+    def test_genuine_derailment_still_passes(self):
+        candidate = _candidate(
+            23,
+            "Metro train derailment evacuates passengers",
+            "A metro train derailed in the station and passengers were evacuated.",
+        )
+        self.assertTrue(_selector()["_passes_major_accident_gate"](candidate))
+
+    def test_genuine_incident_evacuation_still_passes(self):
+        candidate = _candidate(
+            24,
+            "Metro incident causes emergency evacuation",
+            "A train fire broke out and the station was evacuated after the incident.",
+        )
+        self.assertTrue(_selector()["_passes_major_accident_gate"](candidate))
+
 
 if __name__ == "__main__":
     unittest.main()
