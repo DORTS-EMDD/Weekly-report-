@@ -14,7 +14,7 @@ import streamlit_sidebar_ui
 
 
 EXPECTED_SIDEBAR_SHA256 = (
-    "6442d6743e4e4acfceba84dbe4ff9a76f08ffe97df93feb00e6df85b7060e109"
+    "e2b112702324191e78ec8ce09ca12ceffeab76635cd06d2bac7b30bb73f86656"
 )
 EXPECTED_DASHBOARD_SHA256 = (
     "360a44823e3701510200ad38cd16cc4e2dfc04e05587750875e917ad79241a7f"
@@ -213,8 +213,8 @@ class FakeStreamlit:
         self._counter += 1
         return _Node(self, f"form:{self._counter}")
 
-    def rerun(self):
-        self._record("rerun", (), {})
+    def rerun(self, **kwargs):
+        self._record("rerun", (), kwargs)
 
 
 def _sidebar_context():

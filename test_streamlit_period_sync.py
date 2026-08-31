@@ -23,27 +23,7 @@ class RerunRecorder:
 
 
 class StreamlitPeriodSyncTests(unittest.TestCase):
-    def test_idle_period_changes_request_one_app_rerun(self):
-        for period in (30, 365, 7):
-            recorder = RerunRecorder({"lookback_days_state": period})
-            with patch.object(streamlit_sidebar_ui, "st", recorder):
-                streamlit_sidebar_ui._handle_lookback_days_change()
-            self.assertEqual(recorder.calls, [{"scope": "app"}], msg=period)
-            self.assertNotIn("_period_sync_deferred", recorder.session_state)
-
-    def test_active_period_change_is_deferred_without_rerun(self):
-        recorder = RerunRecorder(
-            {
-                "lookback_days_state": 7,
-                "_active_run_snapshot": {"lookback_days": 365},
-            }
-        )
-        with patch.object(streamlit_sidebar_ui, "st", recorder):
-            streamlit_sidebar_ui._handle_lookback_days_change()
-        self.assertEqual(recorder.calls, [])
-        self.assertTrue(recorder.session_state["_period_sync_deferred"])
-
-    def test_sidebar_selectbox_owns_period_and_registers_callback(self):
+    def test_period_callback_does_not_own_app_rerun(self):
         from test_streamlit_ui_modules import FakeStreamlit, _sidebar_context
 
         recorder = FakeStreamlit(responses={"lookback_days_state": 30})
@@ -52,10 +32,90 @@ class StreamlitPeriodSyncTests(unittest.TestCase):
         self.assertEqual(result.lookback_days, 30)
         selectbox = next(call for call in recorder.calls if call["name"] == "selectbox")
         self.assertEqual(selectbox["kwargs"]["key"], "lookback_days_state")
-        self.assertEqual(
-            selectbox["kwargs"]["on_change"]["callable"],
-            "_handle_lookback_days_change",
+        self.assertNotIn("on_change", selectbox["kwargs"])
+        source = STREAMLIT_SOURCE.with_name("streamlit_sidebar_ui.py").read_text(
+            encoding="utf-8"
         )
+        self.assertNotIn("_handle_lookback_days_change", source)
+
+    def test_idle_fragment_body_requests_one_app_rerun_for_each_period_change(self):
+        for previous, current in ((7, 30), (30, 365), (365, 7)):
+            recorder = RerunRecorder(
+                {"_sidebar_settings_snapshot": {"lookback_days": previous}}
+            )
+            with patch.object(streamlit_sidebar_ui, "st", recorder):
+                requested = streamlit_sidebar_ui._reconcile_period_change(
+                    {"lookback_days": current}
+                )
+            self.assertTrue(requested, msg=(previous, current))
+            self.assertEqual(recorder.calls, [{"scope": "app"}], msg=(previous, current))
+            self.assertEqual(
+                recorder.session_state["_sidebar_settings_snapshot"]["lookback_days"],
+                current,
+            )
+
+    def test_fragment_body_reconciliation_is_loop_safe(self):
+        recorder = RerunRecorder(
+            {"_sidebar_settings_snapshot": {"lookback_days": 7}}
+        )
+        with patch.object(streamlit_sidebar_ui, "st", recorder):
+            self.assertTrue(
+                streamlit_sidebar_ui._reconcile_period_change(
+                    {"lookback_days": 365}
+                )
+            )
+            self.assertFalse(
+                streamlit_sidebar_ui._reconcile_period_change(
+                    {"lookback_days": 365}
+                )
+            )
+        self.assertEqual(recorder.calls, [{"scope": "app"}])
+
+    def test_active_period_change_is_deferred_without_app_rerun(self):
+        recorder = RerunRecorder(
+            {
+                "_sidebar_settings_snapshot": {"lookback_days": 365},
+                "_active_run_snapshot": {"lookback_days": 365},
+            }
+        )
+        with patch.object(streamlit_sidebar_ui, "st", recorder):
+            requested = streamlit_sidebar_ui._reconcile_period_change(
+                {"lookback_days": 7}
+            )
+        self.assertFalse(requested)
+        self.assertEqual(recorder.calls, [])
+        self.assertTrue(recorder.session_state["_period_sync_deferred"])
+        self.assertEqual(
+            recorder.session_state["_sidebar_settings_snapshot"]["lookback_days"],
+            7,
+        )
+
+    def test_render_sidebar_detects_period_change_in_fragment_body(self):
+        from test_streamlit_ui_modules import FakeStreamlit, _sidebar_context
+
+        first = FakeStreamlit()
+        with patch.object(streamlit_sidebar_ui, "st", first):
+            streamlit_sidebar_ui.render_sidebar(_sidebar_context())
+        self.assertEqual(first.session_state["_sidebar_settings_snapshot"]["lookback_days"], 7)
+
+        second = FakeStreamlit(
+            session_state=first.session_state,
+            responses={"lookback_days_state": 365},
+        )
+        with patch.object(streamlit_sidebar_ui, "st", second):
+            streamlit_sidebar_ui.render_sidebar(_sidebar_context())
+        self.assertEqual(
+            [call for call in second.calls if call["name"] == "rerun"],
+            [{"name": "rerun", "receiver": "st", "args": [], "kwargs": {"scope": "app"}}],
+        )
+
+        third = FakeStreamlit(
+            session_state=second.session_state,
+            responses={"lookback_days_state": 365},
+        )
+        with patch.object(streamlit_sidebar_ui, "st", third):
+            streamlit_sidebar_ui.render_sidebar(_sidebar_context())
+        self.assertFalse(any(call["name"] == "rerun" for call in third.calls))
 
     def test_active_snapshot_is_deep_copied_and_cleaned(self):
         state = {"lookback_days_state": 365}
@@ -109,6 +169,23 @@ class StreamlitPeriodSyncTests(unittest.TestCase):
         self.assertIn("lookback_days_state", body)
         self.assertIn("_period_sync_deferred", body)
         self.assertIn("period_changed_during_run", body)
+
+    def test_app_rerun_is_owned_by_fragment_body(self):
+        source = STREAMLIT_SOURCE.with_name("streamlit_sidebar_ui.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(source)
+        reconcile = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_reconcile_period_change"
+        )
+        body = ast.unparse(reconcile)
+        self.assertIn("st.rerun(scope='app')", body)
+        self.assertIn("_sidebar_settings_snapshot", body)
+        self.assertIn("_active_run_snapshot", body)
+        self.assertNotIn("on_change", body)
 
     def test_single_generate_uses_current_displayed_period_and_one_snapshot(self):
         source = STREAMLIT_SOURCE.read_text(encoding="utf-8")

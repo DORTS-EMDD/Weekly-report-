@@ -97,18 +97,38 @@ def format_runtime_version_label(runtime_version: Mapping[str, object]) -> str:
     return f"目前執行版本：{short_sha}"
 
 
-def _handle_lookback_days_change() -> None:
-    """Synchronize idle full-app state without interrupting an active run.
+def _reconcile_period_change(current_snapshot: Mapping[str, object]) -> bool:
+    """Reconcile an idle period edit from the fragment body.
 
-    The selectbox remains the only editable period owner.  A fragment widget
-    callback can request an app-scoped rerun while idle, but an active run is
-    deliberately isolated behind ``_active_run_snapshot`` and reconciled only
-    after that immutable snapshot has completed.
+    Streamlit commits a keyed widget value before rerunning its fragment, so
+    the body—not the widget callback—is the safe owner for an app-scope rerun.
+    Persisting the newly materialized snapshot before requesting that rerun
+    makes the next full-app execution observe equal periods and prevents a
+    reconciliation loop.  An active workflow keeps its immutable snapshot and
+    defers the app rerun to the existing post-run lifecycle.
     """
+
+    previous_snapshot = st.session_state.get("_sidebar_settings_snapshot")
+    st.session_state["_sidebar_settings_snapshot"] = dict(current_snapshot)
+
+    if not isinstance(previous_snapshot, Mapping):
+        return False
+
+    try:
+        previous_period = int(previous_snapshot.get("lookback_days"))
+        current_period = int(current_snapshot.get("lookback_days"))
+    except (TypeError, ValueError):
+        return False
+    if previous_period == current_period:
+        return False
+
     if st.session_state.get("_active_run_snapshot") is not None:
         st.session_state["_period_sync_deferred"] = True
-        return
+        return False
+
+    st.session_state.pop("_period_sync_deferred", None)
     st.rerun(scope="app")
+    return True
 
 
 def render_sidebar(
@@ -217,7 +237,6 @@ def render_sidebar(
                 "報告期間",
                 visible_lookback_options,
                 key="lookback_days_state",
-                on_change=_handle_lookback_days_change,
                 format_func=lambda d: (
                     f"{d} 天（{context.report_period_labels.get(int(d), '報告')}）"
                 ),
@@ -410,7 +429,7 @@ def render_sidebar(
         send_after_generate=send_after_generate,
         generate_requested=False,
     )
-    st.session_state["_sidebar_settings_snapshot"] = build_sidebar_settings_snapshot(selection)
+    _reconcile_period_change(build_sidebar_settings_snapshot(selection))
     return selection
 
 
