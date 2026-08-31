@@ -294,6 +294,62 @@ class P2K52RuntimeTests(unittest.TestCase):
             api["prefetch_candidates_before_filter"]([generic, strong])
         self.assertEqual(attempted_ids[:2], [67, 68])
 
+    def _run_priority_scope_fixture(self, lookback):
+        api = _selector(lookback)
+        generic = _candidate(
+            71,
+            "Metro signalling modernization update",
+            "Urban rail metro signalling system upgrade was announced.",
+            "2026-04-10",
+        )
+        event = _candidate(
+            72,
+            "Metro train collision injures passengers",
+            "Two urban rail trains collided and passengers were evacuated.",
+            "2026-04-11",
+        )
+        for candidate in (generic, event):
+            candidate.update({
+                "verified_bucket": "2026-Q2",
+                "date_verification_status": "verified",
+                "normalized_publication_date": candidate["date"],
+                "primary_category": "excluded",
+                "classification": "excluded",
+                "category_gates": {"technology": False},
+                "candidate_flags": [],
+            })
+        generic.update({"python_score": 90, "final_selection_score": 90})
+        event.update({"python_score": 35, "final_selection_score": 35})
+        attempted_ids = []
+
+        def enrich(candidate, _session):
+            attempted_ids.append(candidate["id"])
+            return {"status": "success", "chars": 120, "elapsed_seconds": 0.0, "reason": "fixture"}
+
+        with patch.object(article_selector, "_prefetch_candidate_article", side_effect=enrich):
+            stats = api["prefetch_candidates_before_filter"]([generic, event])
+        return attempted_ids[:2], stats
+
+    def test_7_day_rescue_priority_preserves_baseline_order(self):
+        attempted_ids, _stats = self._run_priority_scope_fixture(7)
+        self.assertEqual(attempted_ids, [71, 72])
+
+    def test_30_day_rescue_priority_preserves_baseline_order(self):
+        attempted_ids, _stats = self._run_priority_scope_fixture(30)
+        self.assertEqual(attempted_ids, [71, 72])
+
+    def test_365_day_rescue_priority_uses_annual_quality_order(self):
+        attempted_ids, _stats = self._run_priority_scope_fixture(365)
+        self.assertEqual(attempted_ids, [72, 71])
+
+    def test_annual_priority_scope_isolated_from_weekly_monthly_lane(self):
+        weekly_ids, _ = self._run_priority_scope_fixture(7)
+        monthly_ids, _ = self._run_priority_scope_fixture(30)
+        annual_ids, _ = self._run_priority_scope_fixture(365)
+        self.assertEqual(weekly_ids, [71, 72])
+        self.assertEqual(monthly_ids, [71, 72])
+        self.assertEqual(annual_ids, [72, 71])
+
     def test_annual_bucket_ownership_precedes_score_with_q4_q1_q2_q3(self):
         api = _selector()
         fixtures = [

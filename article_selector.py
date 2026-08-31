@@ -2098,7 +2098,15 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return str(candidate.get("verified_bucket", "") or "").strip()
 
         def _rescue_priority(item: dict) -> tuple:
-            return _annual_rescue_quality_priority(item)
+            # Preserve the shared weekly/monthly rescue ordering exactly.
+            # Annual quality precedence is selected explicitly at the annual
+            # bucket call site below.
+            return (
+                -int(item.get("final_selection_score", item.get("python_score", 0)) or 0),
+                _source_tier_rank(item.get("source_tier", "C_media")),
+                _quality_rank(item.get("source_quality", "B")),
+                -_date_sort_key(item),
+            )
 
         def _forward_rescue_priority(item: dict) -> tuple:
             title = str(item.get("title", "") or "")
@@ -2129,7 +2137,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             if bucket:
                 annual_candidates_by_bucket.setdefault(bucket, []).append(candidate)
         for bucket in annual_candidates_by_bucket:
-            annual_candidates_by_bucket[bucket].sort(key=_rescue_priority)
+            annual_candidates_by_bucket[bucket].sort(key=_annual_rescue_quality_priority)
 
         ordered_general: list[dict] = []
         if lookback_int >= 365 and annual_candidates_by_bucket:
