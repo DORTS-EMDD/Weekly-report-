@@ -14,6 +14,8 @@ CORE_SYSTEM_LABELS = (
     "自動收費",
     "機廠維修設備",
     "月臺門",
+    "垂直運輸設備",
+    "通風空調系統",
 )
 
 
@@ -23,7 +25,7 @@ CORE_SYSTEM_TERM_GROUPS: dict[str, tuple[str, ...]] = {
         "coupler", "propulsion", "traction inverter", "traction inverters", "traction motor",
         "braking system", "brake system", "tcms", "rolling-stock", "車門", "轉向架",
         "輪對", "聯結器", "推進", "牽引變流器", "牽引馬達", "煞車", "制動",
-        "車載", "電聯車", "車輛",
+        "車載", "電聯車",
     ),
     "號誌": (
         "communication-based train control", "automatic train operation",
@@ -71,6 +73,18 @@ CORE_SYSTEM_TERM_GROUPS: dict[str, tuple[str, ...]] = {
         "platform screen door", "platform screen doors", "platform door", "platform doors",
         "psd", "月臺門", "月台門",
     ),
+    "垂直運輸設備": (
+        "elevator", "elevators", "lift", "lifts", "escalator", "escalators",
+        "moving walk", "moving walkway", "travelator", "vertical transport",
+        "垂直運輸", "電梯", "升降機", "電扶梯", "手扶梯", "走道電梯",
+    ),
+    "通風空調系統": (
+        "station ventilation", "tunnel ventilation", "ventilation system",
+        "ventilation", "hvac", "air conditioning", "smoke extraction",
+        "smoke control", "environmental control", "environmental control system",
+        "platform cooling", "通風系統", "隧道通風", "車站通風", "空調",
+        "環控系統", "環境控制系統", "排煙", "排煙系統", "月臺降溫",
+    ),
 }
 
 
@@ -93,6 +107,8 @@ CORE_TO_REPORT_LABEL = {
     "自動收費": "自動收費系統 AFC",
     "機廠維修設備": "機廠設備",
     "月臺門": "月臺門系統",
+    "垂直運輸設備": "垂直運輸設備",
+    "通風空調系統": "通風空調系統",
 }
 
 CORE_TO_PROCUREMENT_GROUP = {
@@ -103,6 +119,8 @@ CORE_TO_PROCUREMENT_GROUP = {
     "自動收費": "afc",
     "機廠維修設備": "depot_electromechanical",
     "月臺門": "platform_screen_doors",
+    "垂直運輸設備": "vertical_transport",
+    "通風空調系統": "ventilation_hvac",
 }
 
 
@@ -116,11 +134,13 @@ _ROLLING_STOCK_SPECIFIC_TERMS = (
     "牽引變流器", "牽引馬達", "煞車", "制動", "車載",
 )
 _ROLLING_STOCK_EVENT_TERMS = (
-    "new", "order", "orders", "ordered", "procure", "procurement", "procured",
+    "new", "supply", "supplied", "order", "orders", "ordered", "procure", "procurement", "procured",
     "purchase", "purchased", "delivery", "delivered", "introduce", "introduced",
     "deployment", "deployed", "upgrade", "upgraded", "modernization", "modernisation",
-    "performance", "maintenance", "overhaul", "fleet", "採購", "訂購", "交車",
-    "導入", "投入", "性能", "維修", "更新",
+    "performance", "maintenance", "overhaul", "acquisition", "acquire", "fleet",
+    "award", "awarded", "awards",
+    "replacement", "replaced", "採購", "訂購", "交車", "供應", "得標", "決標",
+    "導入", "投入", "性能", "維修", "更新", "汰換",
 )
 _DEPOT_FACILITY_TERMS = (
     "maintenance facility", "maintenance depot", "train maintenance facility",
@@ -135,6 +155,69 @@ _GENERIC_PACKAGE_TERMS = (
     "integrated e&m", "integrated electromechanical", "mep package", "systems package",
     "systems contract", "機電標", "機電系統標", "機電系統", "機電設備",
 )
+
+_URBAN_RAIL_CONTEXT_TERMS = (
+    "metro", "subway", "underground", "urban rail", "light rail", "light-rail",
+    "tram", "tramway", "streetcar", "rapid transit", "mass rapid transit", "mrt",
+    "lrt", "station", "platform", "tunnel", "rail line", "metro line", "捷運",
+    "地鐵", "輕軌", "都市軌道", "車站", "月臺", "隧道",
+)
+_BUILDING_ONLY_CONTEXT_TERMS = (
+    "office", "offices", "office building", "building", "property", "residential",
+    "apartment", "hotel", "shopping mall", "corporate headquarters", "辦公室",
+    "辦公大樓", "建築", "大樓", "住宅", "商場", "房地產",
+)
+_VERTICAL_TRANSPORT_ACTION_TERMS = (
+    "upgrade", "upgraded", "modernize", "modernizes", "modernized", "modernise", "modernises",
+    "modernization", "modernisation",
+    "replace", "replaced", "replacement", "install", "installed", "installation",
+    "procure", "procurement", "contract", "award", "awarded", "supply", "supplied",
+    "deliver", "delivered", "commission", "commissioned", "package", "renewal",
+    "更新", "升級", "汰換", "更換", "新建", "安裝", "採購", "決標", "發包", "啟用",
+)
+_NON_URBAN_VEHICLE_CONTEXT_TERMS = (
+    "high-speed rail", "high speed rail", "high-speed train", "high speed train",
+    "hsr", "shinkansen", "bullet train", "tgv", "intercity", "inter-city",
+    "long-distance", "long distance", "regional rail", "commuter rail",
+    "mainline", "main line", "freight", "rail freight", "locomotive",
+    "national rail", "高速鐵路", "高鐵", "城際鐵路", "貨運鐵路",
+)
+
+
+def _has_urban_rail_context(text: str) -> bool:
+    """Return whether text identifies a rail facility rather than a generic building."""
+    lowered = str(text or "").casefold()
+    if not _contains_any(lowered, _URBAN_RAIL_CONTEXT_TERMS):
+        return False
+    explicit_facility = _contains_any(
+        lowered,
+        (
+            "metro station", "subway station", "rail station", "urban rail station",
+            "light rail station", "metro line", "subway line", "rail line", "tunnel",
+            "station", "platform", "捷運站", "地鐵站", "車站", "隧道", "月臺",
+        ),
+    )
+    if _contains_any(lowered, _BUILDING_ONLY_CONTEXT_TERMS) and not explicit_facility:
+        return False
+    return True
+
+
+def _contextual_facility_hits(
+    evidence_fields: Mapping[str, str],
+    system: str,
+) -> list[dict[str, str]]:
+    """Require rail-facility context for context-sensitive E&M classes."""
+    hits: list[dict[str, str]] = []
+    terms = CORE_SYSTEM_TERM_GROUPS[system]
+    for field, value in evidence_fields.items():
+        text = str(value or "")
+        if not _has_urban_rail_context(text):
+            continue
+        if system == "垂直運輸設備" and not _contains_any(text, _VERTICAL_TRANSPORT_ACTION_TERMS):
+            continue
+        for hit in _positive_hits({field: text}, terms):
+            hits.append(hit)
+    return hits
 
 
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
@@ -157,8 +240,10 @@ def _apply_contextual_vehicle_semantics(text: str, systems: list[str]) -> list[s
     has_specific_vehicle_evidence = _contains_any(lowered, _ROLLING_STOCK_SPECIFIC_TERMS)
     explicit_vehicle_terms = (
         *_ROLLING_STOCK_SPECIFIC_TERMS,
-        "rolling stock", "vehicle fleet", "trainset", "trainsets",
-        "light rail vehicle", "light rail vehicles", "車輛系統", "車輛設備", "電聯車",
+        "rolling stock", "vehicle fleet", "train fleet", "trainset", "trainsets",
+        "metro train", "metro trains", "subway train", "subway trains",
+        "tram-train", "tram-trains", "tram train", "tram trains",
+        "light rail vehicle", "light rail vehicles", "lrv", "車輛系統", "車輛設備", "電聯車",
     )
     generic_package_without_vehicle_detail = (
         _contains_any(lowered, _GENERIC_PACKAGE_TERMS)
@@ -166,26 +251,43 @@ def _apply_contextual_vehicle_semantics(text: str, systems: list[str]) -> list[s
     )
     has_vehicle_event = bool(
         re.search(
-            r"\b(?:new|order(?:s|ed)?|procure(?:d|ment)?|purchase(?:d)?|deliver(?:y|ed)?|"
-            r"introduc(?:e|ed|tion)|deploy(?:ed|ment)?|upgrade(?:d)?|moderni[sz](?:e|ed|ation)|"
-            r"performance|maintenan(?:ce|t)|overhaul)\b.{0,50}\b(?:rolling stock|vehicle fleet|"
-            r"metro trains?|trainset|trainsets|trains?|列車|車輛)\b",
+            r"\b(?:new|supply|supplied|order(?:s|ed)?|procure(?:d|ment)?|purchase(?:d)?|"
+            r"deliver(?:y|ed)?|introduc(?:e|ed|tion)|deploy(?:ed|ment)?|upgrade(?:d)?|"
+            r"moderni[sz](?:e|ed|ation)|performance|maintenan(?:ce|t)|overhaul|"
+            r"acqui(?:re|red|sition)|replace(?:d|ment)?)\b.{0,60}\b(?:rolling stock|"
+            r"vehicle fleet|train fleet|metro trains?|subway trains?|tram-trains?|tram trains?|"
+            r"light rail vehicles?|lrv|trainsets?|trains?|列車|車輛)\b",
             lowered,
         )
         or re.search(
-            r"\b(?:rolling stock|vehicle fleet|metro trains?|trainset|trainsets|列車|車輛)\b.{0,50}\b(?:"
-            r"maintenan(?:ce|t)|overhaul|performance|upgrade(?:d)?|moderni[sz](?:e|ed|ation))\b",
+            r"\b(?:rolling stock|vehicle fleet|train fleet|metro trains?|subway trains?|"
+            r"tram-trains?|tram trains?|light rail vehicles?|lrv|trainsets?|列車|車輛)\b.{0,60}\b(?:"
+            r"maintenan(?:ce|t)|overhaul|performance|upgrade(?:d)?|moderni[sz](?:e|ed|ation)|"
+            r"replace(?:d|ment)|renewal)\b",
             lowered,
         )
         or (
-            _contains_any(lowered, ("rolling stock", "vehicle fleet", "trainset", "trainsets"))
+            _contains_any(lowered, explicit_vehicle_terms)
             and _contains_any(lowered, _ROLLING_STOCK_EVENT_TERMS)
         )
+    )
+    intrinsic_urban_vehicle = _contains_any(
+        lowered,
+        (
+            "rolling stock", "train fleet", "trainset", "trainsets",
+            "tram-train", "tram train", "light rail vehicle", "light rail vehicles",
+            "metro train", "metro trains", "subway train", "subway trains", "lrv",
+        ),
+    )
+    non_urban_vehicle_context = _contains_any(lowered, _NON_URBAN_VEHICLE_CONTEXT_TERMS)
+    vehicle_context = (
+        (_has_urban_rail_context(lowered) or intrinsic_urban_vehicle)
+        and not non_urban_vehicle_context
     )
     systems = list(systems)
     if (
         not generic_package_without_vehicle_detail
-        and (has_specific_vehicle_evidence or has_vehicle_event)
+        and (has_specific_vehicle_evidence or (has_vehicle_event and vehicle_context))
         and "電聯車" not in systems
         and (not has_depot_facility or has_specific_vehicle_evidence)
     ):
@@ -295,7 +397,10 @@ def classify_electromechanical_evidence(fields: Mapping[str, str] | str) -> dict
     rejected: list[dict[str, str]] = []
 
     for system in CORE_SYSTEM_LABELS:
-        hits = _positive_hits(evidence_fields, CORE_SYSTEM_TERM_GROUPS[system])
+        if system in {"垂直運輸設備", "通風空調系統"}:
+            hits = _contextual_facility_hits(evidence_fields, system)
+        else:
+            hits = _positive_hits(evidence_fields, CORE_SYSTEM_TERM_GROUPS[system])
         if system == "號誌":
             hits.extend(_contextual_signalling_hits(evidence_fields))
         elif system == "機廠維修設備":

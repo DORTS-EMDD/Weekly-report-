@@ -49,10 +49,10 @@ def _candidate(candidate_id, title, snippet, *, family="technology", tier="B_pro
 
 
 class P2KRecallQualityTests(unittest.TestCase):
-    def test_formal_core_system_whitelist_remains_seven_labels(self):
+    def test_formal_core_system_whitelist_contains_canonical_labels(self):
         self.assertEqual(
             article_selector.CORE_SYSTEM_LABELS,
-            ("電聯車", "號誌", "供電", "通訊", "自動收費", "機廠維修設備", "月臺門"),
+            ("電聯車", "號誌", "供電", "通訊", "自動收費", "機廠維修設備", "月臺門", "垂直運輸設備", "通風空調系統"),
         )
 
     def test_generic_electromechanical_package_does_not_infer_rolling_stock(self):

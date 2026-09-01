@@ -115,20 +115,28 @@ class P2GCoreSystemTests(unittest.TestCase):
                 candidate = _candidate(title, snippet)
                 self.assertEqual(api["_core_systems_for_candidate"](candidate), [expected])
 
-    def test_pure_vertical_transport_and_hvac_are_not_technical_or_core_systems(self):
+    def test_contextual_vertical_transport_and_hvac_are_formal_core_systems(self):
         api = _selector()
         fixtures = [
-            ("Metro station elevator modernization contract", "Two elevators were modernized at the subway station."),
-            ("Metro escalator replacement", "Station escalators were replaced."),
-            ("Metro station HVAC upgrade", "The station HVAC system was upgraded."),
+            ("Metro station elevator modernization contract", "Two elevators were modernized at the subway station.", "垂直運輸設備"),
+            ("Metro escalator replacement", "Station escalators were replaced.", "垂直運輸設備"),
+            ("Metro station HVAC upgrade", "The station HVAC system was upgraded.", "通風空調系統"),
         ]
-        for title, snippet in fixtures:
+        for title, snippet, expected_system in fixtures:
             with self.subTest(title=title):
                 candidate = _candidate(title, snippet)
-                self.assertEqual(api["_core_systems_for_candidate"](candidate), [])
-                self.assertFalse(api["_passes_technical_triad"](candidate))
+                self.assertEqual(api["_core_systems_for_candidate"](candidate), [expected_system])
                 procurement = api["_compute_electromechanical_procurement_gate"](candidate)
-                self.assertFalse(procurement["procurement_gate_pass"])
+                self.assertIn(
+                    "vertical_transport" if expected_system == "垂直運輸設備" else "ventilation_hvac",
+                    procurement["procurement_systems"],
+                )
+
+    def test_building_vertical_transport_and_hvac_remain_unclassified(self):
+        api = _selector()
+        for title in ("Office building elevator modernization", "Property HVAC upgrade"):
+            with self.subTest(title=title):
+                self.assertEqual(api["_core_systems_for_candidate"](_candidate(title)), [])
 
     def test_cross_system_technology_remains_eligible_without_forced_core_label(self):
         api = _selector()

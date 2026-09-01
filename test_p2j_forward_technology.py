@@ -164,7 +164,7 @@ class P2JForwardTechnologyTests(unittest.TestCase):
     def test_core_system_whitelist_is_unchanged_and_track_b_debug_is_exposed(self):
         self.assertEqual(
             article_selector.CORE_SYSTEM_LABELS,
-            ("電聯車", "號誌", "供電", "通訊", "自動收費", "機廠維修設備", "月臺門"),
+            ("電聯車", "號誌", "供電", "通訊", "自動收費", "機廠維修設備", "月臺門", "垂直運輸設備", "通風空調系統"),
         )
         candidate = _evaluated(
             _selector_api(),

@@ -222,7 +222,7 @@ class P2K3MixedPoolTests(unittest.TestCase):
     def test_mixed_pool_is_not_all_technology_and_exposes_gate_debug(self):
         api = _selector()
         candidates = [
-            _candidate("technology", "Metro deploys CBTC moving-block operation", "The metro deploys moving-block CBTC to increase capacity by 20%."),
+            _candidate("technology", "Metro light rail deploys CBTC moving-block operation", "The light rail operator deploys moving-block CBTC to increase capacity by 20%."),
             _candidate("accident", "Metro collision causes evacuation", "Two metro trains collided and passengers were evacuated after a major disruption."),
             _candidate("incident", "Metro signalling fault stops service", "A signalling fault forced manual operation and service suspension."),
             _candidate("policy", "Seoul Metro electricity tariff reform", "The electricity tariff reform changes metro operating cost policy."),

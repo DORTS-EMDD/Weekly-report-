@@ -227,57 +227,6 @@ PROJECT_ONLY_ACTION_TERMS = [
     "得標", "採購", "訂購", "交車", "交付", "投標", "招標",
 ]
 
-ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS: dict[str, list[str]] = {
-    "signalling": [
-        "signalling", "signaling", "signal system", "cbtc", "train control",
-        "ats", "atp", "ato", "號誌", "信號系統", "行車控制", "列車控制", "列控",
-        "信号", "信号システム", "신호", "신호 시스템",
-    ],
-    "traction_power": [
-        "traction power", "traction power supply", "power supply", "substation",
-        "scada", "electrical system", "供電", "牽引供電", "變電站", "電力系統",
-        "電力供給", "変電所", "전력 공급", "변전소",
-    ],
-    "telecommunications": [
-        "telecommunications", "telecommunication system", "communication system",
-        "communications system", "telecom", "radio system", "fibre communication",
-        "fiber communication", "通訊", "通訊系統", "無線電系統", "光纖通訊",
-        "通信", "通信システム", "통신", "통신 시스템",
-    ],
-    "afc": [
-        "afc", "automatic fare collection", "fare collection system", "ticketing system",
-        "自動收費", "自動收費系統", "票務系統",
-        "運賃収受", "料金収受", "요금 징수",
-    ],
-    "platform_screen_doors": [
-        "platform screen door", "platform screen doors", "platform door", "platform doors",
-        "psd", "月臺門", "月台門",
-        "ホームドア", "스크린도어",
-    ],
-    "rolling_stock": [
-        "rolling stock", "trainset", "trainsets", "metro train", "metro trains",
-        "light rail vehicle", "light rail vehicles", "lrv", "train", "trains",
-        "車輛", "軌道車輛", "電聯車", "列車", "車両", "電車", "전동차",
-    ],
-    "depot_electromechanical": [
-        "depot electromechanical system", "depot electromechanical systems",
-        "depot e&m", "depot mep", "機廠機電", "機廠機電系統",
-    ],
-    "station_electromechanical": [
-        "station e&m", "station e & m", "station mep", "mep systems",
-        "mechanical and electrical systems", "electromechanical systems",
-        "車站機電", "機電系統", "機電設備",
-    ],
-    "vertical_transport": [
-        "escalator", "escalators", "elevator", "elevators", "lift", "lifts",
-        "電扶梯", "手扶梯", "電梯",
-    ],
-    "ventilation_hvac": [
-        "ventilation", "hvac", "air conditioning", "smoke control",
-        "通風", "空調", "環控系統", "環境控制系統",
-    ],
-}
-
 ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS: dict[str, list[str]] = {
     "tender": [
         "invitation to tender", "calls for tender", "tender", "bid invitation", "招標", "投標",
@@ -291,7 +240,10 @@ ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS: dict[str, list[str]] = {
     ],
     "procurement": [
         "procurement", "procure", "procures", "purchase order", "framework contract",
-        "contract", "contracts", "contract signing", "signed contract", "採購", "簽約", "系統標", "標案",
+        "contract", "contracts", "contract signing", "signed contract", "supply", "supplied",
+        "delivery", "delivered", "acquisition", "acquired", "fleet acquisition",
+        "purchase", "purchased", "order", "orders", "ordered", "ordering",
+        "採購", "簽約", "系統標", "標案", "供應", "交付", "取得",
         "조달", "계약 체결", "調達", "契約締結",
     ],
     "order": [
@@ -320,24 +272,12 @@ ELECTROMECHANICAL_GENERIC_SCOPE_TERMS = [
     "機電系統", "機電設備", "기전 시스템", "전기기계 시스템",
 ]
 
-ROLLING_STOCK_EVENT_TERMS = (
-    "new", "order", "orders", "ordered", "procure", "procurement", "procured",
-    "purchase", "purchased", "delivery", "delivered", "introduce", "introduced",
-    "deployment", "deployed", "upgrade", "upgraded", "modernization", "modernisation",
-    "performance", "maintenance", "overhaul", "fleet", "採購", "訂購", "交車",
-    "導入", "投入", "性能", "維修", "更新",
-)
-
-DEPOT_FACILITY_TERMS = (
-    "maintenance facility", "maintenance depot", "train maintenance facility",
-    "depot maintenance", "depot", "workshop", "operations and maintenance centre",
-    "operations and maintenance center", "機廠", "維修廠", "維修中心",
-)
-
 NON_CORE_EQUIPMENT_TERMS = (
     "elevator", "elevators", "lift", "lifts", "escalator", "escalators",
     "air conditioning", "hvac", "ventilation", "smoke control", "environmental control",
     "電梯", "升降機", "電扶梯", "空調", "通風", "環控", "環境控制",
+    "office furniture", "office fit-out", "office equipment", "property equipment",
+    "辦公家具", "辦公設備", "物業設備", "建築設備",
 )
 
 CROSS_SYSTEM_TECHNICAL_APPLICATION_TERMS = (
@@ -1968,19 +1908,24 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         ):
             return False
         has_explicit_anchor = _contains_any_term(topic_text, PROCUREMENT_URBAN_RAIL_ANCHOR_TERMS)
+        canonical_systems = _core_systems_for_candidate(candidate)
         has_metro_system_anchor = (
             _contains_any_term(topic_text, ["metro"])
-            and _contains_any_term(
-                topic_text,
-                METRO_RAIL_CONTEXT_TERMS
-                + [term for terms in ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS.values() for term in terms],
+            and (
+                _contains_any_term(topic_text, METRO_RAIL_CONTEXT_TERMS)
+                or bool(canonical_systems)
+                or _contains_any_term(topic_text, ELECTROMECHANICAL_GENERIC_SCOPE_TERMS)
             )
         )
+        has_facility_system_anchor = bool(
+            canonical_systems
+            and _contains_any_term(topic_text, ["station", "platform", "tunnel", "車站", "月臺", "月台", "隧道"])
+        )
         if not _is_urban_rail_candidate(text, source) and not (
-            has_explicit_anchor or has_metro_system_anchor
+            has_explicit_anchor or has_metro_system_anchor or has_facility_system_anchor
         ):
             return False
-        return has_explicit_anchor or has_metro_system_anchor
+        return has_explicit_anchor or has_metro_system_anchor or has_facility_system_anchor
 
 
     def _is_procurement_rescue_candidate(candidate: dict) -> bool:
@@ -1990,14 +1935,14 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         professional_source = source_tier in {"A_official", "B_professional"}
         official_source = professional_source or source_domain.endswith((".gov", ".gov.uk", ".gov.au", ".gov.sg"))
         action_terms = [term for terms in ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS.values() for term in terms]
-        system_terms = [term for terms in ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS.values() for term in terms]
+        canonical_systems = _core_systems_for_candidate(candidate)
         return bool(
             official_source
             and _candidate_date_obj(candidate.get("date", ""))
             and _has_source_reference(candidate)
             and _procurement_urban_rail_context(candidate)
             and _contains_any_term(text, action_terms)
-            and not _contains_any_term(text, system_terms)
+            and not canonical_systems
         )
 
 
@@ -2803,10 +2748,15 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def _is_non_core_equipment_only(candidate: dict) -> bool:
         text = _candidate_selection_text(candidate)
+        generic_electromechanical_scope = bool(
+            candidate.get("procurement_generic_electromechanical_scope")
+            or _contains_any_term(text, ELECTROMECHANICAL_GENERIC_SCOPE_TERMS)
+        )
         return bool(
             _contains_any_term(text, list(NON_CORE_EQUIPMENT_TERMS))
             and not _core_systems_for_candidate(candidate)
             and not _has_cross_system_technical_application(candidate)
+            and not generic_electromechanical_scope
         )
 
 
@@ -3180,32 +3130,17 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
         title_snippet = f"{candidate.get('title', '')} {candidate.get('snippet', '')}".strip()
         scope_text = f"{title_snippet} {candidate.get('source', '')}".strip()
-        systems = _electromechanical_procurement_matches(
-            title_snippet,
-            ELECTROMECHANICAL_PROCUREMENT_SYSTEM_TERMS,
-        )
-        formal_taxonomy = classify_candidate_electromechanical(candidate)
-        for core_system in formal_taxonomy["systems"]:
-            procurement_group = CORE_TO_PROCUREMENT_GROUP.get(str(core_system))
-            if procurement_group and procurement_group not in systems:
-                systems.append(procurement_group)
+        core_systems = _core_systems_for_candidate(candidate)
+        systems = list(dict.fromkeys(
+            procurement_group
+            for core_system in core_systems
+            if (procurement_group := CORE_TO_PROCUREMENT_GROUP.get(str(core_system)))
+        ))
         generic_electromechanical_scope = _contains_any_term(
             title_snippet,
             ELECTROMECHANICAL_GENERIC_SCOPE_TERMS,
         )
-        core_systems = _core_systems_for_candidate(candidate)
         cross_system_application = _has_cross_system_technical_application(candidate)
-        station_context = _contains_any_term(
-            title_snippet,
-            ELECTROMECHANICAL_PROCUREMENT_STATION_CONTEXT_TERMS
-            + ELECTROMECHANICAL_PROCUREMENT_SEPARATE_PACKAGE_TERMS
-            + ["metro system", "subway system", "urban rail system", "捷運系統", "地鐵系統"],
-        )
-        if not station_context:
-            systems = [
-                system for system in systems
-                if system not in {"vertical_transport", "ventilation_hvac"}
-            ]
         actions = _electromechanical_procurement_matches(
             title_snippet,
             ELECTROMECHANICAL_PROCUREMENT_ACTION_TERMS,
@@ -3296,7 +3231,17 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             failures.append("electromechanical_system_missing")
         if not actions:
             failures.append("procurement_action_missing")
-        if civil_hits and not separate_package:
+        tunnel_hvac_package = bool(
+            "ventilation_hvac" in systems
+            and not _contains_any_term(
+                title_snippet,
+                (
+                    "civil works", "civil engineering", "structural works", "excavation",
+                    "foundation", "piling", "土建", "土木", "站體結構",
+                ),
+            )
+        )
+        if civil_hits and not separate_package and not tunnel_hvac_package:
             failures.append("civil_only" if not systems else "civil_scope_not_separable")
         if planning_hits and not (detailed_design and systems and actions):
             failures.append("planning_or_consultancy_only")
