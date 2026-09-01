@@ -59,6 +59,7 @@ _COUNTRY_ALIASES = {
 }
 
 _CITY_ALIASES = (
+    ("taipei", ("taipei metro", "taipei mrt", "taipei", "臺北捷運", "台北捷運", "北捷", "臺北", "台北")),
     ("new-york", ("new york city", "new york", "nyc", "manhattan", "紐約")),
     ("taoyuan", ("taoyuan", "桃園")),
     ("gelsenkirchen", ("gelsenkirchen", "蓋爾森基興")),
@@ -79,6 +80,7 @@ _CITY_ALIASES = (
 )
 
 _CITY_COUNTRIES = {
+    "taipei": "taiwan",
     "new-york": "united-states",
     "taoyuan": "taiwan",
     "gelsenkirchen": "germany",
@@ -99,6 +101,7 @@ _CITY_COUNTRIES = {
 }
 
 _OPERATOR_ALIASES = (
+    ("taipei-metro", ("taipei metro", "taipei mrt", "臺北捷運", "台北捷運", "北捷")),
     ("mta", ("metropolitan transportation authority", "new york city transit", "nyc subway", "mta", "nyct")),
     ("taoyuan-metro", ("taoyuan metro", "桃園捷運", "桃捷")),
     ("tfl", ("transport for london", "london underground", "tfl")),
@@ -108,6 +111,20 @@ _OPERATOR_ALIASES = (
     ("wiener-linien", ("wiener linien",)),
     ("sydney-metro", ("sydney metro",)),
     ("tokyo-metro", ("tokyo metro",)),
+)
+
+# A station may have an official name and a local-language alias separated by
+# a slash.  Keep the alias map generic and bounded so it does not become a
+# title-specific dedupe rule.
+_STATION_ALIASES = (
+    (
+        "r01-guangci-fengtian-temple",
+        (
+            "廣慈/奉天宮", "奉天宮/廣慈", "r01廣慈/奉天宮",
+            "r01/廣慈/奉天宮", "guangci/fengtian temple",
+            "guangci fengtian temple",
+        ),
+    ),
 )
 
 _COLOR_LINES = {
@@ -218,16 +235,23 @@ def _country(candidate: dict, city: str) -> str:
 
 def _station_keys(text: str) -> tuple[str, ...]:
     stations: set[str] = set()
+    normalized = re.sub(r"\s+", "", str(text or "").replace("／", "/")).casefold()
+    for canonical, aliases in _STATION_ALIASES:
+        if any(alias.casefold() in normalized for alias in aliases):
+            stations.add(canonical)
     for match in re.findall(
         r"\b([A-Z][A-Za-z0-9'’.-]*(?:\s+[A-Z][A-Za-z0-9'’.-]*){0,3})\s+(?:subway\s+|metro\s+)?station\b",
         text,
     ):
         key = _slug(match)
-        if key and key not in {"new-york-city", "metro", "subway"}:
+        if key and key not in {
+            "new-york-city", "metro", "subway", "全捷運系統營運",
+            "台北捷運全系統營運",
+        }:
             stations.add(key)
     for match in re.findall(r"([\u3400-\u9fffA-Za-z0-9]{1,16})(?:捷運站|地鐵站|車站)", text):
         key = _slug(match)
-        if key:
+        if key and key not in {"全捷運系統營運", "台北捷運全系統營運"}:
             stations.add(key)
     return tuple(sorted(stations))[:6]
 
@@ -236,6 +260,15 @@ def _project_key(candidate: dict, title: str, text: str) -> str:
     explicit = next((_compact(candidate.get(field)) for field in ("project", "project_name", "line", "metro_line") if _compact(candidate.get(field))), "")
     if explicit:
         return _slug(explicit)
+    normalized_text = text.replace("／", "/")
+    if any(
+        term in normalized_text.casefold()
+        for term in (
+            "信義東延段", "信義線東延段", "淡水信義線東延段",
+            "xinyi east extension", "tamsui-xinyi line eastern extension",
+        )
+    ):
+        return "xinyi-east-extension"
     for haystack in (title, text):
         lower = haystack.casefold()
         for color, canonical in _COLOR_LINES.items():
@@ -339,6 +372,9 @@ def _injury_count(text_lower: str) -> int | None:
 
 
 def _date_value(candidate: dict) -> tuple[str, str]:
+    opening_date = _explicit_service_opening_date(candidate)
+    if opening_date:
+        return opening_date, "opening_date"
     for field, kind in (
         ("incident_date", "incident_date"),
         ("award_date", "award_date"),
@@ -359,6 +395,72 @@ def _date_obj(value: str) -> datetime.date | None:
         return datetime.date.fromisoformat(value)
     except (TypeError, ValueError):
         return None
+
+
+def _publication_year(candidate: dict) -> int | None:
+    for field in ("published_date", "date", "publication_date"):
+        match = re.search(r"(?<!\d)(20\d{2})[-/]\d{1,2}[-/]\d{1,2}", _compact(candidate.get(field)))
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _explicit_service_opening_date(candidate: dict) -> str:
+    """Extract an explicitly stated passenger-service opening date.
+
+    The publication timestamp remains a fallback for ordinary events; an
+    opening date in the article subject/evidence is the event's identity date.
+    """
+    text = " ".join(
+        _compact(candidate.get(field))
+        for field in ("title", "raw_title", "snippet", "summary", "summary_zh")
+        if _compact(candidate.get(field))
+    )
+    if not text:
+        return ""
+    opening_context = str(
+        candidate.get("operational_subtype")
+        or candidate.get("primary_category")
+        or candidate.get("classification")
+        or ""
+    ).casefold()
+    if "service_opening" not in opening_context and not re.search(
+        r"(?:passenger\s+service|entered?\s+(?:revenue\s+)?service|正式通車|通車|opens?\s+to\s+passengers)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return ""
+    year = _publication_year(candidate)
+    if year is None:
+        return ""
+
+    patterns = (
+        r"(?<!\d)(\d{1,2})\s*[\/／]\s*(\d{1,2})(?!\d)",
+        r"(?<!\d)(\d{1,2})月\s*(\d{1,2})日",
+        r"(?:今\s*[（(]\s*)?(\d{1,2})\s*[）)]?\s*日[^0-9]{0,12}(?:正式)?通車",
+        r"(?<!\d)(\d{1,2})日\s*(?:正式)?通車",
+        r"(?:正式通車|通車|opens?\s+to\s+passengers|enters?\s+(?:revenue\s+)?service)[^0-9]{0,20}(\d{1,2})日",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        month, day = (None, None)
+        if "/" in match.group(0) or "／" in match.group(0):
+            month, day = int(match.group(1)), int(match.group(2))
+        elif "月" in match.group(0):
+            month, day = int(match.group(1)), int(match.group(2))
+        else:
+            day = int(match.group(1))
+            publication = _date_obj(_compact(candidate.get("published_date"))[:10])
+            month = publication.month if publication else None
+        if month is None or not (1 <= month <= 12 and 1 <= day <= 31):
+            continue
+        try:
+            return datetime.date(year, month, day).isoformat()
+        except ValueError:
+            continue
+    return ""
 
 
 def _event_class(category: str, action: str, incident: str, text_lower: str) -> str:
@@ -409,6 +511,8 @@ def build_event_identity(candidate: dict) -> dict:
     date_value, date_kind = _date_value(candidate)
     event_class = _event_class(category, action, incident, text_lower)
     stations = _station_keys(text)
+    if stations and action == "opening" and not event_object:
+        event_object = "station"
     injury_count = _injury_count(text_lower)
     geo_key = "/".join(value for value in (country, city) if value)
     identity_payload = {
@@ -504,6 +608,13 @@ def compare_materialized_event_identities(
         right_stations = set(right["stations"])
         if left_stations and right_stations and left_stations.isdisjoint(right_stations):
             conflicts.append(_conflict("station", sorted(left_stations), sorted(right_stations)))
+    if left["event_class"] == "general" and right["event_class"] == "general":
+        left_stations = set(left["stations"])
+        right_stations = set(right["stations"])
+        if left_stations and right_stations and left_stations.isdisjoint(right_stations):
+            conflicts.append(_conflict("station", sorted(left_stations), sorted(right_stations)))
+        if left["action"] and right["action"] and left["action"] != right["action"]:
+            conflicts.append(_conflict("action", left["action"], right["action"]))
 
     left_date = _date_obj(left["event_date"])
     right_date = _date_obj(right["event_date"])
@@ -580,15 +691,23 @@ def compare_materialized_event_identities(
     elif not conflicts and event_class != "mixed":
         anchors = 0
         scope_anchor = False
+        specific_scope = False
         for component in ("city", "operator", "project", "event_object", "action"):
             if left.get(component) and left.get(component) == right.get(component):
                 anchors += 1
                 matched.append(component)
                 if component in {"city", "operator", "project"}:
                     scope_anchor = True
+                if component in {"project", "event_object"}:
+                    specific_scope = True
+        left_stations = set(left["stations"])
+        right_stations = set(right["stations"])
+        if left_stations and right_stations and not left_stations.isdisjoint(right_stations):
+            specific_scope = True
+            matched.append("station")
         if date_days is not None:
             matched.append("bounded_date")
-        same_event = scope_anchor and anchors >= 2 and (date_days is None or date_days <= date_window)
+        same_event = scope_anchor and specific_scope and anchors >= 2 and (date_days is None or date_days <= date_window)
 
     duplicate_type = "ARTICLE_DUPLICATE" if article_duplicate else "EVENT_DUPLICATE" if same_event else ""
     if same_event:
