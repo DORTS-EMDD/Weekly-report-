@@ -2940,11 +2940,22 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _is_forward_radar_only_candidate(candidate: dict) -> bool:
-        return (
-            candidate.get("search_family") == "forward_technology"
-            and not _passes_forward_technology_gate(candidate)
-            and _passes_forward_technology_watchlist(candidate)
-        )
+        if candidate.get("search_family") != "forward_technology":
+            return False
+        # This is a selector-side diagnostic exclusion.  Once category
+        # materialization has happened, consume its forward status and never
+        # invoke the canonical forward-domain predicate a second time.
+        if "forward_status" in candidate:
+            return candidate.get("forward_status") == "radar_watchlist"
+        category_gates = candidate.get("category_gates")
+        if isinstance(category_gates, dict) and "forward_technology" in category_gates:
+            return (
+                not bool(category_gates.get("forward_technology"))
+                and bool(candidate.get("radar_watchlist_pass"))
+            )
+        # Unmaterialized legacy callers have no authoritative status to
+        # consume; do not recreate a second forward-technology owner here.
+        return False
 
 
     def _candidate_urban_rail_gate(candidate: dict) -> bool:
@@ -4333,26 +4344,40 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def _is_technical_news_selection_candidate(candidate: dict) -> bool:
-        if candidate.get("classification") != "技術新知":
+        """Return whether a canonical technology candidate is quality-eligible.
+
+        Technology-domain eligibility is materialized upstream by
+        ``evaluate_category_gates`` and resolved by ``primary_category``.  This
+        selector accessor intentionally consumes those fields instead of
+        re-running the technical vocabulary/triad/forward predicates.
+        """
+        if not _canonical_technology_admission(candidate):
             return False
-        if _is_forward_radar_only_candidate(candidate):
+        # Forward radar candidates are diagnostics only; a radar-only record
+        # must not enter the formal selector even when it contains technical
+        # language.  Consume the materialized status rather than recomputing
+        # the forward-domain gate here.
+        if candidate.get("forward_status") == "radar_watchlist":
             return False
-        text = _candidate_selection_text(candidate)
         if _is_financial_market_candidate(candidate):
             return False
-        if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS):
-            return False
-        if _is_accident_signal_text(text):
-            return False
         if _is_low_value_ceremonial_candidate(candidate):
-            return False
-        if not (_passes_technical_triad(candidate) or _passes_forward_technology_gate(candidate)):
             return False
         if _has_low_value_official_notice(candidate):
             return False
         if candidate.get("source_tier") == "D_proxy_low_value":
             return False
         return True
+
+
+    def _canonical_technology_admission(candidate: dict) -> bool:
+        """Read the sole authoritative technology-domain admission result."""
+        category_gates = candidate.get("category_gates")
+        return bool(
+            isinstance(category_gates, dict)
+            and category_gates.get("technology") is True
+            and candidate.get("primary_category") == "技術新知"
+        )
 
 
     def get_selection_candidate_limit(days: int, fast_mode: bool = False) -> int:
@@ -5580,10 +5605,24 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return not bool(candidate.get("selector_quality_eligible"))
         flags = set(candidate.get("candidate_flags", []) or [])
         score = int(candidate.get("python_score", 0) or 0)
-        has_good_signal = _has_good_report_signal(candidate)
-        has_technical_detail = _has_explicit_technical_system_detail(candidate)
         text = _candidate_selection_text(candidate)
         classification = _selection_classification(candidate)
+        if classification == "技術新知":
+            # Domain evidence has already been materialized by the category
+            # owner.  Do not invoke technical vocabulary/triad predicates
+            # while applying selector quality rules.
+            canonical_technology = _canonical_technology_admission(candidate)
+            has_good_signal = canonical_technology or bool(
+                flags.intersection({
+                    "technical_or_system_detail",
+                    "trusted_title_technical_signal",
+                    "core_metro_technical_content",
+                })
+            )
+            has_technical_detail = canonical_technology
+        else:
+            has_good_signal = _has_good_report_signal(candidate)
+            has_technical_detail = _has_explicit_technical_system_detail(candidate)
         if classification == "excluded":
             return True
         if _is_forward_radar_only_candidate(candidate):
@@ -5592,10 +5631,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return True
         if candidate.get("source_tier") == "D_proxy_low_value":
             return True
-        if classification == "技術新知" and not (
-            _passes_technical_triad(dict(candidate, classification="技術新知"))
-            or _passes_forward_technology_gate(dict(candidate, classification="技術新知"))
-        ):
+        if classification == "技術新知" and not _canonical_technology_admission(candidate):
             return True
         if classification == "重大事故" and not _passes_major_accident_gate(dict(candidate, classification="重大事故")):
             return True
@@ -5616,13 +5652,9 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return True
         if _is_security_or_crime_candidate(candidate) and not _has_major_security_rail_impact(candidate):
             return True
-        if _contains_any_term(text, EQUIPMENT_FAILURE_TERMS) and classification == "技術新知":
-            return True
         if _is_low_value_long_term_candidate(candidate):
             return True
         if "general_rail_exclusion" in flags or _has_general_rail_exclusion(candidate):
-            return True
-        if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS) and not _has_substantive_detail_for_low_value_notice(candidate):
             return True
         if _has_procurement_list_notice(candidate):
             return True
@@ -5641,7 +5673,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def _is_strict_technical_candidate(candidate: dict) -> bool:
         if "selector_strict_technical" in candidate and not candidate.get("_selector_materialization_phase"):
-            return bool(candidate.get("selector_strict_technical"))
+            return bool(candidate.get("selector_strict_technical")) and _canonical_technology_admission(candidate)
         return _is_technical_news_selection_candidate(candidate)
 
 
@@ -5831,10 +5863,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return True
         if _is_forward_radar_only_candidate(candidate):
             return True
-        if classification == "技術新知" and not (
-            _passes_technical_triad(dict(candidate, classification="技術新知"))
-            or _passes_forward_technology_gate(dict(candidate, classification="技術新知"))
-        ):
+        if classification == "技術新知" and not _canonical_technology_admission(candidate):
             return True
         if classification == "重大事故" and not _passes_major_accident_gate(dict(candidate, classification="重大事故")):
             return True
@@ -5873,27 +5902,24 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
     def _is_b_level_technical_candidate(candidate: dict) -> bool:
         if "selector_b_level_technical" in candidate and not candidate.get("_selector_materialization_phase"):
-            return bool(candidate.get("selector_b_level_technical"))
-        text = _candidate_selection_text(candidate)
-        if candidate.get("classification") != "技術新知":
+            return bool(candidate.get("selector_b_level_technical")) and _canonical_technology_admission(candidate)
+        if not _canonical_technology_admission(candidate):
             return False
         if _is_hard_excluded_for_borderline(candidate):
-            return False
-        if _contains_any_term(text, NON_TECH_NEWS_EXCLUDE_TERMS):
-            return False
-        if _is_accident_signal_text(text):
             return False
         if not _candidate_date_obj(candidate.get("date", "")):
             return False
         if not _has_source_reference(candidate):
             return False
-        if not _candidate_urban_rail_gate(candidate):
-            return False
-        if not _passes_technical_triad(candidate):
-            return False
         if candidate.get("source_tier") in {"A_official", "B_professional"}:
             return True
-        return _contains_any_term(text, MEDIUM_TECHNICAL_DETAIL_TERMS + WEEKLY_BACKFILL_ALLOWED_TERMS)
+        # Lower-tier material can remain a B-level quality candidate only when
+        # its already-computed score/source quality meet the existing quality
+        # bar.  Domain vocabulary is deliberately not re-evaluated here.
+        return (
+            candidate.get("source_quality") in {"A", "B"}
+            and int(candidate.get("python_score", 0) or 0) >= 70
+        )
 
 
     def _is_borderline_report_candidate(candidate: dict) -> tuple[bool, str]:
@@ -5970,14 +5996,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             candidate["selector_quality_eligible"] = not bool(
                 _is_low_value_python_selection_candidate(candidate)
             )
+            category_gates = candidate.get("category_gates") or {}
             candidate["selector_forward_gate_pass"] = bool(
-                _passes_forward_technology_gate(candidate)
-            ) if candidate.get("search_family") == "forward_technology" else True
-            candidate["selector_technology_gate_pass"] = bool(
-                (candidate.get("category_gates") or {}).get("technology")
-                or candidate.get("selector_strict_technical")
-                or candidate.get("selector_forward_gate_pass")
+                category_gates.get("forward_technology", False)
             )
+            candidate["selector_technology_gate_pass"] = _canonical_technology_admission(candidate)
             candidate["selector_operational_coverage"] = bool(
                 _qualifying_operational_coverage_candidate(candidate, [])
             )
@@ -6505,6 +6528,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         "_has_substantive_detail_for_low_value_notice": _has_substantive_detail_for_low_value_notice,
         "_has_long_term_report_value": _has_long_term_report_value,
         "_is_low_value_long_term_candidate": _is_low_value_long_term_candidate,
+        "_canonical_technology_admission": _canonical_technology_admission,
         "_is_technical_news_selection_candidate": _is_technical_news_selection_candidate,
         "get_selection_candidate_limit": get_selection_candidate_limit,
         "get_selection_output_range": get_selection_output_range,
