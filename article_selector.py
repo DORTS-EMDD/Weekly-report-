@@ -3465,6 +3465,15 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return False
         if _contains_any_term(fragment, ACADEMIC_ACCIDENT_NON_EVENT_TERMS) and not _has_affirmative_occurred_major_accident(fragment):
             return False
+        # Keep severity vocabulary owned by the canonical multilingual list.
+        # Direct accident terms remain below for compatibility with existing
+        # collision/crash/fire evidence; German and other translated severity
+        # forms must not require source- or title-specific branches.
+        if (
+            _contains_positive_term(fragment, MAJOR_ACCIDENT_SEVERITY_TERMS)
+            and not _contains_positive_term(fragment, EQUIPMENT_FAILURE_TERMS)
+        ):
+            return True
         if _contains_positive_term(fragment, MAJOR_ACCIDENT_DIRECT_TERMS):
             return True
         if re.search(r"\b\d{1,3}\+?\s+(?:people\s+)?(?:were\s+)?injured\b", fragment or "", flags=re.IGNORECASE):
