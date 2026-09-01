@@ -245,6 +245,7 @@ EVENT_REGION_PRIORITY_HINTS: list[tuple[str, list[str]]] = [
     ("臺中", ["臺中捷運", "台中捷運", "taichung metro", "taichung mrt", "中捷"]),
     ("高雄", ["高雄捷運", "kaohsiung metro", "kaohsiung mrt", "krtc", "高捷"]),
     ("Indonesia", ["Jakarta", "Jakarta MRT", "MRT Jakarta", "PT MRT Jakarta", "Indonesia", "Indonesian", "印尼", "印度尼西亞"]),
+    ("希臘", ["Greece", "Greek", "Thessaloniki", "Thessaloniki Metro", "Kalamaria", "Θεσσαλονίκη", "希臘", "希腊"]),
     ("澳洲", ["gold coast", "gold coast light rail", "g:link"]),
     ("瑞士", ["basel", "basel tram", "bvb", "zürich", "zurich", "lausanne", "瑞士", "巴塞爾", "蘇黎世", "洛桑"]),
     ("美國", ["austin transit partnership", "austin light rail", "houston", "metrorail", "houston metrorail", "metro rail houston", "wmata", "washington metro", "mta", "nyct", "new york subway", "休士頓", "休斯頓"]),
@@ -279,6 +280,17 @@ METRO_SYSTEM_OWNERSHIP_RULES = (
         # Require the Jakarta MRT/system anchor for high-precedence ownership;
         # a publisher/query mention of Jakarta alone remains low-confidence.
         "system_terms": ("mrt", "mass rapid transit"),
+    },
+    {
+        "region": "希臘",
+        "location_aliases": (
+            "thessaloniki", "thessaloniki metro", "kalamaria",
+            "θεσσαλονίκη", "greece", "greek", "希臘", "希腊",
+        ),
+        "operator_aliases": ("thessaloniki metro", "metro thessaloniki"),
+        "system_terms": (
+            "metro", "underground", "urban rail", "train", "station", "extension",
+        ),
     },
     {
         "region": "澳洲",
