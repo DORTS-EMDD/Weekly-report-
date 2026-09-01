@@ -94,6 +94,42 @@ class V56BAuthoritativeRegionTests(unittest.TestCase):
         )
         self.assertEqual(article_processor._canonical_candidate_region(candidate), "法國")
 
+    def test_tel_aviv_metro_subject_overrides_australia_proxy_region(self):
+        candidate = _candidate(
+            "Tel Aviv Metro launches GOA4 driverless rail tender",
+            "Israel's Tel Aviv Metro authority launched a tender for a GOA4 driverless rail network.",
+            region="澳洲",
+            source="Google News地區代理－Australia Metro",
+        )
+        self.assertEqual(article_processor._canonical_candidate_region(candidate), "以色列")
+        self.assertEqual(candidate["country"], "以色列")
+        self.assertEqual(candidate["region_resolution_winning_evidence"]["type"], "article_subject_country")
+
+    def test_israel_and_israeli_aliases_resolve_to_israel(self):
+        for title in ("Israel Metro technology programme", "Israeli urban rail tender"):
+            with self.subTest(title=title):
+                candidate = _candidate(title, "A metro programme in Israel.")
+                self.assertEqual(article_processor._canonical_candidate_region(candidate), "以色列")
+
+    def test_incidental_tel_aviv_does_not_override_sydney_event(self):
+        candidate = _candidate(
+            "Sydney Metro project advances after comparison with Tel Aviv Metro",
+            "The Sydney Metro project remains in Australia; the article compares it with Tel Aviv Metro.",
+            region="澳洲",
+        )
+        self.assertEqual(article_processor._canonical_candidate_region(candidate), "澳洲")
+
+    def test_tel_aviv_subject_wins_over_query_and_feed_metadata(self):
+        candidate = _candidate(
+            "Tel Aviv Metro driverless rail network tender",
+            "Tel Aviv Metro in Israel opened the driverless rail tender.",
+            region="澳洲",
+            query_region="澳洲",
+            query="Australia Metro tender",
+            source="Google News地區代理－Australia Metro",
+        )
+        self.assertEqual(article_processor._canonical_candidate_region(candidate), "以色列")
+
     def test_untrustworthy_geography_stays_unresolved(self):
         candidate = _candidate(
             "System modernization update",
