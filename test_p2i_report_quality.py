@@ -189,7 +189,7 @@ class P2IReportQualityTests(unittest.TestCase):
         self.assertIn("• 研究主題：都市軌道研究\n\n• 研究摘要", normalized)
         self.assertEqual(count_journal_summary_conclusion_chars(normalized, context=_postprocess_context()), 0)
 
-    def test_authoritative_passthrough_preserves_model_content(self):
+    def test_authoritative_passthrough_preserves_prose_and_canonicalizes_source(self):
         config = WorkflowConfig(
             today=datetime.date(2026, 8, 17),
             lookback_days=30,
@@ -207,9 +207,9 @@ class P2IReportQualityTests(unittest.TestCase):
         selected = [_candidate()]
         raw = _report()
         result = make_runtime(config, WorkflowDependencies(prefetch_enabled=False)).postprocess_report_with_diagnostics(raw, selected)
-        self.assertEqual(result["validated_report"], raw)
+        self.assertNotEqual(result["validated_report"], raw)
         self.assertIn("技術系統測試", result["clean_report"])
-        self.assertIn("Railway-News", result["clean_report"])
+        self.assertIn("Railway-News https://example.com/article/1", result["clean_report"])
         self.assertNotIn("candidate_id", result["clean_report"])
         self.assertEqual(result["id_validation"]["postprocess_mode"], "authoritative_passthrough")
         self.assertEqual(result["id_validation"]["selected_to_model_id_coverage"], 1.0)

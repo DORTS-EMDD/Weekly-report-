@@ -5,7 +5,7 @@ import unittest
 from article_processor import normalize_country
 from report_prompt_service import parse_selection_response
 from article_selector import build_selector_api
-from report_postprocessor import validate_authoritative_report
+from report_postprocessor import canonicalize_authoritative_source_fields, validate_authoritative_report
 from report_workflow_service import WorkflowConfig, WorkflowDependencies, make_runtime
 
 
@@ -246,6 +246,7 @@ class P2GCoreSystemTests(unittest.TestCase):
             "• 臺北捷運局啟示：可作為跨系統資料應用參考。",
             "• 資料來源：https://example.com/p2g",
         ])
+        report = canonicalize_authoritative_source_fields(report, selected)
         validation = validate_authoritative_report(report, selected, selected_types=[TECHNICAL])
         self.assertTrue(validation["report_validation_passed"])
         self.assertNotIn("system", validation["missing_model_fields"].get("1", []))

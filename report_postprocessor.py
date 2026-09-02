@@ -1820,6 +1820,150 @@ def _authoritative_block_field_values(lines: list[str]) -> dict[str, str]:
     return values
 
 
+def _canonical_source_metadata(candidate: dict) -> dict[str, str]:
+    """Return the deterministic source display/url contract for a candidate."""
+    return build_formal_report_source(candidate)
+
+
+def _candidate_has_deterministic_source(candidate: dict) -> bool:
+    """Whether the candidate carries enough source data for an authoritative overlay."""
+    source = _canonical_source_metadata(candidate)
+    return bool(
+        str(source.get("display_url") or "").strip()
+        or str(candidate.get("source_display") or candidate.get("source") or "").strip()
+        or str(candidate.get("source_href") or candidate.get("url") or "").strip()
+    )
+
+
+def _source_value_parts(value: str, *, expected_url: str = "") -> tuple[str, str]:
+    """Split a rendered source value into its display label and URL.
+
+    The model is allowed to format the field (plain URL or markdown link), but
+    it is not allowed to add or replace deterministic metadata.  Deliberately
+    keep arbitrary non-URL text so it is detected as a source-label mismatch.
+    """
+    text = unescape(str(value or "")).strip()
+    url = _extract_complete_url(text)
+    domain = _domain_from_url(expected_url or url)
+    label = _clean_source_label(text, url, domain)
+    return label, url
+
+
+def _source_value_matches_candidate(value: str, candidate: dict) -> bool:
+    if not _candidate_has_deterministic_source(candidate):
+        return True
+    expected = _canonical_source_metadata(candidate)
+    expected_url = str(expected.get("display_url") or "").strip()
+    expected_label = str(expected.get("display_name") or "").strip()
+    actual_label, actual_url = _source_value_parts(value, expected_url=expected_url)
+    normalize_label = lambda item: re.sub(r"\s+", " ", str(item or "")).strip().casefold()
+    return (
+        actual_url == expected_url
+        and normalize_label(actual_label) == normalize_label(expected_label)
+    )
+
+
+def _canonical_source_line(candidate: dict) -> str:
+    """Render only candidate-owned source metadata, never model text."""
+    source = _canonical_source_metadata(candidate)
+    display_name = str(source.get("display_name") or "").strip()
+    display_url = str(source.get("display_url") or "").strip()
+    value = " ".join(part for part in (display_name, display_url) if part)
+    return f"• 資料來源：{value}".rstrip()
+
+
+def canonicalize_authoritative_source_fields(
+    report_md: str,
+    selected_candidates: list[dict],
+    *,
+    context: ReportPostprocessContext | None = None,
+) -> str:
+    """Overlay canonical source metadata onto marked model article blocks.
+
+    Candidate IDs identify the authoritative record.  Prose fields remain
+    byte-for-byte untouched; each source field is replaced by the candidate's
+    deterministic display name and URL.
+    """
+    del context
+    if not report_md or not selected_candidates:
+        return report_md
+    selected_map = {
+        int(item.get("candidate_id") or item.get("id") or 0): item
+        for item in selected_candidates
+        if int(item.get("candidate_id") or item.get("id") or 0)
+    }
+    marker_pattern = re.compile(
+        r"^(?:<!--\s*candidate_id\s*:\s*(\d+)\s*-->|&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;)$",
+        flags=re.IGNORECASE,
+    )
+    lines = report_md.splitlines()
+    output: list[str] = []
+    current_ids: list[int] = []
+    block_content_seen = False
+    index = 0
+    changed = False
+    while index < len(lines):
+        raw_line = lines[index]
+        stripped = raw_line.strip()
+        marker = marker_pattern.fullmatch(stripped)
+        if marker:
+            if current_ids and block_content_seen:
+                current_ids = []
+            current_ids.append(int(marker.group(1) or marker.group(2)))
+            block_content_seen = False
+            output.append(raw_line)
+            index += 1
+            continue
+        if stripped.startswith(("#", "📊", "⏰")) or re.match(r"^[一二三四五六]\s*、", stripped):
+            current_ids = []
+            block_content_seen = False
+        field = _match_report_field_line(stripped)
+        if current_ids and field and field[0] == "資料來源":
+            candidate = selected_map.get(current_ids[0]) if len(current_ids) == 1 else None
+            if candidate is None or not _candidate_has_deterministic_source(candidate):
+                output.append(raw_line)
+                block_content_seen = True
+                index += 1
+                continue
+            continuation: list[str] = []
+            next_index = index + 1
+            while next_index < len(lines):
+                next_stripped = lines[next_index].strip()
+                if _is_report_block_boundary(next_stripped):
+                    break
+                continuation.append(lines[next_index])
+                next_index += 1
+            actual_value = " ".join(
+                part.strip() for part in [field[1], *continuation] if part.strip()
+            )
+            # Always emit the canonical field once the candidate is known.  A
+            # semantically matching model value can stay byte-stable, but no
+            # model-owned formatting or continuation text is carried forward.
+            indent = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+            canonical_line = f"{indent}{_canonical_source_line(candidate)}"
+            output.append(canonical_line)
+            if (
+                len(continuation) > 0
+                or raw_line != canonical_line
+                or not _source_value_matches_candidate(actual_value, candidate)
+            ):
+                changed = True
+            block_content_seen = True
+            index = next_index
+            continue
+        output.append(raw_line)
+        if current_ids and stripped:
+            block_content_seen = True
+        index += 1
+    if not changed:
+        return report_md
+    newline = "\r\n" if "\r\n" in report_md else "\n"
+    rendered = newline.join(output)
+    if report_md.endswith(("\n", "\r")):
+        rendered += newline
+    return rendered
+
+
 def _is_unknown_country(value: object) -> bool:
     return str(value or "").strip() in _UNKNOWN_COUNTRY_VALUES
 
@@ -2013,6 +2157,7 @@ def validate_authoritative_report(
         for candidate_id in status["candidate_ids"]
     }
     content_quality_issues: list[dict] = []
+    source_metadata_mismatches: list[dict] = []
     for status in block_field_status:
         fields = status.get("field_values", {})
         summary = str(fields.get("summary", "") or "").strip()
@@ -2020,6 +2165,21 @@ def validate_authoritative_report(
         source = str(fields.get("source", "") or "").strip()
         for candidate_id in status.get("candidate_ids", []):
             candidate = selected_map.get(candidate_id, {})
+            if candidate and source and not _source_value_matches_candidate(source, candidate):
+                mismatch = {
+                    "candidate_id": candidate_id,
+                    "expected": _canonical_source_metadata(candidate),
+                    "actual": source,
+                    "code": "source_metadata_mismatch",
+                }
+                source_metadata_mismatches.append(mismatch)
+                content_quality_issues.append({
+                    "candidate_id": candidate_id,
+                    "code": "source_metadata_mismatch",
+                    "detail": "資料來源顯示名稱與 URL 必須與候選 canonical source 完全一致",
+                    "expected": mismatch["expected"],
+                    "actual": source,
+                })
             if str(fields.get("country", "") or "").strip() in _UNKNOWN_COUNTRY_VALUES:
                 if fields.get("country", ""):
                     content_quality_issues.append({
@@ -2099,6 +2259,8 @@ def validate_authoritative_report(
         "multi_candidate_model_blocks": multi_candidate_model_blocks,
         "category_mismatches": category_mismatches,
         "category_consistency_passed": not category_mismatches,
+        "source_metadata_mismatches": source_metadata_mismatches,
+        "source_metadata_consistency_passed": not source_metadata_mismatches,
         "selected_event_count": selected_event_count,
         "final_unique_article_count": final_unique_article_count,
         "event_level_integrity_passed": event_level_integrity_passed,

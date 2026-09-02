@@ -78,6 +78,7 @@ from report_postprocessor import (
     apply_final_report_footer,
     build_long_term_coverage_warning,
     build_journal_summary_conclusion,
+    canonicalize_authoritative_source_fields,
     count_authoritative_report_items,
     count_authoritative_report_items_by_category,
     count_report_items,
@@ -1083,6 +1084,11 @@ class WorkflowRuntime:
                     journal_candidates,
                     context=self.postprocess_context(validation_target),
                 )
+        authoritative_report_md = canonicalize_authoritative_source_fields(
+            authoritative_report_md,
+            selected_candidates,
+            context=self.postprocess_context(validation_target),
+        )
         validation = validate_authoritative_report(
             authoritative_report_md,
             selected_candidates,
@@ -1185,6 +1191,11 @@ def run_report_workflow(
     if not dependencies.call_maiagent:
         raise RuntimeError("未提供 MaiAgent callable")
     raw_report = dependencies.call_maiagent(report_prompt)
+    raw_report = canonicalize_authoritative_source_fields(
+        raw_report,
+        selected_candidates,
+        context=runtime.postprocess_context({}),
+    )
     validation = validate_authoritative_report(
         raw_report,
         selected_candidates,
@@ -1200,6 +1211,11 @@ def run_report_workflow(
                 validation,
                 selected_candidates=selected_candidates,
             )
+        )
+        raw_report = canonicalize_authoritative_source_fields(
+            raw_report,
+            selected_candidates,
+            context=runtime.postprocess_context({}),
         )
     final_validation = validate_authoritative_report(
         raw_report,

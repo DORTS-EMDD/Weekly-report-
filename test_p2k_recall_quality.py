@@ -276,6 +276,7 @@ class P2KRecallQualityTests(unittest.TestCase):
             "",
             "• 資料來源：Railway-News：https://railway-news.com/fixture/14",
         ])
+        report = report_postprocessor.canonicalize_authoritative_source_fields(report, [candidate])
         validation = report_postprocessor.validate_authoritative_report(report, [candidate], selected_types=["技術新知"])
         self.assertTrue(validation["report_validation_passed"])
         self.assertEqual(validation["missing_model_fields"], {})
@@ -292,6 +293,7 @@ class P2KRecallQualityTests(unittest.TestCase):
             "• 臺北捷運局啟示：可參考跨系統資料應用。",
             "• 資料來源：https://fixture.example.test/news/15",
         ])
+        report = report_postprocessor.canonicalize_authoritative_source_fields(report, [candidate])
         validation = report_postprocessor.validate_authoritative_report(report, [candidate], selected_types=["技術新知"])
         self.assertTrue(validation["report_validation_passed"])
 

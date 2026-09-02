@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 from article_selector import build_selector_api
-from report_postprocessor import validate_authoritative_report
+from report_postprocessor import canonicalize_authoritative_source_fields, validate_authoritative_report
 import report_workflow_service as workflow_service
 import streamlit_app as app
 
@@ -451,6 +451,7 @@ class P2K4RRegressionTests(unittest.TestCase):
             "## 三、營運動態",
             _complete_block(1, candidate["title"], "營運政策", candidate["url"]),
         ])
+        report = canonicalize_authoritative_source_fields(report, [candidate])
         validation = validate_authoritative_report(
             report,
             [candidate],

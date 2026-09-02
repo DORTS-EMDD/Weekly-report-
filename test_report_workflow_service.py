@@ -282,7 +282,7 @@ class ReportWorkflowServiceTests(unittest.TestCase):
             [item.get("id") for item in expected],
         )
 
-    def test_streamlit_and_automation_postprocess_match(self):
+    def test_automation_postprocess_restores_canonical_source_metadata(self):
         original_validation = dict(app.LAST_REPORT_ID_VALIDATION)
         candidate = _candidate(1)
         raw_report = "\n".join([
@@ -306,7 +306,9 @@ class ReportWorkflowServiceTests(unittest.TestCase):
         finally:
             app.LAST_REPORT_ID_VALIDATION.clear()
             app.LAST_REPORT_ID_VALIDATION.update(original_validation)
-        self.assertEqual(streamlit, shared)
+        self.assertNotEqual(streamlit, shared)
+        self.assertIn("• 資料來源：Fixture Source https://example.com/fixture/1", shared)
+        self.assertNotIn("https://example.com/fixture/1", streamlit)
 
     def test_final_counts_use_canonical_blocks_and_exclude_skipped_candidates(self):
         config = _fixture_config()
