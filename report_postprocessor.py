@@ -1964,6 +1964,99 @@ def canonicalize_authoritative_source_fields(
     return rendered
 
 
+def canonicalize_authoritative_electromechanical_fields(
+    report_md: str,
+    selected_candidates: list[dict],
+    *,
+    context: ReportPostprocessContext | None = None,
+) -> str:
+    """Overlay candidate-owned E&M metadata onto marked report blocks.
+
+    ``core_systems`` is materialized upstream by the shared taxonomy owner.
+    This boundary must not re-infer systems from model prose: when an
+    authoritative candidate carries the field, replace the model's E&M line
+    with the existing report-label projection, or remove it for an explicit
+    empty authoritative list.
+    """
+    del context
+    if not report_md or not selected_candidates:
+        return report_md
+    selected_map = {
+        int(item.get("candidate_id") or item.get("id") or 0): item
+        for item in selected_candidates
+        if int(item.get("candidate_id") or item.get("id") or 0)
+    }
+    marker_pattern = re.compile(
+        r"^(?:<!--\s*candidate_id\s*:\s*(\d+)\s*-->|&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;)$",
+        flags=re.IGNORECASE,
+    )
+    lines = report_md.splitlines()
+    output: list[str] = []
+    current_ids: list[int] = []
+    block_content_seen = False
+    changed = False
+    index = 0
+    while index < len(lines):
+        raw_line = lines[index]
+        stripped = raw_line.strip()
+        marker = marker_pattern.fullmatch(stripped)
+        if marker:
+            if current_ids and block_content_seen:
+                current_ids = []
+            current_ids.append(int(marker.group(1) or marker.group(2)))
+            block_content_seen = False
+            output.append(raw_line)
+            index += 1
+            continue
+        if stripped.startswith(("#", "📊", "⏰")) or re.match(r"^[一二三四五六]\s*、", stripped):
+            current_ids = []
+            block_content_seen = False
+        field = _match_report_field_line(stripped)
+        if current_ids and field and field[0] == "相關機電系統":
+            candidate = selected_map.get(current_ids[0]) if len(current_ids) == 1 else None
+            if candidate is None or "core_systems" not in candidate:
+                output.append(raw_line)
+                block_content_seen = True
+                index += 1
+                continue
+
+            formal_systems = report_labels_for_core_systems(
+                list(candidate.get("core_systems") or [])
+            )
+            canonical_line = ""
+            if formal_systems:
+                indent = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+                canonical_line = f"{indent}• 相關機電系統：{'、'.join(formal_systems)}"
+                output.append(canonical_line)
+
+            next_index = index + 1
+            while next_index < len(lines):
+                next_stripped = lines[next_index].strip()
+                if _is_report_block_boundary(next_stripped):
+                    break
+                next_index += 1
+            if (
+                raw_line != canonical_line
+                or next_index > index + 1
+                or not formal_systems
+            ):
+                changed = True
+            block_content_seen = True
+            index = next_index
+            continue
+        output.append(raw_line)
+        if current_ids and stripped:
+            block_content_seen = True
+        index += 1
+    if not changed:
+        return report_md
+    newline = "\r\n" if "\r\n" in report_md else "\n"
+    rendered = newline.join(output)
+    if report_md.endswith(("\n", "\r")):
+        rendered += newline
+    return rendered
+
+
 def _is_unknown_country(value: object) -> bool:
     return str(value or "").strip() in _UNKNOWN_COUNTRY_VALUES
 

@@ -79,6 +79,7 @@ from report_postprocessor import (
     build_long_term_coverage_warning,
     build_journal_summary_conclusion,
     canonicalize_authoritative_source_fields,
+    canonicalize_authoritative_electromechanical_fields,
     count_authoritative_report_items,
     count_authoritative_report_items_by_category,
     count_report_items,
@@ -1089,6 +1090,11 @@ class WorkflowRuntime:
             selected_candidates,
             context=self.postprocess_context(validation_target),
         )
+        authoritative_report_md = canonicalize_authoritative_electromechanical_fields(
+            authoritative_report_md,
+            selected_candidates,
+            context=self.postprocess_context(validation_target),
+        )
         validation = validate_authoritative_report(
             authoritative_report_md,
             selected_candidates,
@@ -1196,6 +1202,11 @@ def run_report_workflow(
         selected_candidates,
         context=runtime.postprocess_context({}),
     )
+    raw_report = canonicalize_authoritative_electromechanical_fields(
+        raw_report,
+        selected_candidates,
+        context=runtime.postprocess_context({}),
+    )
     validation = validate_authoritative_report(
         raw_report,
         selected_candidates,
@@ -1213,6 +1224,11 @@ def run_report_workflow(
             )
         )
         raw_report = canonicalize_authoritative_source_fields(
+            raw_report,
+            selected_candidates,
+            context=runtime.postprocess_context({}),
+        )
+        raw_report = canonicalize_authoritative_electromechanical_fields(
             raw_report,
             selected_candidates,
             context=runtime.postprocess_context({}),
