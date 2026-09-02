@@ -1071,7 +1071,11 @@ def _formal_source_url(candidate: dict, domain: str = "") -> str:
         candidate.get("url", ""),
     ):
         value = _clean_candidate_url(str(value or ""))
-        if _is_article_level_url(value):
+        # A Google News article proxy is still article-level evidence when no
+        # direct publisher URL was resolved.  Keep the deterministic priority
+        # above, and only fall back to the publisher home page when no
+        # article-level URL (including a valid proxy) is available.
+        if _is_article_level_url(value, allow_google_news=True):
             return value
     if domain:
         return f"https://{domain}/"

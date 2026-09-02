@@ -609,6 +609,11 @@ def compare_materialized_event_identities(
         if left_stations and right_stations and left_stations.isdisjoint(right_stations):
             conflicts.append(_conflict("station", sorted(left_stations), sorted(right_stations)))
     if left["event_class"] == "general" and right["event_class"] == "general":
+        # A populated event object is authoritative evidence.  An absent
+        # object on one side is merely missing evidence, but two different
+        # populated objects describe incompatible event scopes.
+        if left["event_object"] and right["event_object"] and left["event_object"] != right["event_object"]:
+            conflicts.append(_conflict("event_object", left["event_object"], right["event_object"]))
         left_stations = set(left["stations"])
         right_stations = set(right["stations"])
         if left_stations and right_stations and left_stations.isdisjoint(right_stations):
@@ -628,7 +633,11 @@ def compare_materialized_event_identities(
         and right_date
     ):
         date_window = min(date_window, 3)
-    if date_days is not None and date_days > date_window:
+    authoritative_date_pair = (
+        left["event_date_kind"] != "publication_date"
+        and right["event_date_kind"] != "publication_date"
+    )
+    if authoritative_date_pair and date_days is not None and date_days > date_window:
         conflicts.append(_conflict("event_date_window", left["event_date"], right["event_date"]))
 
     # URL identity is strong article evidence, but synthetic/reused URLs must not
@@ -707,7 +716,9 @@ def compare_materialized_event_identities(
             matched.append("station")
         if date_days is not None:
             matched.append("bounded_date")
-        same_event = scope_anchor and specific_scope and anchors >= 2 and (date_days is None or date_days <= date_window)
+        same_event = scope_anchor and specific_scope and anchors >= 2 and (
+            not authoritative_date_pair or date_days is None or date_days <= date_window
+        )
 
     duplicate_type = "ARTICLE_DUPLICATE" if article_duplicate else "EVENT_DUPLICATE" if same_event else ""
     if same_event:

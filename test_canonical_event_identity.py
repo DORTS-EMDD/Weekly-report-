@@ -61,6 +61,93 @@ def _taipei_opening(candidate_id: int, title: str, snippet: str, published_date:
 
 
 class CanonicalEventIdentityTests(unittest.TestCase):
+    def test_publication_dates_are_weak_metadata_for_same_project_action(self):
+        first = _candidate(
+            201,
+            "Madrid Metro Line 6 driverless testing begins",
+            "Madrid Metro begins testing driverless metro trains on Line 6.",
+            date="2026-08-27T00:00:00+00:00",
+            published_date="2026-08-27T00:00:00+00:00",
+            project="line-6",
+            classification="技術新知",
+            primary_category="技術新知",
+        )
+        followup = _candidate(
+            202,
+            "Madrid Metro Line 6 automation testing update",
+            "Testing continues for Line 6 automation in Madrid.",
+            date="2026-08-31T00:00:00+00:00",
+            published_date="2026-08-31T00:00:00+00:00",
+            project="line-6",
+            classification="技術新知",
+            primary_category="技術新知",
+        )
+        result = _same_event(first, followup)
+        self.assertTrue(result["same_event"], result)
+        self.assertEqual(result["date_distance_days"], 4)
+        self.assertNotIn(
+            "event_date_window",
+            {row["component"] for row in result["conflicting_evidence"]},
+        )
+
+    def test_distinct_explicit_event_dates_remain_distinct_milestones(self):
+        first = _candidate(
+            203,
+            "Madrid Metro Line 6 driverless testing begins",
+            "Madrid Metro begins testing driverless metro trains on Line 6.",
+            event_date="2026-08-27",
+            date="2026-08-27T00:00:00+00:00",
+            published_date="2026-08-27T00:00:00+00:00",
+            project="line-6",
+            classification="技術新知",
+            primary_category="技術新知",
+        )
+        milestone = _candidate(
+            204,
+            "Madrid Metro Line 6 driverless testing milestone",
+            "A later Line 6 driverless testing milestone is completed in Madrid.",
+            event_date="2026-09-05",
+            date="2026-09-05T00:00:00+00:00",
+            published_date="2026-09-05T00:00:00+00:00",
+            project="line-6",
+            classification="技術新知",
+            primary_category="技術新知",
+        )
+        result = _same_event(first, milestone)
+        self.assertFalse(result["same_event"], result)
+        self.assertIn(
+            "event_date_window",
+            {row["component"] for row in result["conflicting_evidence"]},
+        )
+
+    def test_conflicting_populated_event_objects_remain_distinct(self):
+        train = _candidate(
+            205,
+            "Madrid Metro Line 6 driverless testing",
+            "Testing continues for driverless metro trains on Line 6.",
+            date="2026-08-27T00:00:00+00:00",
+            published_date="2026-08-27T00:00:00+00:00",
+            project="line-6",
+            classification="技術新知",
+            primary_category="技術新知",
+        )
+        station = _candidate(
+            206,
+            "Madrid Metro Line 6 station testing",
+            "Metro station testing continues on Line 6 in Madrid.",
+            date="2026-08-28T00:00:00+00:00",
+            published_date="2026-08-28T00:00:00+00:00",
+            project="line-6",
+            classification="技術新知",
+            primary_category="技術新知",
+        )
+        result = _same_event(train, station)
+        self.assertFalse(result["same_event"], result)
+        self.assertIn(
+            "event_object",
+            {row["component"] for row in result["conflicting_evidence"]},
+        )
+
     def test_a5_t1_astor_work_train_and_east_village_cleaning_train_are_same_event(self):
         nbc = _candidate(
             1,

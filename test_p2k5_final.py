@@ -20,7 +20,7 @@ from streamlit_report_state import (
 
 
 class P2K5FinalTests(unittest.TestCase):
-    def test_formal_source_mapping_and_google_proxy_suppression(self):
+    def test_formal_source_mapping_preserves_best_article_level_evidence(self):
         direct = build_formal_report_source(
             {
                 "source": "news.ttv.com.tw",
@@ -45,9 +45,34 @@ class P2K5FinalTests(unittest.TestCase):
         )
         formal = build_formal_report_source(proxy_candidate)
         self.assertEqual(formal["display_name"], "Yahoo! JAPAN")
-        self.assertEqual(formal["display_url"], "https://news.yahoo.co.jp/")
+        self.assertEqual(formal["display_url"], proxy_url)
         self.assertIn("source_proxy_url", proxy_candidate)
-        self.assertNotIn("news.google.com/rss/articles/", json.dumps(formal, ensure_ascii=False))
+        self.assertIn("news.google.com/rss/articles/", json.dumps(formal, ensure_ascii=False))
+
+    def test_resolved_article_url_takes_priority_over_google_proxy(self):
+        proxy_url = "https://news.google.com/rss/articles/ABC?q=site%3Aexample.com"
+        resolved_url = "https://example.com/news/madrid-line-6"
+        formal = build_formal_report_source(
+            {
+                "source": "Example News",
+                "source_domain": "example.com",
+                "url": proxy_url,
+                "source_href": "https://example.com/",
+                "resolved_article_url": resolved_url,
+            }
+        )
+        self.assertEqual(formal["display_url"], resolved_url)
+
+    def test_publisher_homepage_is_used_when_article_evidence_is_unavailable(self):
+        formal = build_formal_report_source(
+            {
+                "source": "Example News",
+                "source_domain": "example.com",
+                "url": "https://example.com/",
+                "source_href": "https://example.com/",
+            }
+        )
+        self.assertEqual(formal["display_url"], "https://example.com/")
 
     def test_source_renderer_keeps_name_and_visible_url(self):
         rendered = normalize_source_line(
