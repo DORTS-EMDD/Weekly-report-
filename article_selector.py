@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from config import *
 from article_processor import (
     _candidate_date_obj,
+    candidate_selection_evidence_text,
     _canonical_candidate_region,
     _contains_any_term,
     _contains_taiwan_reference,
@@ -2497,7 +2498,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
     def _candidate_selection_text(candidate: dict) -> str:
         fingerprint = (
             candidate.get("title", ""),
-            candidate.get("snippet", ""),
+            candidate_selection_evidence_text(candidate),
             candidate.get("source", ""),
             candidate.get("url", ""),
             candidate.get("source_href", ""),
@@ -2509,7 +2510,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             for key in ("url", "source_href")
         )
         base_text = (
-            f"{candidate.get('title', '')} {candidate.get('snippet', '')} "
+            f"{candidate.get('title', '')} {candidate_selection_evidence_text(candidate)} "
             f"{candidate.get('source', '')} "
             f"{candidate.get('url', '')} {candidate.get('source_href', '')} {paths}"
         )
@@ -2600,12 +2601,18 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         else:
             event_importance = ""
 
-        if candidate.get("prefetch_status") == "success" or candidate.get("prefetched_text_snippet"):
-            evidence_strength = "high"
-        elif candidate.get("source_quality") in {"A", "B"} and len(str(candidate.get("snippet", "") or "")) >= 80:
-            evidence_strength = "medium"
-        else:
-            evidence_strength = "low"
+        evidence = candidate.get("evidence")
+        evidence_richness = (
+            str(evidence.get("richness") or "title_only")
+            if isinstance(evidence, dict)
+            else "title_only"
+        )
+        evidence_strength = {
+            "article_excerpt": "high",
+            "feed+article": "high",
+            "feed_snippet": "medium",
+            "title_only": "low",
+        }.get(evidence_richness, "low")
 
         if candidate.get("search_family") == "forward_technology":
             innovation_type = "innovation" if candidate.get("innovation_score", 0) else "research"
@@ -4851,7 +4858,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
     def _candidate_score_fingerprint(candidate: dict) -> tuple:
         return (
             candidate.get("title", ""),
-            candidate.get("snippet", ""),
+            candidate_selection_evidence_text(candidate),
             candidate.get("date", ""),
             candidate.get("source", ""),
             candidate.get("url", ""),
@@ -4960,7 +4967,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             "technical_triplet_status": candidate.get("technical_triplet_status", ""),
             "candidate_level": candidate.get("candidate_level", ""),
             "preliminary_type": candidate.get("preliminary_type") or candidate.get("primary_category", ""),
-            "short_snippet": candidate.get("short_snippet", _shorten(candidate.get("snippet", ""), CANDIDATE_SNIPPET_CHARS)),
+            "evidence": dict(candidate.get("evidence") or {}) if isinstance(candidate.get("evidence"), dict) else {},
+            "short_snippet": candidate.get(
+                "short_snippet",
+                _shorten(candidate_selection_evidence_text(candidate), CANDIDATE_SNIPPET_CHARS),
+            ),
             "url": source_url,
             "python_score": candidate.get("python_score", 0),
             "score_reason": candidate.get("score_reason", ""),

@@ -18,6 +18,7 @@ from article_processor import (
     _is_recent,
     _is_valid_news_url,
     _make_news_candidate,
+    materialize_candidate_evidence,
     _normalize_title,
     _parse_pub_date,
     _quality_rank,
@@ -200,6 +201,7 @@ _AUTHORITATIVE_EVIDENCE_FIELDS = (
     "publication_date",
     "raw_publication_value",
     "query",
+    "evidence",
 )
 
 
@@ -622,6 +624,7 @@ class WorkflowRuntime:
 
     def _materialize_authoritative_candidate(self, candidate: dict, *, authoritative: bool = True) -> dict:
         """Materialize all formal fields after the latest enrichment pass."""
+        materialize_candidate_evidence(candidate)
         resolved_region = _canonical_candidate_region(candidate)
         candidate["resolved_region"] = resolved_region
         candidate["country"] = normalize_country(resolved_region)

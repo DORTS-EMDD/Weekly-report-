@@ -168,7 +168,10 @@ class V55BEnrichmentEvidenceValidityTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertTrue(result["transport_success"])
         self.assertTrue(result["evidence_valid"])
-        self.assertIn(ARTICLE_TITLE, candidate["snippet"])
+        self.assertNotIn(ARTICLE_TITLE, candidate["snippet"])
+        self.assertEqual(candidate["evidence"]["feed_snippet"], "Original feed evidence")
+        self.assertIn(ARTICLE_TITLE, candidate["evidence"]["article_excerpt"])
+        self.assertEqual(candidate["evidence"]["richness"], "feed+article")
         self.assertEqual(candidate["enrichment_evidence_failure_reason"], "")
 
     def test_rejected_evidence_does_not_mutate_authoritative_candidate_evidence(self):

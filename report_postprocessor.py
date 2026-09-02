@@ -1,6 +1,7 @@
 """Pure-text normalization and postprocessing for completed MaiAgent reports."""
 
 import datetime
+import difflib
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -1337,6 +1338,45 @@ def _summary_repeats_title(summary: str, title: str) -> bool:
     )
 
 
+def _summary_paraphrases_title(summary: str, title: str) -> bool:
+    """Detect a short near-copy of the authoritative title.
+
+    This checks generated prose against the candidate title only.  Evidence
+    richness/provenance are read from the candidate evidence contract and are
+    never inferred here.
+    """
+    normalized_summary = re.sub(r"[\W_]+", "", unescape(summary or "")).casefold()
+    normalized_title = re.sub(r"[\W_]+", "", unescape(title or "")).casefold()
+    if len(normalized_title) < 12 or len(normalized_summary) < 12:
+        return False
+    if len(normalized_summary) > len(normalized_title) + 36:
+        return False
+    similarity = difflib.SequenceMatcher(
+        None,
+        normalized_title,
+        normalized_summary,
+    ).ratio()
+    return 0.72 <= similarity < 0.999
+
+
+def _summary_evidence_status(summary: str, title: str, candidate: dict) -> str:
+    """Classify summary quality using the authoritative evidence contract."""
+    evidence = candidate.get("evidence")
+    if not isinstance(evidence, dict):
+        # Legacy direct callers have no evidence contract yet.  Keep their
+        # validation behavior unchanged; WorkflowRuntime always materializes
+        # the contract before the authoritative report boundary.
+        return "legacy_unclassified"
+    richness = str(evidence.get("richness") or "title_only")
+    if richness == "title_only":
+        return "insufficient_evidence"
+    if _summary_repeats_title(summary, title):
+        return "title_copy"
+    if _summary_paraphrases_title(summary, title):
+        return "title_paraphrase"
+    return "evidence_supported"
+
+
 _GENERIC_TAIPEI_INSIGHTS = {
     re.sub(r"[\W_]+", "", value).casefold()
     for value in (
@@ -2251,6 +2291,7 @@ def validate_authoritative_report(
     }
     content_quality_issues: list[dict] = []
     source_metadata_mismatches: list[dict] = []
+    summary_evidence_status: dict[str, str] = {}
     for status in block_field_status:
         fields = status.get("field_values", {})
         summary = str(fields.get("summary", "") or "").strip()
@@ -2258,6 +2299,33 @@ def validate_authoritative_report(
         source = str(fields.get("source", "") or "").strip()
         for candidate_id in status.get("candidate_ids", []):
             candidate = selected_map.get(candidate_id, {})
+            evidence_status = _summary_evidence_status(
+                summary,
+                str(candidate.get("title") or ""),
+                candidate,
+            )
+            summary_evidence_status[str(candidate_id)] = evidence_status
+            evidence_issue = {
+                "title_copy": {
+                    "code": "summary_title_copy",
+                    "detail": "事件摘要不可僅重複候選標題",
+                },
+                "title_paraphrase": {
+                    "code": "summary_title_paraphrase",
+                    "detail": "事件摘要不可僅改寫候選標題",
+                },
+                "insufficient_evidence": {
+                    "code": "insufficient_summary_evidence",
+                    "detail": "候選僅有標題，無足夠 evidence 支撐事件摘要",
+                },
+            }.get(evidence_status)
+            if evidence_issue and summary:
+                content_quality_issues.append({
+                    "candidate_id": candidate_id,
+                    "code": evidence_issue["code"],
+                    "detail": evidence_issue["detail"],
+                    "summary_evidence_status": evidence_status,
+                })
             if candidate and source and not _source_value_matches_candidate(source, candidate):
                 mismatch = {
                     "candidate_id": candidate_id,
@@ -2361,6 +2429,7 @@ def validate_authoritative_report(
         "parser_failure_reasons": parser_failure_reasons,
         "content_quality_issues": content_quality_issues,
         "content_quality_passed": not content_quality_issues,
+        "summary_evidence_status": summary_evidence_status,
         "report_validation_passed": passed,
     }
 
