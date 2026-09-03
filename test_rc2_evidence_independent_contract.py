@@ -87,6 +87,29 @@ def report_text(summary: str) -> str:
     )
 
 
+def semantic_judge(payload: dict) -> dict:
+    summary = payload["event_summary"]
+    evidence = payload["evidence"]
+    field = "feed_snippet" if evidence.get("feed_snippet") else "article_excerpt"
+    quote = evidence.get(field, "")
+    supported = "airport" not in summary.casefold() and "fare" not in summary.casefold()
+    return {
+        "candidate_id": payload["candidate_id"],
+        "summary_status": "EVIDENCE_SUPPORTED" if supported else "INSUFFICIENT_EVIDENCE",
+        "semantic_state": "SUPPORTED" if supported else "SEMANTIC_FAIL",
+        "failure_reason": "" if supported else "unsupported event claim",
+        "claims": [{
+            "claim_text": summary,
+            "support_status": "SUPPORTED" if supported else "UNSUPPORTED",
+            "evidence_mappings": [{
+                "evidence_field": field,
+                "evidence_quote": quote,
+            }],
+        }],
+        "grounding_passed": True,
+    }
+
+
 class RC2IndependentEvidenceContractTests(unittest.TestCase):
     def test_raw_title_only_materializes_explicit_title_only(self):
         candidate = raw_candidate()
@@ -162,6 +185,8 @@ class RC2IndependentEvidenceContractTests(unittest.TestCase):
             report_text("營運單位完成號誌測試並評估後續轉換安排。"),
             [feed_candidate],
             selected_types=["技術新知"],
+            semantic_judge=semantic_judge,
+            semantic_validation_required=True,
         )
         title_copy = validate_authoritative_report(
             report_text(validator_title),
@@ -182,6 +207,21 @@ class RC2IndependentEvidenceContractTests(unittest.TestCase):
             selected_types=["技術新知"],
         )
         self.assertEqual(paraphrase["summary_evidence_status"]["1"], "title_paraphrase")
+
+    def test_validator_rejects_claim_not_present_in_authoritative_evidence(self):
+        candidate = raw_candidate(
+            title="捷運完成新型號誌測試與營運轉換",
+            snippet=FEED,
+        )
+        validation = validate_authoritative_report(
+            report_text("The operator opened a new airport line and changed fares."),
+            [candidate],
+            selected_types=["技術新知"],
+            semantic_judge=semantic_judge,
+            semantic_validation_required=True,
+        )
+        self.assertEqual(validation["summary_evidence_status"]["1"], "insufficient_evidence")
+        self.assertFalse(validation["report_validation_passed"])
 
 
 if __name__ == "__main__":

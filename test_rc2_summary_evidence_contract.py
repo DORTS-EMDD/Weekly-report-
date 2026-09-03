@@ -78,6 +78,27 @@ def _report(summary: str) -> str:
     ])
 
 
+def _semantic_judge(payload: dict) -> dict:
+    evidence = payload["evidence"]
+    field = "feed_snippet" if evidence.get("feed_snippet") else "article_excerpt"
+    quote = evidence.get(field, "")
+    return {
+        "candidate_id": payload["candidate_id"],
+        "summary_status": "EVIDENCE_SUPPORTED",
+        "semantic_state": "SUPPORTED",
+        "failure_reason": "",
+        "claims": [{
+            "claim_text": payload["event_summary"],
+            "support_status": "SUPPORTED",
+            "evidence_mappings": [{
+                "evidence_field": field,
+                "evidence_quote": quote,
+            }],
+        }],
+        "grounding_passed": True,
+    }
+
+
 class RC2SummaryEvidenceContractTests(unittest.TestCase):
     def test_title_only_contract_is_explicit(self):
         candidate = _candidate()
@@ -188,6 +209,8 @@ class RC2SummaryEvidenceContractTests(unittest.TestCase):
             _report("營運單位完成號誌測試並評估後續轉換安排。"),
             [candidate],
             selected_types=["技術新知"],
+            semantic_judge=_semantic_judge,
+            semantic_validation_required=True,
         )
         self.assertEqual(validation["summary_evidence_status"]["1"], "evidence_supported")
         self.assertTrue(validation["report_validation_passed"])

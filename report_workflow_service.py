@@ -256,6 +256,7 @@ class WorkflowDependencies:
     ddgs_client_factory: Callable[[], object] | None = None
     feedparser_module: object | None = None
     call_maiagent: Callable[[str], str] | None = None
+    call_semantic_judge: Callable[[dict], dict] | None = None
     status_callback: Callable[[str], None] | None = None
     progress_callback: Callable[[float], None] | None = None
     http_session_factory: Callable[[], object] = create_requests_session
@@ -277,6 +278,8 @@ class WorkflowResult:
     source_statuses: list[dict]
     ddgs_statuses: list[dict]
     search_count: int
+    initial_report_md: str = ""
+    initial_report_validation: dict | None = None
 
 
 class ReportIntegrityError(RuntimeError):
@@ -304,6 +307,8 @@ class ReportIntegrityError(RuntimeError):
             "missing_required_sections",
             "content_quality_issues",
             "forbidden_internal_phrases",
+            "semantic_validation_failures",
+            "semantic_validation_states",
         ):
             value = self.validation.get(key)
             if value:
@@ -1077,6 +1082,10 @@ class WorkflowRuntime:
         selected_candidates: list[dict],
         journal_candidates: list[dict] | None = None,
         id_validation_target: dict | None = None,
+        *,
+        semantic_judge: object | None = None,
+        semantic_validation_required: bool = False,
+        semantic_validation_results: dict[str, dict] | None = None,
     ) -> dict:
         authoritative_report_md = raw_report if isinstance(raw_report, str) else str(raw_report or "")
         validation_target = id_validation_target if id_validation_target is not None else {}
@@ -1102,6 +1111,9 @@ class WorkflowRuntime:
             authoritative_report_md,
             selected_candidates,
             selected_types=self.config.selected_types,
+            semantic_judge=semantic_judge,
+            semantic_validation_required=semantic_validation_required,
+            semantic_validation_results=semantic_validation_results,
         )
         model_ids = list(validation.get("model_candidate_ids", []))
         selected_ids = list(validation.get("selected_candidate_ids", []))
@@ -1148,11 +1160,18 @@ class WorkflowRuntime:
         raw_report: str,
         selected_candidates: list[dict],
         journal_candidates: list[dict] | None = None,
+        *,
+        semantic_judge: object | None = None,
+        semantic_validation_required: bool = False,
+        semantic_validation_results: dict[str, dict] | None = None,
     ) -> tuple[str, dict, list[dict]]:
         result = self.postprocess_report_with_diagnostics(
             raw_report,
             selected_candidates,
             journal_candidates,
+            semantic_judge=semantic_judge,
+            semantic_validation_required=semantic_validation_required,
+            semantic_validation_results=semantic_validation_results,
         )
         return (
             result["clean_report"],
@@ -1210,13 +1229,16 @@ def run_report_workflow(
         selected_candidates,
         context=runtime.postprocess_context({}),
     )
+    initial_report_md = raw_report
     validation = validate_authoritative_report(
         raw_report,
         selected_candidates,
         selected_types=config.selected_types,
+        semantic_judge=dependencies.call_semantic_judge,
+        semantic_validation_required=True,
     )
     retry_attempted = False
-    if validation.get("retry_required"):
+    if validation.get("report_retry_allowed", validation.get("retry_required")):
         retry_attempted = True
         raw_report = dependencies.call_maiagent(
             build_report_retry_prompt(
@@ -1236,18 +1258,33 @@ def run_report_workflow(
             selected_candidates,
             context=runtime.postprocess_context({}),
         )
-    final_validation = validate_authoritative_report(
-        raw_report,
-        selected_candidates,
-        selected_types=config.selected_types,
-    )
+    if validation.get("semantic_validation_blocked") and not retry_attempted:
+        # Preserve the bounded same-input judge result; an unavailable or
+        # invalid judge must not be called again as a disguised report retry.
+        final_validation = validation
+    else:
+        final_validation = validate_authoritative_report(
+            raw_report,
+            selected_candidates,
+            selected_types=config.selected_types,
+            semantic_judge=dependencies.call_semantic_judge,
+            semantic_validation_required=True,
+        )
     if not final_validation.get("report_validation_passed"):
         raise ReportIntegrityError(
             final_validation,
             selected_candidates,
             retry_attempted=retry_attempted,
         )
-    final_report, _, _ = runtime.postprocess_report(raw_report, selected_candidates)
+    final_report, _, _ = runtime.postprocess_report(
+        raw_report,
+        selected_candidates,
+        semantic_judge=dependencies.call_semantic_judge,
+        semantic_validation_required=True,
+        semantic_validation_results=final_validation.get(
+            "semantic_validation_by_id", {}
+        ),
+    )
     return WorkflowResult(
         report_md=final_report,
         selected_candidates=selected_candidates,
@@ -1260,6 +1297,8 @@ def run_report_workflow(
         source_statuses=source_statuses,
         ddgs_statuses=ddgs_statuses,
         search_count=search_count,
+        initial_report_md=initial_report_md,
+        initial_report_validation=validation,
     )
 
 

@@ -13,6 +13,7 @@ from report_workflow_service import (
     build_automation_run_config,
     run_report_workflow,
 )
+from semantic_validation_service import SemanticSupportJudge
 
 
 def _required_env(name: str) -> str:
@@ -67,6 +68,8 @@ def main() -> int:
             api_base=api_base,
         )
 
+    semantic_judge = SemanticSupportJudge(call_report_agent)
+
     print("=" * 55)
     print("  國際捷運技術週報 自動產生器")
     print(f"  日期：{today:%Y年%m月%d日}")
@@ -81,6 +84,7 @@ def main() -> int:
             ddgs_client_factory=DDGS,
             feedparser_module=feedparser,
             call_maiagent=call_report_agent,
+            call_semantic_judge=semantic_judge.validate,
             status_callback=lambda message: print(f"[INFO] {message}"),
         ),
     )
