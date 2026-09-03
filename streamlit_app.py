@@ -277,6 +277,7 @@ from maiagent_service import (
     INTERNAL_CANDIDATE_MARKER_PATTERN as SERVICE_INTERNAL_CANDIDATE_MARKER_PATTERN,
     ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN as SERVICE_ESCAPED_INTERNAL_CANDIDATE_MARKER_PATTERN,
 )
+from semantic_validation_service import SemanticSupportJudge
 
 try:
     from ddgs import DDGS
@@ -1486,7 +1487,11 @@ def build_pipeline_debug_stats(
     }
 
 
-def _workflow_dependencies(*, prefetch_enabled: bool) -> workflow_service.WorkflowDependencies:
+def _workflow_dependencies(
+    *,
+    prefetch_enabled: bool,
+    call_semantic_judge=None,
+) -> workflow_service.WorkflowDependencies:
     return workflow_service.WorkflowDependencies(
         ddgs_client_factory=DDGS,
         feedparser_module=feedparser,
@@ -1494,6 +1499,7 @@ def _workflow_dependencies(*, prefetch_enabled: bool) -> workflow_service.Workfl
         prefetch_enabled=prefetch_enabled,
         debug_stats_builder=build_pipeline_debug_stats if prefetch_enabled else None,
         query_metadata=dict(globals().get("LAST_DDGS_QUERY_METADATA", {}) or {}),
+        call_semantic_judge=call_semantic_judge,
     )
 
 
@@ -3053,13 +3059,19 @@ if generate_btn:
             maiagent_attempt_count += 1
             raw_report = call_maiagent_cloud(report_prompt)
             initial_raw_report = raw_report
+            semantic_judge = SemanticSupportJudge(call_maiagent_cloud)
             report_id_validation_before_retry = service_validate_authoritative_report(
                 raw_report,
                 selected_candidates,
                 selected_types=selected_types,
+                semantic_judge=semantic_judge.validate,
+                semantic_validation_required=True,
             )
             report_retry_attempted = False
-            if report_id_validation_before_retry.get("retry_required"):
+            if report_id_validation_before_retry.get(
+                "report_retry_allowed",
+                report_id_validation_before_retry.get("retry_required"),
+            ):
                 report_retry_attempted = True
                 retry_prompt = build_report_retry_prompt(
                     report_prompt,
@@ -3070,11 +3082,21 @@ if generate_btn:
                 maiagent_attempt_count += 1
                 raw_report = call_maiagent_cloud(retry_prompt)
                 maiagent_call_count += 1
-            report_id_validation_after_retry = service_validate_authoritative_report(
-                raw_report,
-                selected_candidates,
-                selected_types=selected_types,
-            )
+            if (
+                report_id_validation_before_retry.get("semantic_validation_blocked")
+                and not report_retry_attempted
+            ):
+                # Reuse the bounded same-input judge result.  Unavailable or
+                # malformed semantic validation must not trigger another call.
+                report_id_validation_after_retry = report_id_validation_before_retry
+            else:
+                report_id_validation_after_retry = service_validate_authoritative_report(
+                    raw_report,
+                    selected_candidates,
+                    selected_types=selected_types,
+                    semantic_judge=semantic_judge.validate,
+                    semantic_validation_required=True,
+                )
             raw_report_candidate_ids = extract_report_candidate_ids(raw_report)
             maiagent_report_response_count = count_authoritative_report_items(raw_report)
             timings["elapsed_seconds_report"] = round(time.perf_counter() - stage_start, 2)
@@ -3115,6 +3137,15 @@ if generate_btn:
                     ),
                     "event_level_integrity_passed": report_id_validation_after_retry.get(
                         "event_level_integrity_passed", False
+                    ),
+                    "semantic_validation_by_id": report_id_validation_after_retry.get(
+                        "semantic_validation_by_id", {}
+                    ),
+                    "semantic_validation_failures": report_id_validation_after_retry.get(
+                        "semantic_validation_failures", []
+                    ),
+                    "semantic_validation_states": report_id_validation_after_retry.get(
+                        "semantic_validation_states", []
                     ),
                 }
                 LAST_REPORT_ID_VALIDATION.clear()
@@ -3233,13 +3264,21 @@ if generate_btn:
             pdf_stage_start = time.perf_counter()
             postprocess_runtime = workflow_service.make_runtime(
                 _workflow_config(),
-                _workflow_dependencies(prefetch_enabled=False),
+                _workflow_dependencies(
+                    prefetch_enabled=False,
+                    call_semantic_judge=semantic_judge.validate,
+                ),
             )
             postprocess_result = postprocess_runtime.postprocess_report_with_diagnostics(
                 raw_report,
                 selected_candidates,
                 journal_candidates,
                 id_validation_target=LAST_REPORT_ID_VALIDATION,
+                semantic_judge=semantic_judge.validate,
+                semantic_validation_required=True,
+                semantic_validation_results=report_id_validation_after_retry.get(
+                    "semantic_validation_by_id", {}
+                ),
             )
             validated_report = postprocess_result["validated_report"]
             clean_report = postprocess_result["clean_report"]
@@ -3490,6 +3529,15 @@ if generate_btn:
                 ),
                 "category_mismatches": reconciliation_diagnostics.get(
                     "category_mismatches", []
+                ),
+                "semantic_validation_by_id": reconciliation_diagnostics.get(
+                    "semantic_validation_by_id", {}
+                ),
+                "semantic_validation_failures": reconciliation_diagnostics.get(
+                    "semantic_validation_failures", []
+                ),
+                "semantic_validation_states": reconciliation_diagnostics.get(
+                    "semantic_validation_states", []
                 ),
                 "event_level_integrity_passed": pipeline_debug_stats.get(
                     "event_level_integrity_passed", False

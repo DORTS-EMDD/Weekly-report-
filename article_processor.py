@@ -994,6 +994,90 @@ def _shorten(text: str, max_chars: int = CANDIDATE_SNIPPET_CHARS) -> str:
     return text[: max_chars - 1].rstrip() + "…"
 
 
+def materialize_candidate_evidence(
+    candidate: dict,
+    *,
+    article_excerpt: str | None = None,
+    article_evidence: bool | None = None,
+) -> dict:
+    """Materialize the single candidate evidence contract.
+
+    Feed text and fetched article text intentionally remain separate.  The
+    contract is the only place that derives evidence provenance/richness;
+    downstream consumers must treat the returned values as authoritative.
+    ``article_evidence`` is explicit so the source-feed fallback cannot be
+    mistaken for a fetched article body.
+    """
+    existing = candidate.get("evidence")
+    if isinstance(existing, dict) and "feed_snippet" in existing:
+        feed_snippet = str(existing.get("feed_snippet") or "")
+    else:
+        feed_snippet = str(candidate.get("snippet") or "")
+
+    if article_excerpt is None:
+        article_text = (
+            str(existing.get("article_excerpt") or "")
+            if isinstance(existing, dict)
+            else ""
+        )
+    else:
+        article_text = str(article_excerpt or "")
+    feed_snippet = _shorten(feed_snippet, REPORT_SNIPPET_CHARS)
+    article_text = _shorten(article_text, REPORT_SNIPPET_CHARS)
+
+    if article_evidence is False:
+        article_text = ""
+    elif article_evidence is None and not article_text:
+        article_text = ""
+
+    has_feed = bool(feed_snippet)
+    has_article = bool(article_text)
+    if has_feed and has_article:
+        provenance = "feed+prefetch"
+        richness = "feed+article"
+    elif has_article:
+        provenance = "prefetch"
+        richness = "article_excerpt"
+    elif has_feed:
+        provenance = "feed"
+        richness = "feed_snippet"
+    else:
+        provenance = "none"
+        richness = "title_only"
+
+    contract = {
+        "feed_snippet": feed_snippet,
+        "article_excerpt": article_text,
+        "provenance": provenance,
+        "richness": richness,
+    }
+    candidate["evidence"] = contract
+    return contract
+
+
+def candidate_selection_evidence_text(candidate: dict) -> str:
+    """Return the legacy selection text view from the evidence contract.
+
+    This is a deterministic projection for existing selector gates/scoring;
+    it is not a second provenance or richness decision.  Candidates created
+    by older callers continue to use their existing ``snippet`` value.
+    """
+    evidence = candidate.get("evidence")
+    if not isinstance(evidence, dict):
+        return str(candidate.get("snippet") or "")
+    return _shorten(
+        " ".join(
+            str(value or "")
+            for value in (
+                evidence.get("feed_snippet", ""),
+                evidence.get("article_excerpt", ""),
+            )
+            if str(value or "").strip()
+        ),
+        REPORT_SNIPPET_CHARS,
+    )
+
+
 def _is_article_level_url(value: str, allow_google_news: bool = False) -> bool:
     url = _clean_candidate_url(value)
     parsed = urlparse(url)
@@ -1452,6 +1536,7 @@ def _make_news_candidate(
         "search_language": search_language,
         "query_region": query_metadata.get("query_region", ""),
     }
+    materialize_candidate_evidence(candidate)
     if raw_provenance is not None:
         raw_provenance = dict(raw_provenance)
         search_provider = str(
@@ -2313,9 +2398,17 @@ def _apply_prefetch_evidence(
     if resolved_url:
         candidate["resolved_article_url"] = resolved_url
     candidate["prefetched_text_snippet"] = _shorten(text, REPORT_SNIPPET_CHARS)
-    candidate["snippet"] = _shorten(
-        f"{candidate.get('snippet', '')} {text}",
-        REPORT_SNIPPET_CHARS,
+    is_article_evidence = (
+        str(method or "") != "source_feed_snippet"
+        and str(content_source or "") not in {
+            "candidate_source_feed",
+            "source_domain_search_snippet",
+        }
+    )
+    materialize_candidate_evidence(
+        candidate,
+        article_excerpt=text if is_article_evidence else "",
+        article_evidence=is_article_evidence,
     )
     candidate["enrichment_method"] = method
     candidate["enriched_content_source"] = content_source
@@ -2514,11 +2607,17 @@ def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> d
     if followup.get("text"):
         transport_success = True
         candidate["enrichment_transport_success"] = True
+        followup_reason = str(followup.get("reason") or "")
+        followup_content_source = (
+            "source_domain_search_snippet"
+            if followup_reason == "source_domain_search_snippet"
+            else "source_domain_search"
+        )
         chars = _apply_prefetch_evidence(
             candidate,
             followup["text"],
             method="source_domain_followup",
-            content_source="source_domain_search",
+            content_source=followup_content_source,
             resolved_url=followup.get("resolved_url", ""),
         )
         if chars:
@@ -2528,7 +2627,7 @@ def _prefetch_candidate_article(candidate: dict, session: requests.Session) -> d
                 elapsed_seconds=round(time.perf_counter() - started, 2),
                 reason=followup.get("reason", "source_domain_followup"),
                 enrichment_method="source_domain_followup",
-                enriched_content_source="source_domain_search",
+                enriched_content_source=followup_content_source,
                 transport_success=True,
                 evidence_valid=True,
             )

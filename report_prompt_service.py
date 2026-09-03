@@ -101,6 +101,30 @@ def _formal_report_category(value: str) -> str:
     return FORMAL_REPORT_CATEGORY_MAP.get(value, value)
 
 
+def _evidence_payload(
+    candidate: dict,
+    *,
+    context: ReportPromptContext,
+    max_chars: int,
+) -> dict:
+    """Serialize the authoritative evidence contract without reclassification."""
+    evidence = candidate.get("evidence")
+    if not isinstance(evidence, dict):
+        return {}
+    return {
+        "feed_snippet": context.shorten(
+            str(evidence.get("feed_snippet") or ""),
+            max_chars,
+        ),
+        "article_excerpt": context.shorten(
+            str(evidence.get("article_excerpt") or ""),
+            max_chars,
+        ),
+        "provenance": str(evidence.get("provenance") or "none"),
+        "richness": str(evidence.get("richness") or "title_only"),
+    }
+
+
 def format_selection_candidate(
     candidate: dict,
     *,
@@ -136,6 +160,13 @@ def format_selection_candidate(
         ),
         "url": source_url,
     }
+    evidence_payload = _evidence_payload(
+        candidate,
+        context=context,
+        max_chars=context.candidate_snippet_chars,
+    )
+    if evidence_payload:
+        prompt_card["evidence"] = evidence_payload
     return json.dumps(prompt_card, ensure_ascii=False)
 
 
@@ -437,6 +468,13 @@ def format_report_candidate(
         "operator": candidate.get("operator") or candidate.get("operator_name") or candidate.get("operator_key", ""),
         "system_name": candidate.get("system_name") or candidate.get("system") or "",
     }
+    evidence_payload = _evidence_payload(
+        candidate,
+        context=context,
+        max_chars=context.report_snippet_chars,
+    )
+    if evidence_payload:
+        prompt_item["evidence"] = evidence_payload
     if country:
         prompt_item["country"] = country
     return json.dumps(prompt_item, ensure_ascii=False)

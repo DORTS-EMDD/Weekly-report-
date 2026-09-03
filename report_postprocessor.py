@@ -1,6 +1,7 @@
 """Pure-text normalization and postprocessing for completed MaiAgent reports."""
 
 import datetime
+import difflib
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -45,6 +46,11 @@ from maiagent_service import (
     ensure_selected_candidate_ids,
     remove_internal_candidate_markers,
     validate_report_candidate_ids,
+)
+from semantic_validation_service import (
+    SEMANTIC_VALIDATION_INVALID_RESPONSE,
+    SEMANTIC_VALIDATION_UNAVAILABLE,
+    run_semantic_validation,
 )
 
 
@@ -1337,6 +1343,76 @@ def _summary_repeats_title(summary: str, title: str) -> bool:
     )
 
 
+def _summary_paraphrases_title(summary: str, title: str) -> bool:
+    """Detect a short near-copy of the authoritative title.
+
+    This checks generated prose against the candidate title only.  Evidence
+    richness/provenance are read from the candidate evidence contract and are
+    never inferred here.
+    """
+    normalized_summary = re.sub(r"[\W_]+", "", unescape(summary or "")).casefold()
+    normalized_title = re.sub(r"[\W_]+", "", unescape(title or "")).casefold()
+    if len(normalized_title) < 12 or len(normalized_summary) < 12:
+        return False
+    if len(normalized_summary) > len(normalized_title) + 36:
+        return False
+    similarity = difflib.SequenceMatcher(
+        None,
+        normalized_title,
+        normalized_summary,
+    ).ratio()
+    return 0.72 <= similarity < 0.999
+
+
+def _summary_evidence_status(
+    summary: str,
+    title: str,
+    candidate: dict,
+    *,
+    semantic_result: dict | None = None,
+    semantic_validation_required: bool = False,
+) -> str:
+    """Classify summary quality using the V1 evidence-support contract.
+
+    Title classifications are deterministic checks against the title only and
+    deliberately precede the evidence-richness check.  Factual support is
+    never inferred lexically here; it must come from the independent semantic
+    judge and its grounded response.
+    """
+    if _summary_repeats_title(summary, title):
+        return "title_copy"
+    if _summary_paraphrases_title(summary, title):
+        return "title_paraphrase"
+    evidence = candidate.get("evidence")
+    if not isinstance(evidence, dict):
+        return "semantic_validation_unavailable" if semantic_validation_required else "legacy_unclassified"
+    richness = str(evidence.get("richness") or "title_only")
+    if richness == "title_only":
+        return "insufficient_evidence"
+    if semantic_result:
+        semantic_state = str(semantic_result.get("semantic_state") or "").strip().upper()
+        summary_status = str(semantic_result.get("summary_status") or "").strip().upper()
+        if (
+            semantic_state == "SUPPORTED"
+            and summary_status == "EVIDENCE_SUPPORTED"
+            and semantic_result.get("grounding_passed") is True
+        ):
+            return "evidence_supported"
+        if semantic_state == "SEMANTIC_FAIL":
+            return "insufficient_evidence"
+        if semantic_state == SEMANTIC_VALIDATION_UNAVAILABLE:
+            return "semantic_validation_unavailable"
+        if semantic_state == SEMANTIC_VALIDATION_INVALID_RESPONSE:
+            return "semantic_validation_invalid_response"
+        return "semantic_validation_invalid_response"
+    if semantic_validation_required:
+        return "semantic_validation_unavailable"
+    # Direct legacy callers that have an evidence contract but no judge do not
+    # get a lexical pass.  They retain a compatibility status that is not an
+    # evidence-supported acceptance.
+    return "legacy_unclassified"
+
+
 _GENERIC_TAIPEI_INSIGHTS = {
     re.sub(r"[\W_]+", "", value).casefold()
     for value in (
@@ -1964,6 +2040,99 @@ def canonicalize_authoritative_source_fields(
     return rendered
 
 
+def canonicalize_authoritative_electromechanical_fields(
+    report_md: str,
+    selected_candidates: list[dict],
+    *,
+    context: ReportPostprocessContext | None = None,
+) -> str:
+    """Overlay candidate-owned E&M metadata onto marked report blocks.
+
+    ``core_systems`` is materialized upstream by the shared taxonomy owner.
+    This boundary must not re-infer systems from model prose: when an
+    authoritative candidate carries the field, replace the model's E&M line
+    with the existing report-label projection, or remove it for an explicit
+    empty authoritative list.
+    """
+    del context
+    if not report_md or not selected_candidates:
+        return report_md
+    selected_map = {
+        int(item.get("candidate_id") or item.get("id") or 0): item
+        for item in selected_candidates
+        if int(item.get("candidate_id") or item.get("id") or 0)
+    }
+    marker_pattern = re.compile(
+        r"^(?:<!--\s*candidate_id\s*:\s*(\d+)\s*-->|&lt;!--\s*candidate\\?_id\s*:\s*(\d+)\s*--&gt;)$",
+        flags=re.IGNORECASE,
+    )
+    lines = report_md.splitlines()
+    output: list[str] = []
+    current_ids: list[int] = []
+    block_content_seen = False
+    changed = False
+    index = 0
+    while index < len(lines):
+        raw_line = lines[index]
+        stripped = raw_line.strip()
+        marker = marker_pattern.fullmatch(stripped)
+        if marker:
+            if current_ids and block_content_seen:
+                current_ids = []
+            current_ids.append(int(marker.group(1) or marker.group(2)))
+            block_content_seen = False
+            output.append(raw_line)
+            index += 1
+            continue
+        if stripped.startswith(("#", "📊", "⏰")) or re.match(r"^[一二三四五六]\s*、", stripped):
+            current_ids = []
+            block_content_seen = False
+        field = _match_report_field_line(stripped)
+        if current_ids and field and field[0] == "相關機電系統":
+            candidate = selected_map.get(current_ids[0]) if len(current_ids) == 1 else None
+            if candidate is None or "core_systems" not in candidate:
+                output.append(raw_line)
+                block_content_seen = True
+                index += 1
+                continue
+
+            formal_systems = report_labels_for_core_systems(
+                list(candidate.get("core_systems") or [])
+            )
+            canonical_line = ""
+            if formal_systems:
+                indent = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+                canonical_line = f"{indent}• 相關機電系統：{'、'.join(formal_systems)}"
+                output.append(canonical_line)
+
+            next_index = index + 1
+            while next_index < len(lines):
+                next_stripped = lines[next_index].strip()
+                if _is_report_block_boundary(next_stripped):
+                    break
+                next_index += 1
+            if (
+                raw_line != canonical_line
+                or next_index > index + 1
+                or not formal_systems
+            ):
+                changed = True
+            block_content_seen = True
+            index = next_index
+            continue
+        output.append(raw_line)
+        if current_ids and stripped:
+            block_content_seen = True
+        index += 1
+    if not changed:
+        return report_md
+    newline = "\r\n" if "\r\n" in report_md else "\n"
+    rendered = newline.join(output)
+    if report_md.endswith(("\n", "\r")):
+        rendered += newline
+    return rendered
+
+
 def _is_unknown_country(value: object) -> bool:
     return str(value or "").strip() in _UNKNOWN_COUNTRY_VALUES
 
@@ -2063,6 +2232,9 @@ def validate_authoritative_report(
     selected_candidates: list[dict],
     *,
     selected_types: list[str] | None = None,
+    semantic_judge: object | None = None,
+    semantic_validation_required: bool = False,
+    semantic_validation_results: dict[str, dict] | None = None,
 ) -> dict:
     """Validate MaiAgent output without changing its report content."""
     candidate_validation = validate_report_candidate_ids(report_md, selected_candidates)
@@ -2158,6 +2330,9 @@ def validate_authoritative_report(
     }
     content_quality_issues: list[dict] = []
     source_metadata_mismatches: list[dict] = []
+    summary_evidence_status: dict[str, str] = {}
+    semantic_validation_by_id: dict[str, dict] = {}
+    semantic_validation_failures: list[dict] = []
     for status in block_field_status:
         fields = status.get("field_values", {})
         summary = str(fields.get("summary", "") or "").strip()
@@ -2165,6 +2340,85 @@ def validate_authoritative_report(
         source = str(fields.get("source", "") or "").strip()
         for candidate_id in status.get("candidate_ids", []):
             candidate = selected_map.get(candidate_id, {})
+            title = str(candidate.get("title") or "")
+            preliminary_status = _summary_evidence_status(
+                summary,
+                title,
+                candidate,
+            )
+            semantic_result = (semantic_validation_results or {}).get(str(candidate_id))
+            if (
+                semantic_result is None
+                and isinstance(candidate.get("evidence"), dict)
+                and (semantic_judge is not None or semantic_validation_required)
+                and preliminary_status not in {
+                    "title_copy",
+                    "title_paraphrase",
+                    "insufficient_evidence",
+                }
+            ):
+                semantic_result = run_semantic_validation(
+                    summary,
+                    title,
+                    candidate,
+                    judge=semantic_judge,
+                )
+                semantic_validation_by_id[str(candidate_id)] = semantic_result
+                semantic_state = str(semantic_result.get("semantic_state") or "")
+                if semantic_state in {
+                    SEMANTIC_VALIDATION_UNAVAILABLE,
+                    SEMANTIC_VALIDATION_INVALID_RESPONSE,
+                    "SEMANTIC_FAIL",
+                }:
+                    semantic_validation_failures.append({
+                        "candidate_id": candidate_id,
+                        "semantic_state": semantic_state,
+                        "failure_reason": semantic_result.get("failure_reason", ""),
+                    })
+            evidence_status = _summary_evidence_status(
+                summary,
+                title,
+                candidate,
+                semantic_result=semantic_result,
+                semantic_validation_required=semantic_validation_required,
+            )
+            summary_evidence_status[str(candidate_id)] = evidence_status
+            evidence_issue = {
+                "title_copy": {
+                    "code": "summary_title_copy",
+                    "detail": "事件摘要不可僅重複候選標題",
+                },
+                "title_paraphrase": {
+                    "code": "summary_title_paraphrase",
+                    "detail": "事件摘要不可僅改寫候選標題",
+                },
+                "insufficient_evidence": {
+                    "code": "insufficient_summary_evidence",
+                    "detail": "候選僅有標題，無足夠 evidence 支撐事件摘要",
+                },
+                "semantic_validation_unavailable": {
+                    "code": "semantic_validation_unavailable",
+                    "detail": "semantic evidence validator 暫時不可用，無法驗證摘要事實支持",
+                },
+                "semantic_validation_invalid_response": {
+                    "code": "semantic_validation_invalid_response",
+                    "detail": "semantic evidence validator 回應未通過 schema 或 grounding 驗證",
+                },
+            }.get(evidence_status)
+            if evidence_status == "insufficient_evidence" and semantic_result:
+                semantic_state = str(semantic_result.get("semantic_state") or "")
+                if semantic_state == "SEMANTIC_FAIL":
+                    evidence_issue = {
+                        "code": "unsupported_summary_claims",
+                        "detail": "摘要包含 authoritative evidence 無法支持的實質事實",
+                    }
+            if evidence_issue and summary:
+                content_quality_issues.append({
+                    "candidate_id": candidate_id,
+                    "code": evidence_issue["code"],
+                    "detail": evidence_issue["detail"],
+                    "summary_evidence_status": evidence_status,
+                })
             if candidate and source and not _source_value_matches_candidate(source, candidate):
                 mismatch = {
                     "candidate_id": candidate_id,
@@ -2241,9 +2495,44 @@ def validate_authoritative_report(
         and not forbidden_internal_phrases
         and not content_quality_issues
     )
+    semantic_states = {
+        str(item.get("semantic_state") or "").strip().upper()
+        for item in semantic_validation_by_id.values()
+    }
+    semantic_blocked = bool(
+        semantic_states.intersection({
+            SEMANTIC_VALIDATION_UNAVAILABLE,
+            SEMANTIC_VALIDATION_INVALID_RESPONSE,
+        })
+    )
+    semantic_failed = "SEMANTIC_FAIL" in semantic_states
+    non_retryable_content_codes = {
+        "insufficient_summary_evidence",
+        "semantic_validation_unavailable",
+        "semantic_validation_invalid_response",
+    }
+    retryable_content_issue = any(
+        issue.get("code") not in non_retryable_content_codes
+        for issue in content_quality_issues
+    )
+    report_retry_allowed = bool(
+        not passed
+        and not semantic_blocked
+        and (
+            semantic_failed
+            or retryable_content_issue
+            or not candidate_validation.get("valid")
+            or bool(missing_sections)
+            or bool(missing_model_fields)
+            or bool(multi_candidate_model_blocks)
+            or bool(category_mismatches)
+            or bool(forbidden_internal_phrases)
+        )
+    )
     return {
         **candidate_validation,
         "retry_required": not passed,
+        "report_retry_allowed": report_retry_allowed,
         "selected_candidate_ids": selected_ids,
         "model_candidate_ids": model_ids,
         "selected_candidate_id_count": len(selected_ids),
@@ -2268,6 +2557,11 @@ def validate_authoritative_report(
         "parser_failure_reasons": parser_failure_reasons,
         "content_quality_issues": content_quality_issues,
         "content_quality_passed": not content_quality_issues,
+        "summary_evidence_status": summary_evidence_status,
+        "semantic_validation_by_id": semantic_validation_by_id,
+        "semantic_validation_failures": semantic_validation_failures,
+        "semantic_validation_states": sorted(semantic_states),
+        "semantic_validation_blocked": semantic_blocked,
         "report_validation_passed": passed,
     }
 

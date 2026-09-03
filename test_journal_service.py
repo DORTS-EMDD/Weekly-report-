@@ -65,7 +65,8 @@ DDGS_RESULTS = [
     },
 ]
 
-PRE_SPLIT_PAYLOAD_SHA256 = "dd6300a23ef5093db039cdc66cdba887f04b952a7d457b67840fa5a70d8d3dbf"
+# RC-2 adds the authoritative evidence contract to materialized candidates.
+PRE_SPLIT_PAYLOAD_SHA256 = "e073bdc2bc6e61d0b085f4609083c87f3970f530e312209fe6428235b59b9a8a"
 
 
 class FakeResponse:
