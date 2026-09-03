@@ -7,6 +7,7 @@ from semantic_validation_service import (
     SEMANTIC_VALIDATION_UNAVAILABLE,
     SemanticSupportJudge,
     build_semantic_validation_payload,
+    build_semantic_validation_prompt,
     ground_semantic_validation,
 )
 
@@ -146,6 +147,58 @@ class RC3DSemanticValidationTests(unittest.TestCase):
         )
         self.assertEqual(result["semantic_state"], "SUPPORTED")
         self.assertTrue(result["grounding_passed"])
+
+    def test_prompt_declares_summary_status_contract_and_semantic_fail_mapping(self):
+        payload = build_semantic_validation_payload(
+            candidate(),
+            "The operator announced a signalling deployment.",
+        )
+        prompt = build_semantic_validation_prompt(payload)
+        for status in (
+            "TITLE_COPY",
+            "TITLE_PARAPHRASE",
+            "TITLE_ONLY",
+            "EVIDENCE_SUPPORTED",
+            "INSUFFICIENT_EVIDENCE",
+        ):
+            self.assertIn(status, prompt)
+        self.assertIn("UNSUPPORTED 或 UNCERTAIN", prompt)
+        self.assertIn("semantic_state 設為 SEMANTIC_FAIL", prompt)
+
+    def test_judge_accepts_valid_insufficient_evidence_semantic_fail(self):
+        item = candidate()
+
+        def provider(prompt):
+            payload = json.loads(prompt.split("INPUT=", 1)[1])
+            return json.dumps(grounded_result(payload, supported=False), ensure_ascii=False)
+
+        result = SemanticSupportJudge(provider).validate(
+            build_semantic_validation_payload(
+                item,
+                "The operator announced fare changes for the urban rail system.",
+            )
+        )
+        self.assertEqual(result["summary_status"], "INSUFFICIENT_EVIDENCE")
+        self.assertEqual(result["semantic_state"], "SEMANTIC_FAIL")
+        self.assertTrue(result["grounding_passed"])
+
+    def test_judge_keeps_invalid_summary_status_as_invalid_response(self):
+        calls = []
+
+        def malformed(prompt):
+            calls.append(True)
+            payload = json.loads(prompt.split("INPUT=", 1)[1])
+            result = grounded_result(payload, supported=False)
+            result["summary_status"] = "UNSUPPORTED"
+            return json.dumps(result, ensure_ascii=False)
+
+        result = SemanticSupportJudge(malformed).validate(
+            build_semantic_validation_payload(candidate(), "A summary.")
+        )
+        self.assertEqual(result["semantic_state"], SEMANTIC_VALIDATION_INVALID_RESPONSE)
+        self.assertFalse(result["grounding_passed"])
+        self.assertEqual(result["attempts"], 2)
+        self.assertEqual(len(calls), 2)
 
     def test_unsupported_fare_change_is_not_accepted_by_lexical_overlap(self):
         item = candidate()
