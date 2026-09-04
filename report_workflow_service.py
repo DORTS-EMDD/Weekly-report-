@@ -222,6 +222,75 @@ def _authoritative_evidence_fingerprint(candidate: dict) -> tuple[tuple[str, str
     )
 
 
+_FORMAL_REPORT_EVIDENCE_INSUFFICIENT = "formal_report_evidence_insufficient"
+
+
+def _formal_report_evidence_eligibility(candidate: dict) -> tuple[bool, str]:
+    """Check whether materialized evidence can support a formal event summary.
+
+    This is a handoff contract only. It consumes the existing evidence object,
+    never fetches, reclassifies, or derives a second evidence source.
+    """
+    evidence = candidate.get("evidence")
+    if not isinstance(evidence, dict):
+        return False, _FORMAL_REPORT_EVIDENCE_INSUFFICIENT
+
+    normalize = lambda value: _normalize_title(str(value or "")).split()
+    title_tokens = normalize(candidate.get("title", ""))
+    metadata_tokens: set[str] = set()
+    source_tokens: set[str] = set()
+    for field in (
+        "source",
+        "source_display",
+        "source_domain",
+        "source_domain_normalized",
+        "source_type",
+        "source_tier",
+        "date",
+        "published_date",
+    ):
+        field_tokens = set(normalize(candidate.get(field, "")))
+        metadata_tokens.update(field_tokens)
+        if field in {
+            "source",
+            "source_display",
+            "source_domain",
+            "source_domain_normalized",
+        }:
+            source_tokens.update(field_tokens)
+    metadata_tokens.update({
+        "from", "report", "reported", "source", "via", "news", "official",
+        "website", "site", "feed", "publisher", "attribution", "label", "name",
+    })
+
+    for value in (
+        evidence.get("article_excerpt", ""),
+        evidence.get("feed_snippet", ""),
+    ):
+        value_tokens = normalize(value)
+        if not value_tokens:
+            continue
+        value_token_set = set(value_tokens)
+        source_only = bool(source_tokens.intersection(value_token_set)) and value_token_set.issubset(
+            metadata_tokens
+        )
+        if source_only or value_tokens == title_tokens:
+            continue
+        if title_tokens:
+            shorter, longer = (
+                (value_tokens, title_tokens)
+                if len(value_tokens) <= len(title_tokens)
+                else (title_tokens, value_tokens)
+            )
+            remainder = longer[len(shorter) :]
+            if longer[: len(shorter)] == shorter and remainder and set(remainder).issubset(
+                metadata_tokens
+            ):
+                continue
+        return True, ""
+    return False, _FORMAL_REPORT_EVIDENCE_INSUFFICIENT
+
+
 @dataclass(frozen=True)
 class WorkflowConfig:
     today: datetime.date
@@ -861,6 +930,29 @@ class WorkflowRuntime:
                 "duplicate_event_records": [],
             }
         timings["event_consolidation"] = time.perf_counter() - event_consolidation_started
+
+        evidence_eligibility_started = time.perf_counter()
+        evidence_eligible_candidates: list[dict] = []
+        formal_evidence_excluded: list[dict] = []
+        for candidate in filtered_candidates:
+            evidence_eligible, evidence_reason = _formal_report_evidence_eligibility(candidate)
+            candidate["formal_report_evidence_eligibility"] = (
+                "eligible" if evidence_eligible else "ineligible"
+            )
+            candidate["formal_report_evidence_eligibility_reason"] = evidence_reason
+            if evidence_eligible:
+                evidence_eligible_candidates.append(candidate)
+                continue
+            candidate["selection_stage"] = "formal_report_evidence_excluded"
+            candidate["exclude_reason"] = evidence_reason
+            candidate["final_exclude_reason"] = evidence_reason
+            formal_evidence_excluded.append(candidate)
+            exclusion_stats[evidence_reason] = exclusion_stats.get(evidence_reason, 0) + 1
+        filtered_candidates = evidence_eligible_candidates
+        excluded_candidates.extend(formal_evidence_excluded)
+        timings["formal_report_evidence_eligibility"] = (
+            time.perf_counter() - evidence_eligibility_started
+        )
 
         sorting_started = time.perf_counter()
         filtered_candidates.sort(

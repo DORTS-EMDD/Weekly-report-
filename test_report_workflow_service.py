@@ -95,6 +95,97 @@ def _candidate(candidate_id: int, category: str = "技術新知") -> dict:
 
 
 class ReportWorkflowServiceTests(unittest.TestCase):
+    def test_formal_report_evidence_eligibility_is_content_based_and_dynamic(self):
+        def candidate(evidence, title="Western Sydney Airport Metro train arrives"):
+            return {
+                "title": title,
+                "source": "Fixture News",
+                "source_display": "Fixture News",
+                "source_domain": "fixture.example",
+                "date": "2026-08-30",
+                "evidence": evidence,
+            }
+
+        self.assertFalse(
+            workflow_service._formal_report_evidence_eligibility(
+                candidate({
+                    "feed_snippet": "From Fixture News Report",
+                    "article_excerpt": "",
+                })
+            )[0]
+        )
+        self.assertFalse(
+            workflow_service._formal_report_evidence_eligibility(
+                candidate({
+                    "feed_snippet": "Western Sydney Airport Metro train arrives",
+                    "article_excerpt": "",
+                })
+            )[0]
+        )
+        self.assertTrue(
+            workflow_service._formal_report_evidence_eligibility(
+                candidate({
+                    "feed_snippet": "The metro train arrived at the Orchard Hills facility after testing.",
+                    "article_excerpt": "",
+                })
+            )[0]
+        )
+        self.assertTrue(
+            workflow_service._formal_report_evidence_eligibility(
+                candidate({
+                    "feed_snippet": "",
+                    "article_excerpt": "The rail authority confirmed the train arrival and commissioning schedule.",
+                })
+            )[0]
+        )
+
+        many_candidates = [
+            candidate({
+                "feed_snippet": f"The metro completed event {index} after testing.",
+                "article_excerpt": "",
+            }, title=f"Metro event {index}")
+            for index in range(100)
+        ]
+        eligible = [
+            item
+            for item in many_candidates
+            if workflow_service._formal_report_evidence_eligibility(item)[0]
+        ]
+        self.assertEqual(len(eligible), 100)
+
+    def test_prepare_candidate_pool_blocks_thin_evidence_before_model_candidates(self):
+        config = _fixture_config()
+        runtime = workflow_service.make_runtime(
+            config,
+            workflow_service.WorkflowDependencies(prefetch_enabled=False),
+        )
+        candidate = _candidate(99)
+        candidate["title"] = "Cybersecurity audit services for Toulouse Metro Line C, France"
+        candidate["snippet"] = (
+            "From Fixture Source Report official publisher source attribution"
+        )
+        runtime.selector_api["hard_low_value_candidate_reason"] = lambda item: ""
+        runtime.selector_api["preliminary_filter_candidate"] = lambda item: (True, "")
+        runtime._validate_selector_entry = lambda items: (list(items), [])
+        runtime.parse_candidates = lambda _raw_rss, _raw_ddg: [candidate]
+
+        pool = runtime.prepare_candidate_pool("", "")
+
+        self.assertEqual(pool["model_candidates"], [])
+        excluded = next(
+            item
+            for item in pool["excluded_candidates"]
+            if item.get("title") == candidate["title"]
+        )
+        self.assertEqual(
+            excluded["formal_report_evidence_eligibility"],
+            "ineligible",
+        )
+        self.assertEqual(
+            excluded["final_exclude_reason"],
+            workflow_service._FORMAL_REPORT_EVIDENCE_INSUFFICIENT,
+        )
+
     def test_annual_mixed_candidate_is_verified_before_materialization(self):
         config = workflow_service.WorkflowConfig(
             today=datetime.date(2026, 8, 24),
