@@ -1636,12 +1636,6 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         title_text = f"{title} {source} {candidate.get('source_domain', '')}"
         if not _has_clear_urban_rail_context(title_text, source):
             return False
-        has_system_or_institution = (
-            _contains_any_term(title_text, TECH_NEWS_REQUIRED_TERMS)
-            or _contains_any_term(title_text, globals().get("HIGH_VALUE_POLICY_TERMS", []))
-            or _contains_any_term(title_text, ACCIDENT_SIGNAL_TERMS + SAFETY_INCIDENT_DETAIL_TERMS)
-            or _contains_any_term(title_text, DISPUTE_SIGNAL_TERMS + DISPUTE_ACTOR_TERMS)
-        )
         has_action = _contains_any_term(
             title_text,
             TITLE_TECHNICAL_ACTION_TERMS + [
@@ -1650,11 +1644,7 @@ def build_selector_api(**dependencies) -> dict[str, object]:
                 "award", "awarded", "strike", "lawsuit", "protest", "delay", "delayed",
             ],
         )
-        return has_system_or_institution and has_action and (
-            candidate.get("source_tier") in {"A_official", "B_professional"}
-            or _is_short_snippet_rescue_candidate(candidate)
-            or _is_procurement_rescue_candidate(candidate)
-        )
+        return has_action
 
 
     def _is_forward_enrichment_candidate(candidate: dict) -> bool:

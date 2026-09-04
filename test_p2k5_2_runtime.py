@@ -6,6 +6,7 @@ from unittest.mock import patch
 import article_selector
 import report_postprocessor
 import streamlit_sidebar_ui
+from article_processor import _apply_prefetch_evidence
 
 from test_streamlit_ui_modules import FakeStreamlit, _sidebar_context
 
@@ -57,6 +58,137 @@ def _candidate(identifier, title, snippet, date_value):
 
 
 class P2K52RuntimeTests(unittest.TestCase):
+    def test_weekly_contract_b_prefetch_admission_keeps_existing_bounds(self):
+        api = _selector(7)
+        cases = [
+            (
+                "Campsie-style",
+                _candidate(1, "Sydney Metro station upgraded", "Sydney Metro station update", "2026-08-11"),
+                "A_official",
+                True,
+            ),
+            (
+                "TfL-style",
+                _candidate(2, "TfL tube tunnel upgrades", "TfL tube upgrade notice", "2026-08-11"),
+                "C_media",
+                True,
+            ),
+            (
+                "generic urban rail",
+                _candidate(3, "Metro station notice", "Metro station information", "2026-08-11"),
+                "B_professional",
+                False,
+            ),
+            (
+                "project-only",
+                _candidate(4, "Metro station project plan", "Transport authority project plan", "2026-08-11"),
+                "A_official",
+                False,
+            ),
+            (
+                "existing technical",
+                _candidate(
+                    5,
+                    "Metro deploys CBTC signalling system",
+                    "Urban rail metro deploys CBTC signalling system",
+                    "2026-08-11",
+                ),
+                "B_professional",
+                True,
+            ),
+        ]
+        for label, candidate, tier, expected in cases:
+            candidate["source_tier"] = tier
+            candidate["source_domain"] = "fixture.example"
+            with self.subTest(case=label):
+                self.assertEqual(api["_candidate_prefetch_signal"](candidate), expected)
+
+    def test_contract_b_article_evidence_reaches_unchanged_category_gate(self):
+        api = _selector(7)
+        candidate = _candidate(
+            6,
+            "Metro station upgrade",
+            "Urban rail metro station upgrade",
+            "2026-08-11",
+        )
+        _apply_prefetch_evidence(
+            candidate,
+            (
+                "Metro station upgrade: the urban rail operator deployed a CBTC signalling system upgrade "
+                "and confirmed commissioning and safety verification for passenger service."
+            ),
+            method="direct_article_url",
+            content_source="article_html",
+            resolved_url=candidate["url"],
+        )
+        gates = api["evaluate_category_gates"](candidate)
+        self.assertTrue(gates["category_gates"]["technology"])
+
+    def test_contract_b_nontechnical_article_is_excluded_by_downstream_gate(self):
+        api = _selector(7)
+        candidate = _candidate(
+            7,
+            "Metro station upgraded",
+            "Metro station upgrade notice",
+            "2026-08-11",
+        )
+
+        def enrich(item, _session):
+            _apply_prefetch_evidence(
+                item,
+                (
+                    "Metro station upgraded: the station welcomed visitors and provided a community tour. "
+                    "The operator described visitor arrangements and the public schedule."
+                ),
+                method="direct_article_url",
+                content_source="article_html",
+                resolved_url=item["url"],
+            )
+            return {"status": "success", "chars": 180, "elapsed_seconds": 0.0, "reason": "fixture"}
+
+        with patch.object(article_selector, "_prefetch_candidate_article", side_effect=enrich):
+            stats = api["prefetch_candidates_before_filter"]([candidate])
+        self.assertEqual(stats["attempted_count"], 1)
+        self.assertFalse(api["evaluate_category_gates"](candidate)["category_gates"]["technology"])
+
+    def test_testing_only_remains_outside_service_opening_gate(self):
+        api = _selector(7)
+        candidate = _candidate(
+            8,
+            "Metro line begins testing",
+            "Testing begins on the new metro extension before public service.",
+            "2026-08-11",
+        )
+        self.assertTrue(api["_candidate_prefetch_signal"](candidate))
+        gates = api["evaluate_category_gates"](candidate)
+        self.assertFalse(gates["category_gates"]["service_opening"])
+        self.assertIn("testing_only", gates["service_opening_failure_reasons"])
+
+    def test_contract_b_prefetch_attempt_cap_remains_unchanged(self):
+        api = _selector(7)
+        candidates = [
+            _candidate(
+                100 + index,
+                f"Metro station {index} upgraded",
+                "Metro station upgrade notice",
+                "2026-08-11",
+            )
+            for index in range(12)
+        ]
+        attempted_ids = []
+
+        def enrich(candidate, _session):
+            attempted_ids.append(candidate["id"])
+            return {"status": "success", "chars": 120, "elapsed_seconds": 0.0, "reason": "fixture"}
+
+        with patch.object(article_selector, "_prefetch_candidate_article", side_effect=enrich):
+            stats = api["prefetch_candidates_before_filter"](candidates)
+        self.assertEqual(stats["limit"], 8)
+        self.assertEqual(stats["forward_enrichment_budget"], 2)
+        self.assertEqual(stats["general_rescue_budget"], 6)
+        self.assertEqual(stats["attempted_count"], len(attempted_ids))
+        self.assertLessEqual(stats["attempted_count"], stats["limit"])
+
     def test_thermal_subway_energy_study_passes_narrow_technical_gate(self):
         api = _selector(7)
         candidate = _candidate(
