@@ -131,11 +131,12 @@ class P2KRecallQualityTests(unittest.TestCase):
         api = _selector()
         candidate = _candidate(
             9,
-            "Metro signalling contract awarded by transport authority",
-            "The authority awarded a CBTC signalling contract.",
+            "Metro station systems contract awarded by transport authority",
+            "The authority awarded a systems contract for an urban rail station package.",
             tier="A_official",
         )
         candidate["source_domain"] = "transport.gov"
+        self.assertEqual(api["_core_systems_for_candidate"](candidate), [])
         self.assertTrue(api["_is_procurement_rescue_candidate"](candidate))
 
     def test_civil_procurement_candidate_does_not_enter_rescue(self):
@@ -175,7 +176,7 @@ class P2KRecallQualityTests(unittest.TestCase):
         self.assertFalse(payload["track_b_gate_pass"])
 
     def test_forward_fallback_specs_are_bounded_to_eight_queries(self):
-        self.assertEqual(len(ddgs_search_service.FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS), 8)
+        self.assertEqual(len(ddgs_search_service.FORWARD_TECHNOLOGY_FALLBACK_QUERY_SPECS), 5)
 
     def test_forward_zero_raw_triggers_constrained_second_layer(self):
         context = ddgs_search_service.DdgsSearchContext(
@@ -209,10 +210,10 @@ class P2KRecallQualityTests(unittest.TestCase):
                 news_query_indices={1},
             )
         self.assertEqual(summary["forward_technology_query_count"], 1)
-        self.assertEqual(summary["forward_technology_fallback_query_count"], 8)
+        self.assertEqual(summary["forward_technology_fallback_query_count"], 5)
         self.assertEqual(summary["forward_technology_primary_raw_count"], 0)
-        self.assertEqual(summary["forward_technology_fallback_raw_count"], 8)
-        self.assertEqual(summary["forward_technology_raw_count"], 8)
+        self.assertEqual(summary["forward_technology_fallback_raw_count"], 5)
+        self.assertEqual(summary["forward_technology_raw_count"], 5)
         self.assertTrue(any(row.get("fallback_layer") for row in statuses))
 
     def test_annual_bucket_metadata_covers_forward_and_selected_families(self):
