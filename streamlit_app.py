@@ -32,6 +32,7 @@ from report_formatter import (
     markdown_fragment_to_html as shared_fragment_renderer,
 )
 from report_postprocessor import (
+    canonicalize_authoritative_source_fields,
     _clean_formal_source_proxy_label,
     _clean_source_label,
     _dedupe_source_mentions_in_paragraph,
@@ -3058,6 +3059,10 @@ if generate_btn:
             stage_start = time.perf_counter()
             maiagent_attempt_count += 1
             raw_report = call_maiagent_cloud(report_prompt)
+            raw_report = canonicalize_authoritative_source_fields(
+                raw_report,
+                selected_candidates,
+            )
             initial_raw_report = raw_report
             semantic_judge = SemanticSupportJudge(call_maiagent_cloud)
             report_id_validation_before_retry = service_validate_authoritative_report(
@@ -3081,6 +3086,10 @@ if generate_btn:
                 )
                 maiagent_attempt_count += 1
                 raw_report = call_maiagent_cloud(retry_prompt)
+                raw_report = canonicalize_authoritative_source_fields(
+                    raw_report,
+                    selected_candidates,
+                )
                 maiagent_call_count += 1
             if (
                 report_id_validation_before_retry.get("semantic_validation_blocked")
