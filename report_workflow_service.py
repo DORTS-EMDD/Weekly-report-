@@ -1368,7 +1368,7 @@ def run_report_workflow(
             selected_candidates,
             retry_attempted=retry_attempted,
         )
-    final_report, _, _ = runtime.postprocess_report(
+    final_report, postprocess_validation, _ = runtime.postprocess_report(
         raw_report,
         selected_candidates,
         semantic_judge=dependencies.call_semantic_judge,
@@ -1377,6 +1377,12 @@ def run_report_workflow(
             "semantic_validation_by_id", {}
         ),
     )
+    if not postprocess_validation.get("report_validation_passed"):
+        raise ReportIntegrityError(
+            postprocess_validation,
+            selected_candidates,
+            retry_attempted=retry_attempted,
+        )
     return WorkflowResult(
         report_md=final_report,
         selected_candidates=selected_candidates,

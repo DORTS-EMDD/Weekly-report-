@@ -361,6 +361,135 @@ class SourceOwnershipTests(unittest.TestCase):
         self.assertTrue(app.session_state["report_generated"])
         self.assertIn(canonical_source, app.session_state["latest_report_md"])
 
+    def test_streamlit_postprocess_validation_failure_blocks_pdf_and_email(self):
+        candidate = {
+            "id": 1,
+            "candidate_id": 1,
+            "title": "Metro signalling system upgrade completed",
+            "snippet": (
+                "The operator deployed a CBTC signalling system and completed commissioning "
+                "and safety verification for passenger service."
+            ),
+            "date": "2026-08-20",
+            "region": "英國",
+            "query_region": "英國",
+            "source": "Fixture Source",
+            "source_display": "Fixture Source",
+            "source_domain": "fixture.example",
+            "source_href": "https://fixture.example/article/1",
+            "url": "https://fixture.example/article/1",
+            "source_tier": "B_professional",
+            "source_quality": "A",
+            "classification": "技術新知",
+            "preliminary_type": "技術新知",
+            "search_family": "technology",
+            "query": "metro signalling",
+            "search_query": "metro signalling",
+        }
+        raw_report = "\n".join([
+            "## 一、技術新知",
+            "<!-- candidate_id: 1 -->",
+            "🔹 [技術新知] Metro signalling system upgrade completed",
+            "• 發布/事件日期：2026-08-20",
+            "• 國家/地區：英國",
+            "• 相關機電系統：號誌系統",
+            "• 事件摘要：The operator deployed a CBTC signalling system and completed commissioning.",
+            "• 臺北捷運局啟示：可作為號誌系統測試與營運安全驗證之參考。",
+            "• 資料來源：Wrong Publisher https://wrong.example/article",
+        ])
+
+        def fake_maiagent(prompt, **_kwargs):
+            if "authoritative evidence" in prompt and "INPUT=" in prompt:
+                return json.dumps({
+                    "candidate_id": 1,
+                    "summary_status": "EVIDENCE_SUPPORTED",
+                    "semantic_state": "SUPPORTED",
+                    "failure_reason": "",
+                    "claims": [{
+                        "claim_text": "The operator deployed a CBTC signalling system",
+                        "support_status": "SUPPORTED",
+                        "evidence_mappings": [{
+                            "evidence_field": "feed_snippet",
+                            "evidence_quote": "The operator deployed a CBTC signalling system",
+                        }],
+                    }],
+                })
+            return raw_report
+
+        def fake_search(_runtime):
+            return "", "", [], [], 0
+
+        def fake_parse(_runtime, _raw_rss, _raw_ddg):
+            return [dict(candidate)]
+
+        def failing_postprocess(_runtime, raw, *_args, **_kwargs):
+            return {
+                "validated_report": raw,
+                "clean_report": raw,
+                "dropped_candidates": [],
+                "id_validation": {
+                    "report_validation_passed": False,
+                    "content_quality_issues": [{"code": "fixture_postprocess_failure"}],
+                },
+                "reconciled_accepted_count": 0,
+                "final_rendered_report_count": 0,
+                "final_count_by_category": {},
+            }
+
+        pdf_calls = []
+        email_calls = []
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "MAIAGENT_API_KEY": "fixture-key",
+                    "MAIAGENT_CHATBOT_ID": "fixture-bot",
+                },
+                clear=False,
+            ),
+            patch.object(WorkflowRuntime, "search", fake_search),
+            patch.object(WorkflowRuntime, "parse_candidates", fake_parse),
+            patch.object(
+                WorkflowRuntime,
+                "postprocess_report_with_diagnostics",
+                failing_postprocess,
+            ),
+            patch("maiagent_service.call_maiagent_cloud", side_effect=fake_maiagent),
+            patch(
+                "pdf_exporter.streamlit_markdown_to_pdf_bytes",
+                side_effect=lambda *args, **kwargs: pdf_calls.append(args[0]) or b"fixture-pdf",
+            ),
+            patch(
+                "email_service.send_streamlit_email",
+                side_effect=lambda *args, **kwargs: email_calls.append(args) or True,
+            ),
+        ):
+            app = AppTest.from_file(str(STREAMLIT_SOURCE))
+            app.run(timeout=60)
+            app.selectbox[0].select(365).run(timeout=60)
+            app.radio[0].set_value("全球（安全白名單來源）").run(timeout=60)
+            for label in ("重大事故", "營運動態", "機電標案"):
+                next(
+                    item for item in app.checkbox if item.label == label
+                ).set_value(False).run(timeout=60)
+            next(
+                item
+                for item in app.button
+                if item.label == "🚀 產生捷運 AI 年度回顧"
+            ).click().run(timeout=120)
+
+        self.assertFalse(app.exception)
+        self.assertEqual(pdf_calls, [])
+        self.assertEqual(email_calls, [])
+        self.assertFalse(app.session_state["report_generated"])
+        self.assertFalse(app.session_state["email_sent"])
+        self.assertIsNone(app.session_state["latest_pdf"])
+        self.assertEqual(app.session_state["latest_report_md"], "")
+        self.assertFalse(
+            app.session_state["latest_report_integrity_failure"]["report_validation_passed"]
+        )
+
     def test_prose_fields_are_not_rewritten_by_source_overlay(self):
         candidate = _candidate()
         summary = "倫敦地鐵完成新號誌系統測試並評估營運效益。"

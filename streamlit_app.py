@@ -3310,6 +3310,35 @@ if generate_btn:
             selected_final_count_validation_passed = bool(
                 reconciliation_diagnostics.get("report_validation_passed", False)
             )
+            if not selected_final_count_validation_passed:
+                postprocess_failure = dict(reconciliation_diagnostics)
+                postprocess_failure["report_generation_stage"] = "postprocess_validation"
+                record_failed_report_attempt(
+                    st.session_state,
+                    postprocess_failure,
+                    debug_info={
+                        "run_config": run_config,
+                        "report_generation_stage": "postprocess_validation_failed",
+                        "report_validation_passed": False,
+                        "report_id_validation_before_retry": report_id_validation_before_retry,
+                        "report_id_validation_after_retry": report_id_validation_after_retry,
+                        "report_id_reconciliation": postprocess_failure,
+                    },
+                    report_stats={
+                        "report_validation_passed": False,
+                        "report_retry_attempted": report_retry_attempted,
+                        "report_id_validation_before_retry": report_id_validation_before_retry,
+                        "report_id_validation_after_retry": postprocess_failure,
+                        "run_config": run_config,
+                    },
+                    source_statuses=source_statuses,
+                    run_config=run_config,
+                )
+                raise workflow_service.ReportIntegrityError(
+                    postprocess_failure,
+                    selected_candidates,
+                    retry_attempted=report_retry_attempted,
+                )
 
             long_term_coverage = build_final_report_coverage_warning(
                 clean_report,

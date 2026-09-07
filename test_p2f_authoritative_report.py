@@ -1,14 +1,19 @@
 import datetime
+import os
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from report_postprocessor import (
     remove_authoritative_candidate_markers,
     validate_authoritative_report,
 )
 from report_workflow_service import (
+    ReportIntegrityError,
     WorkflowConfig,
     WorkflowDependencies,
     make_runtime,
+    run_report_workflow,
 )
 
 
@@ -107,6 +112,164 @@ class AuthoritativeReportTests(unittest.TestCase):
             _config(),
             WorkflowDependencies(prefetch_enabled=False),
         )
+
+    def _workflow_runtime_for_delivery(self, postprocess_validation: dict):
+        runtime = Mock()
+        candidate = _candidate(1, TECHNICAL)
+        runtime.search.return_value = ("", "", [], [], 0)
+        runtime.prepare_candidate_pool.return_value = {
+            "model_candidates": [candidate],
+        }
+        runtime.select_candidates.return_value = [candidate]
+        runtime.build_report_prompt.return_value = "fixture report prompt"
+        runtime.postprocess_context.return_value = None
+        runtime.postprocess_report.return_value = (
+            "fixture report",
+            postprocess_validation,
+            [],
+        )
+        return runtime
+
+    def test_shared_workflow_blocks_postprocess_validation_failure(self):
+        runtime = self._workflow_runtime_for_delivery({
+            "report_validation_passed": False,
+            "content_quality_issues": [{"code": "fixture_failure"}],
+        })
+        passed = {
+            "report_validation_passed": True,
+            "semantic_validation_by_id": {},
+        }
+        dependencies = WorkflowDependencies(
+            call_maiagent=Mock(return_value="fixture report"),
+            call_semantic_judge=Mock(),
+        )
+
+        with (
+            patch("report_workflow_service.make_runtime", return_value=runtime),
+            patch("report_workflow_service.validate_authoritative_report", return_value=passed),
+        ):
+            with self.assertRaises(ReportIntegrityError):
+                run_report_workflow(config=_config(), dependencies=dependencies)
+
+        runtime.postprocess_report.assert_called_once()
+
+    def test_shared_workflow_preserves_valid_postprocess_delivery(self):
+        runtime = self._workflow_runtime_for_delivery({
+            "report_validation_passed": True,
+        })
+        passed = {
+            "report_validation_passed": True,
+            "semantic_validation_by_id": {},
+        }
+        dependencies = WorkflowDependencies(
+            call_maiagent=Mock(return_value="fixture report"),
+            call_semantic_judge=Mock(),
+        )
+
+        with (
+            patch("report_workflow_service.make_runtime", return_value=runtime),
+            patch("report_workflow_service.validate_authoritative_report", return_value=passed),
+        ):
+            result = run_report_workflow(config=_config(), dependencies=dependencies)
+
+        self.assertEqual(result.report_md, "fixture report")
+        self.assertTrue(result.report_id_validation["report_validation_passed"])
+
+    def test_shared_workflow_blocks_initial_and_retry_validation_failure(self):
+        runtime = self._workflow_runtime_for_delivery({
+            "report_validation_passed": True,
+        })
+        initial_failure = {
+            "report_validation_passed": False,
+            "semantic_validation_blocked": True,
+            "report_retry_allowed": False,
+        }
+        dependencies = WorkflowDependencies(
+            call_maiagent=Mock(return_value="fixture report"),
+            call_semantic_judge=Mock(),
+        )
+        with (
+            patch("report_workflow_service.make_runtime", return_value=runtime),
+            patch(
+                "report_workflow_service.validate_authoritative_report",
+                return_value=initial_failure,
+            ),
+        ):
+            with self.assertRaises(ReportIntegrityError):
+                run_report_workflow(config=_config(), dependencies=dependencies)
+        runtime.postprocess_report.assert_not_called()
+
+        runtime = self._workflow_runtime_for_delivery({
+            "report_validation_passed": True,
+        })
+        retry_failure = {
+            "report_validation_passed": False,
+            "report_retry_allowed": True,
+        }
+        final_failure = {
+            "report_validation_passed": False,
+            "report_retry_allowed": False,
+        }
+        call_report = Mock(side_effect=["initial report", "retry report"])
+        dependencies = WorkflowDependencies(
+            call_maiagent=call_report,
+            call_semantic_judge=Mock(),
+        )
+        with (
+            patch("report_workflow_service.make_runtime", return_value=runtime),
+            patch(
+                "report_workflow_service.validate_authoritative_report",
+                side_effect=[retry_failure, final_failure],
+            ),
+        ):
+            with self.assertRaises(ReportIntegrityError):
+                run_report_workflow(config=_config(), dependencies=dependencies)
+        self.assertEqual(call_report.call_count, 2)
+        runtime.postprocess_report.assert_not_called()
+
+    def test_main_delivery_is_reached_only_after_shared_workflow_success(self):
+        import main
+
+        env = {
+            "MAIAGENT_API_KEY": "fixture-key",
+            "MAIAGENT_CHATBOT_ID": "fixture-bot",
+            "GMAIL_USER": "fixture@example.invalid",
+            "GMAIL_APP_PASS": "fixture-pass",
+            "RECIPIENTS": "recipient@example.invalid",
+        }
+        result = SimpleNamespace(
+            report_md="fixture report",
+            model_candidates=[_candidate(1, TECHNICAL)],
+            selected_candidates=[_candidate(1, TECHNICAL)],
+            search_count=0,
+        )
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch("main.build_automation_run_config", return_value=(_config(), {})),
+            patch("main.run_report_workflow", return_value=result),
+            patch("main._save_report") as save_report,
+            patch("main.send_email", return_value=True) as send_email,
+        ):
+            self.assertEqual(main.main(), 0)
+        save_report.assert_called_once()
+        send_email.assert_called_once()
+
+        failure = ReportIntegrityError(
+            {"report_validation_passed": False},
+            [],
+            retry_attempted=False,
+        )
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch("main.build_automation_run_config", return_value=(_config(), {})),
+            patch("main.run_report_workflow", side_effect=failure),
+            patch("main._save_report") as save_report,
+            patch("main.send_email") as send_email,
+        ):
+            with self.assertRaises(ReportIntegrityError):
+                main.main()
+        save_report.assert_not_called()
+        send_email.assert_not_called()
 
     def test_authoritative_body_preserved_and_multi_marker_ids_retained(self):
         raw = _authoritative_fixture()
