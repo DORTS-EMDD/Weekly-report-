@@ -163,30 +163,31 @@ class SourceOwnershipTests(unittest.TestCase):
         self.assertIn(expected["display_url"], result["clean_report"])
         self.assertNotIn("白小姐", result["clean_report"])
 
-    def test_streamlit_annual_boundary_canonicalizes_before_validation(self):
+    def test_shared_lifecycle_owns_streamlit_annual_report_boundary(self):
         source = STREAMLIT_SOURCE.read_text(encoding="utf-8")
-        first_report_call = source.index("raw_report = call_maiagent_cloud(report_prompt)")
-        first_canonicalization = source.index(
-            "raw_report = canonicalize_authoritative_source_fields(",
-            first_report_call,
+        workflow_source = Path(__file__).with_name("report_workflow_service.py").read_text(
+            encoding="utf-8"
         )
-        first_validation = source.index(
+        callback_pos = source.index("def on_pre_maiagent(prompt: str) -> None:")
+        lifecycle_pos = source.index(
+            "lifecycle_outcome = lifecycle_runtime.run_report_lifecycle("
+        )
+        self.assertLess(callback_pos, lifecycle_pos)
+        self.assertEqual(source.count("run_report_lifecycle("), 1)
+        self.assertNotIn("raw_report = call_maiagent_cloud(report_prompt)", source)
+        self.assertNotIn("raw_report = call_maiagent_cloud(retry_prompt)", source)
+        self.assertNotIn("raw_report = canonicalize_authoritative_source_fields(", source)
+        self.assertNotIn(
             "report_id_validation_before_retry = service_validate_authoritative_report(",
-            first_canonicalization,
+            source,
         )
-        retry_report_call = source.index("raw_report = call_maiagent_cloud(retry_prompt)")
-        retry_canonicalization = source.index(
-            "raw_report = canonicalize_authoritative_source_fields(",
-            retry_report_call,
-        )
-        retry_validation = source.index(
+        self.assertNotIn(
             "report_id_validation_after_retry = service_validate_authoritative_report(",
-            retry_canonicalization,
+            source,
         )
-        self.assertLess(first_report_call, first_canonicalization)
-        self.assertLess(first_canonicalization, first_validation)
-        self.assertLess(retry_report_call, retry_canonicalization)
-        self.assertLess(retry_canonicalization, retry_validation)
+        self.assertNotIn("postprocess_runtime = workflow_service.make_runtime(", source)
+        self.assertIn("class WorkflowRuntime:", workflow_source)
+        self.assertIn("def run_report_lifecycle(", workflow_source)
 
         candidate = _candidate()
         raw = _report("Wrong Publisher https://wrong.example/article")

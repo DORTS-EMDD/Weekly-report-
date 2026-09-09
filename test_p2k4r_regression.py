@@ -208,11 +208,6 @@ class P2K4RRegressionTests(unittest.TestCase):
             "model_candidates": [candidate],
         }
         fake_runtime.select_candidates.return_value = [candidate]
-        fake_runtime.build_report_prompt.return_value = "fixture prompt"
-        dependencies = workflow_service.WorkflowDependencies(
-            call_maiagent=mock.Mock(side_effect=["first response", "retry response"]),
-            prefetch_enabled=False,
-        )
         failed_validation = {
             "retry_required": True,
             "report_validation_passed": False,
@@ -221,21 +216,31 @@ class P2K4RRegressionTests(unittest.TestCase):
             "duplicate_ids": [1],
             "multi_candidate_model_blocks": [[1, 1]],
         }
+        fake_runtime.run_report_lifecycle.return_value = workflow_service.ReportGenerationOutcome(
+            report_prompt="fixture prompt",
+            initial_validation=failed_validation,
+            pre_postprocess_validation=failed_validation,
+            retry_attempted=True,
+            failure_stage="provider_validation",
+            failure_validation=failed_validation,
+        )
+        dependencies = workflow_service.WorkflowDependencies(
+            call_maiagent=mock.Mock(),
+            prefetch_enabled=False,
+        )
 
-        with mock.patch.object(workflow_service, "make_runtime", return_value=fake_runtime), \
-             mock.patch.object(
-                 workflow_service,
-                 "validate_authoritative_report",
-                 side_effect=[failed_validation, failed_validation],
-             ):
+        with mock.patch.object(workflow_service, "make_runtime", return_value=fake_runtime):
             with self.assertRaises(workflow_service.ReportIntegrityError) as raised:
                 workflow_service.run_report_workflow(
                     config=config,
                     dependencies=dependencies,
                 )
 
-        self.assertEqual(dependencies.call_maiagent.call_count, 2)
-        fake_runtime.postprocess_report.assert_not_called()
+        fake_runtime.run_report_lifecycle.assert_called_once_with(
+            [candidate],
+            [],
+            1,
+        )
         self.assertEqual(raised.exception.validation["duplicate_ids"], [1])
 
     def test_hanzomon_asbestos_sources_consolidate_before_model_ids(self):
