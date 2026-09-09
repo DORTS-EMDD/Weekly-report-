@@ -1496,6 +1496,7 @@ def _workflow_dependencies(
     return workflow_service.WorkflowDependencies(
         ddgs_client_factory=DDGS,
         feedparser_module=feedparser,
+        call_maiagent=call_maiagent_cloud,
         http_session_factory=create_requests_session,
         prefetch_enabled=prefetch_enabled,
         debug_stats_builder=build_pipeline_debug_stats if prefetch_enabled else None,
@@ -3037,79 +3038,55 @@ if generate_btn:
 
             # Step 3：MaiAgent 第二階段正式報告
             status_text.text("正在進行報告撰寫")
-            report_prompt = build_report_prompt(selected_candidates, journal_candidates, search_count)
-            checkpoint_debug_info, checkpoint_report_stats = _persist_pre_maiagent_debug_checkpoint(
-                run_config=run_config,
-                candidate_pool=candidate_pool,
-                model_candidates=model_candidates,
-                selected_candidates=selected_candidates,
-                selected_ids=selected_ids,
-                selection_debug=LAST_PYTHON_SELECTION_DEBUG,
-                source_statuses=source_statuses,
-                source_health_summary=source_health_summary,
-                report_prompt=report_prompt,
-                journal_candidates=journal_candidates,
-                journal_statuses=journal_statuses,
-                journal_excluded_candidates=journal_excluded_candidates,
-                search_count=search_count,
-                timings=timings,
-                long_term_coverage=long_term_coverage,
-            )
+            checkpoint_holder = {}
+
+            def on_pre_maiagent(prompt: str) -> None:
+                checkpoint_holder["value"] = _persist_pre_maiagent_debug_checkpoint(
+                    run_config=run_config,
+                    candidate_pool=candidate_pool,
+                    model_candidates=model_candidates,
+                    selected_candidates=selected_candidates,
+                    selected_ids=selected_ids,
+                    selection_debug=LAST_PYTHON_SELECTION_DEBUG,
+                    source_statuses=source_statuses,
+                    source_health_summary=source_health_summary,
+                    report_prompt=prompt,
+                    journal_candidates=journal_candidates,
+                    journal_statuses=journal_statuses,
+                    journal_excluded_candidates=journal_excluded_candidates,
+                    search_count=search_count,
+                    timings=timings,
+                    long_term_coverage=long_term_coverage,
+                )
+
             report_generation_stage = "maiagent"
             stage_start = time.perf_counter()
-            maiagent_attempt_count += 1
-            raw_report = call_maiagent_cloud(report_prompt)
-            raw_report = canonicalize_authoritative_source_fields(
-                raw_report,
-                selected_candidates,
-            )
-            initial_raw_report = raw_report
             semantic_judge = SemanticSupportJudge(call_maiagent_cloud)
-            report_id_validation_before_retry = service_validate_authoritative_report(
-                raw_report,
-                selected_candidates,
-                selected_types=selected_types,
-                semantic_judge=semantic_judge.validate,
-                semantic_validation_required=True,
+            lifecycle_runtime = workflow_service.make_runtime(
+                _workflow_config(),
+                _workflow_dependencies(
+                    prefetch_enabled=False,
+                    call_semantic_judge=semantic_judge.validate,
+                ),
             )
-            report_retry_attempted = False
-            if report_id_validation_before_retry.get(
-                "report_retry_allowed",
-                report_id_validation_before_retry.get("retry_required"),
-            ):
-                report_retry_attempted = True
-                retry_prompt = build_report_retry_prompt(
-                    report_prompt,
-                    raw_report,
-                    report_id_validation_before_retry,
-                    selected_candidates=selected_candidates,
-                )
-                maiagent_attempt_count += 1
-                raw_report = call_maiagent_cloud(retry_prompt)
-                raw_report = canonicalize_authoritative_source_fields(
-                    raw_report,
-                    selected_candidates,
-                )
-                maiagent_call_count += 1
-            if (
-                report_id_validation_before_retry.get("semantic_validation_blocked")
-                and not report_retry_attempted
-            ):
-                # Reuse the bounded same-input judge result.  Unavailable or
-                # malformed semantic validation must not trigger another call.
-                report_id_validation_after_retry = report_id_validation_before_retry
-            else:
-                report_id_validation_after_retry = service_validate_authoritative_report(
-                    raw_report,
-                    selected_candidates,
-                    selected_types=selected_types,
-                    semantic_judge=semantic_judge.validate,
-                    semantic_validation_required=True,
-                )
+            lifecycle_outcome = lifecycle_runtime.run_report_lifecycle(
+                selected_candidates,
+                journal_candidates,
+                search_count,
+                on_pre_maiagent=on_pre_maiagent,
+            )
+            checkpoint_debug_info, checkpoint_report_stats = checkpoint_holder["value"]
+            report_prompt = lifecycle_outcome.report_prompt
+            initial_raw_report = lifecycle_outcome.initial_canonical_report
+            raw_report = lifecycle_outcome.final_canonical_report
+            report_id_validation_before_retry = lifecycle_outcome.initial_validation
+            report_id_validation_after_retry = lifecycle_outcome.pre_postprocess_validation
+            report_retry_attempted = lifecycle_outcome.retry_attempted
+            maiagent_attempt_count += 1 + int(report_retry_attempted)
+            maiagent_call_count += 1 + int(report_retry_attempted)
             raw_report_candidate_ids = extract_report_candidate_ids(raw_report)
             maiagent_report_response_count = count_authoritative_report_items(raw_report)
             timings["elapsed_seconds_report"] = round(time.perf_counter() - stage_start, 2)
-            maiagent_call_count += 1
             if not report_id_validation_after_retry.get("report_validation_passed"):
                 integrity_failure = {
                     "report_validation_passed": False,
@@ -3223,6 +3200,7 @@ if generate_btn:
                     "source_health_summary": source_health_summary,
                     "report_prompt": report_prompt,
                     "initial_raw_report": initial_raw_report,
+                    "initial_canonical_report": lifecycle_outcome.initial_canonical_report,
                     "raw_report": raw_report,
                     "initial_report_response": initial_raw_report,
                     "report_response": raw_report,
@@ -3271,38 +3249,22 @@ if generate_btn:
             status_text.text("正在進行報告撰寫")
             report_generation_stage = "post_maiagent"
             pdf_stage_start = time.perf_counter()
-            postprocess_runtime = workflow_service.make_runtime(
-                _workflow_config(),
-                _workflow_dependencies(
-                    prefetch_enabled=False,
-                    call_semantic_judge=semantic_judge.validate,
-                ),
-            )
-            postprocess_result = postprocess_runtime.postprocess_report_with_diagnostics(
-                raw_report,
-                selected_candidates,
-                journal_candidates,
-                id_validation_target=LAST_REPORT_ID_VALIDATION,
-                semantic_judge=semantic_judge.validate,
-                semantic_validation_required=True,
-                semantic_validation_results=report_id_validation_after_retry.get(
-                    "semantic_validation_by_id", {}
-                ),
-            )
-            validated_report = postprocess_result["validated_report"]
-            clean_report = postprocess_result["clean_report"]
-            dropped_selected_candidates = postprocess_result["dropped_candidates"]
-            reconciliation_diagnostics = dict(postprocess_result["id_validation"])
+            validated_report = lifecycle_outcome.validated_report
+            clean_report = lifecycle_outcome.clean_report
+            dropped_selected_candidates = lifecycle_outcome.dropped_candidates
+            reconciliation_diagnostics = dict(lifecycle_outcome.postprocess_validation)
+            LAST_REPORT_ID_VALIDATION.clear()
+            LAST_REPORT_ID_VALIDATION.update(reconciliation_diagnostics)
 
             # Internal IDs remain available through reconciliation and count validation.
             report_id_validation_before_clean = reconciliation_diagnostics.get(
                 "after_reconcile", {}
             )
-            reconciled_accepted_count = postprocess_result.get(
+            reconciled_accepted_count = lifecycle_outcome.postprocess_validation.get(
                 "reconciled_accepted_count",
                 reconciliation_diagnostics.get("reconciled_accepted_count", 0),
             )
-            rendered_report_count = postprocess_result.get(
+            rendered_report_count = lifecycle_outcome.postprocess_validation.get(
                 "final_rendered_report_count",
                 count_report_items(clean_report),
             )
@@ -3360,7 +3322,7 @@ if generate_btn:
             ]
             formal_count = rendered_report_count
             postprocess_news_count_delta = formal_count - maiagent_report_response_count
-            category_counts = postprocess_result.get(
+            category_counts = lifecycle_outcome.postprocess_validation.get(
                 "final_count_by_category",
                 count_authoritative_report_items_by_category(clean_report),
             )

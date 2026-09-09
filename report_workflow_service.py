@@ -4,7 +4,7 @@ import datetime
 from copy import deepcopy
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from article_processor import (
@@ -349,6 +349,27 @@ class WorkflowResult:
     search_count: int
     initial_report_md: str = ""
     initial_report_validation: dict | None = None
+
+
+@dataclass
+class ReportGenerationOutcome:
+    """Structured facts from the shared post-selection report lifecycle."""
+
+    report_prompt: str
+    initial_raw_report: str = ""
+    initial_canonical_report: str = ""
+    initial_validation: dict = field(default_factory=dict)
+    retry_attempted: bool = False
+    final_raw_report: str = ""
+    final_canonical_report: str = ""
+    pre_postprocess_validation: dict = field(default_factory=dict)
+    validated_report: str = ""
+    clean_report: str = ""
+    postprocess_validation: dict = field(default_factory=dict)
+    dropped_candidates: list[dict] = field(default_factory=list)
+    failure_stage: str | None = None
+    failure_validation: dict = field(default_factory=dict)
+    delivery_eligible: bool = False
 
 
 class ReportIntegrityError(RuntimeError):
@@ -1168,6 +1189,113 @@ class WorkflowRuntime:
             context=self._prompt_context(),
         )
 
+    def run_report_lifecycle(
+        self,
+        selected_candidates: list[dict],
+        journal_candidates: list[dict],
+        search_count: int,
+        *,
+        on_pre_maiagent: Callable[[str], None] | None = None,
+    ) -> ReportGenerationOutcome:
+        """Run the shared post-selection generation and validation lifecycle."""
+        report_prompt = self.build_report_prompt(
+            selected_candidates,
+            journal_candidates,
+            search_count,
+        )
+        if on_pre_maiagent is not None:
+            on_pre_maiagent(report_prompt)
+        if not self.dependencies.call_maiagent:
+            raise RuntimeError("未提供 MaiAgent callable")
+
+        outcome = ReportGenerationOutcome(report_prompt=report_prompt)
+        initial_raw_report = self.dependencies.call_maiagent(report_prompt)
+        outcome.initial_raw_report = initial_raw_report
+        raw_report = canonicalize_authoritative_source_fields(
+            initial_raw_report,
+            selected_candidates,
+            context=self.postprocess_context({}),
+        )
+        raw_report = canonicalize_authoritative_electromechanical_fields(
+            raw_report,
+            selected_candidates,
+            context=self.postprocess_context({}),
+        )
+        outcome.initial_canonical_report = raw_report
+        outcome.final_raw_report = initial_raw_report
+        outcome.final_canonical_report = raw_report
+        initial_validation = validate_authoritative_report(
+            raw_report,
+            selected_candidates,
+            selected_types=self.config.selected_types,
+            semantic_judge=self.dependencies.call_semantic_judge,
+            semantic_validation_required=True,
+        )
+        outcome.initial_validation = initial_validation
+        retry_attempted = False
+        if initial_validation.get(
+            "report_retry_allowed",
+            initial_validation.get("retry_required"),
+        ):
+            retry_attempted = True
+            retry_raw_report = self.dependencies.call_maiagent(
+                build_report_retry_prompt(
+                    report_prompt,
+                    raw_report,
+                    initial_validation,
+                    selected_candidates=selected_candidates,
+                )
+            )
+            outcome.final_raw_report = retry_raw_report
+            raw_report = canonicalize_authoritative_source_fields(
+                retry_raw_report,
+                selected_candidates,
+                context=self.postprocess_context({}),
+            )
+            raw_report = canonicalize_authoritative_electromechanical_fields(
+                raw_report,
+                selected_candidates,
+                context=self.postprocess_context({}),
+            )
+            outcome.final_canonical_report = raw_report
+        if initial_validation.get("semantic_validation_blocked") and not retry_attempted:
+            final_validation = initial_validation
+        else:
+            final_validation = validate_authoritative_report(
+                raw_report,
+                selected_candidates,
+                selected_types=self.config.selected_types,
+                semantic_judge=self.dependencies.call_semantic_judge,
+                semantic_validation_required=True,
+            )
+        outcome.retry_attempted = retry_attempted
+        outcome.pre_postprocess_validation = final_validation
+        if not final_validation.get("report_validation_passed"):
+            outcome.failure_stage = "provider_validation"
+            outcome.failure_validation = dict(final_validation)
+            return outcome
+
+        postprocess_result = self.postprocess_report_with_diagnostics(
+            raw_report,
+            selected_candidates,
+            journal_candidates,
+            semantic_judge=self.dependencies.call_semantic_judge,
+            semantic_validation_required=True,
+            semantic_validation_results=final_validation.get(
+                "semantic_validation_by_id", {}
+            ),
+        )
+        outcome.validated_report = postprocess_result["validated_report"]
+        outcome.clean_report = postprocess_result["clean_report"]
+        outcome.postprocess_validation = dict(postprocess_result["id_validation"])
+        outcome.dropped_candidates = list(postprocess_result["dropped_candidates"])
+        if not outcome.postprocess_validation.get("report_validation_passed"):
+            outcome.failure_stage = "postprocess_validation"
+            outcome.failure_validation = dict(outcome.postprocess_validation)
+            return outcome
+        outcome.delivery_eligible = True
+        return outcome
+
     def postprocess_report_with_diagnostics(
         self,
         raw_report: str,
@@ -1307,96 +1435,31 @@ def run_report_workflow(
     raw_rss, raw_ddg, source_statuses, ddgs_statuses, search_count = runtime.search()
     candidate_pool = runtime.prepare_candidate_pool(raw_rss, raw_ddg)
     selected_candidates = runtime.select_candidates(candidate_pool["model_candidates"])
-    report_prompt = runtime.build_report_prompt(selected_candidates, [], search_count)
-    if not dependencies.call_maiagent:
-        raise RuntimeError("未提供 MaiAgent callable")
-    raw_report = dependencies.call_maiagent(report_prompt)
-    raw_report = canonicalize_authoritative_source_fields(
-        raw_report,
+    outcome = runtime.run_report_lifecycle(
         selected_candidates,
-        context=runtime.postprocess_context({}),
+        [],
+        search_count,
     )
-    raw_report = canonicalize_authoritative_electromechanical_fields(
-        raw_report,
-        selected_candidates,
-        context=runtime.postprocess_context({}),
-    )
-    initial_report_md = raw_report
-    validation = validate_authoritative_report(
-        raw_report,
-        selected_candidates,
-        selected_types=config.selected_types,
-        semantic_judge=dependencies.call_semantic_judge,
-        semantic_validation_required=True,
-    )
-    retry_attempted = False
-    if validation.get("report_retry_allowed", validation.get("retry_required")):
-        retry_attempted = True
-        raw_report = dependencies.call_maiagent(
-            build_report_retry_prompt(
-                report_prompt,
-                raw_report,
-                validation,
-                selected_candidates=selected_candidates,
-            )
-        )
-        raw_report = canonicalize_authoritative_source_fields(
-            raw_report,
-            selected_candidates,
-            context=runtime.postprocess_context({}),
-        )
-        raw_report = canonicalize_authoritative_electromechanical_fields(
-            raw_report,
-            selected_candidates,
-            context=runtime.postprocess_context({}),
-        )
-    if validation.get("semantic_validation_blocked") and not retry_attempted:
-        # Preserve the bounded same-input judge result; an unavailable or
-        # invalid judge must not be called again as a disguised report retry.
-        final_validation = validation
-    else:
-        final_validation = validate_authoritative_report(
-            raw_report,
-            selected_candidates,
-            selected_types=config.selected_types,
-            semantic_judge=dependencies.call_semantic_judge,
-            semantic_validation_required=True,
-        )
-    if not final_validation.get("report_validation_passed"):
+    if outcome.delivery_eligible is not True:
         raise ReportIntegrityError(
-            final_validation,
+            outcome.failure_validation,
             selected_candidates,
-            retry_attempted=retry_attempted,
-        )
-    final_report, postprocess_validation, _ = runtime.postprocess_report(
-        raw_report,
-        selected_candidates,
-        semantic_judge=dependencies.call_semantic_judge,
-        semantic_validation_required=True,
-        semantic_validation_results=final_validation.get(
-            "semantic_validation_by_id", {}
-        ),
-    )
-    if not postprocess_validation.get("report_validation_passed"):
-        raise ReportIntegrityError(
-            postprocess_validation,
-            selected_candidates,
-            retry_attempted=retry_attempted,
+            retry_attempted=outcome.retry_attempted,
         )
     return WorkflowResult(
-        report_md=final_report,
+        report_md=outcome.clean_report,
         selected_candidates=selected_candidates,
         model_candidates=candidate_pool["model_candidates"],
         raw_rss=raw_rss,
         raw_ddg=raw_ddg,
-        report_prompt=report_prompt,
-        report_id_validation=final_validation,
-        retry_attempted=retry_attempted,
+        report_prompt=outcome.report_prompt,
+        report_id_validation=outcome.pre_postprocess_validation,
+        retry_attempted=outcome.retry_attempted,
         source_statuses=source_statuses,
         ddgs_statuses=ddgs_statuses,
         search_count=search_count,
-        initial_report_md=initial_report_md,
-        initial_report_validation=validation,
+        initial_report_md=outcome.initial_canonical_report,
+        initial_report_validation=outcome.initial_validation,
     )
 
 
