@@ -18,14 +18,14 @@ EXPECTED_PROMPT_SHA256 = {
         "4930e0434c882b1fc01b3225fa18264228eb50894acae9d33e2239d2d2965925"
     ),
     "formal_with_journal": (
-        "adf7ed622c99ae4a42fde0fe9422561838ecbcee9467929f639052e232e60303"
+        "95b8cf705df3ca090b38c227697f648e2218083f0dfeee0b15f226f9df570b06"
     ),
     "formal_without_research": (
-        "07132c86ed77fa1c1f6f3275bc22b24a48cf4e1ef96cf0b0186cefde706ac87c"
+        "f744baf2fe4ed137c52f52bfe579e0e9f58eb964209984aef768e0e9597d9929"
     ),
 }
 EXPECTED_PROMPT_AGGREGATE_SHA256 = (
-    "380040a401942cf2ed176f06e9fcaf6af0b332e060e5c2bf5765ff8734ea7376"
+    "fa195f52f2d00e85c2f42c5bacb77fa9e5bc45f49579c08adca10e0b2774bb16"
 )
 EXPECTED_PARSE_AGGREGATE_SHA256 = (
     "ad58f4e90089d1349ff450a675eecf5a8ca65551c0aa5561212843ce76da9bf8"
@@ -195,6 +195,136 @@ class ReportPromptServiceGoldenTests(unittest.TestCase):
         self.assertNotIn("同一事件若合併多個候選", prompt)
         self.assertNotIn("同一事件的不同來源必須合併", prompt)
         self.assertNotIn("同一事件可合併不同來源", prompt)
+
+    def test_formal_prompt_declares_field_level_grounding_contract(self):
+        prompt = report_prompt_service.build_report_prompt(
+            _candidates(),
+            [],
+            37,
+            context=dataclasses.replace(
+                _context(),
+                include_research_supplement=False,
+            ),
+        )
+
+        self.assertIn("`title` 僅供判斷主題、識別事件及產生或翻譯正式新聞標題", prompt)
+        self.assertIn("標題中的事實若不在目前候選的 `evidence.feed_snippet` 或 `evidence.article_excerpt`", prompt)
+        self.assertIn("`date` 僅填入「發布/事件日期」；`country`／`resolved_region` 僅填入「國家」", prompt)
+        self.assertIn("只能由目前候選自己的 `evidence.feed_snippet` 或 `evidence.article_excerpt` 直接支持", prompt)
+        self.assertIn("若 evidence 很短，請寫短但可證實的摘要", prompt)
+        self.assertIn("若 authoritative evidence 以 `...`、`…` 或不完整句尾截斷", prompt)
+        self.assertIn("不得使用其他候選的 purpose、system、location、action、operational role 或 trial description", prompt)
+        self.assertIn("「臺北捷運局啟示」可根據已由 evidence 支持的事件事實提出一般工程／管理分析", prompt)
+
+    def test_formal_payload_keeps_identification_separate_from_evidence(self):
+        candidate = {
+            **_candidates()[0],
+            "evidence": {
+                "feed_snippet": "The metro deployed a new CBTC signalling system.",
+                "article_excerpt": "The operator confirmed the deployment.",
+                "provenance": "feed+prefetch",
+                "richness": "feed+article",
+            },
+        }
+        payload = json.loads(
+            report_prompt_service.format_report_candidate(
+                candidate,
+                context=dataclasses.replace(
+                    _context(),
+                    include_research_supplement=False,
+                ),
+            )
+        )
+
+        self.assertEqual(payload["title"], candidate["title"])
+        self.assertEqual(
+            payload["evidence"]["feed_snippet"],
+            candidate["evidence"]["feed_snippet"],
+        )
+        self.assertEqual(
+            payload["evidence"]["article_excerpt"],
+            candidate["evidence"]["article_excerpt"],
+        )
+        self.assertNotIn("title", payload["evidence"])
+
+    def test_grounding_regression_cases_preserve_evidence_boundaries(self):
+        cases = [
+            {
+                "candidate_id": 3,
+                "title": "Sound Transit board moves forward with fare gate pilot",
+                "evidence": "The board voted to allow a pilot program adding fare gates to 14 light rail stations.",
+                "title_only": ("fare compliance",),
+            },
+            {
+                "candidate_id": 4,
+                "title": "City council reconsiders LRT fare gate pilot ahead of next budget",
+                "evidence": "A previously rejected idea to improve fare compliance on the LRT is getting another run through the turnstile.",
+                "title_only": ("fare gate pilot", "next budget"),
+            },
+            {
+                "candidate_id": 5,
+                "title": "桃園捷運棕線機電工程簽約！包括共享綠線機廠資源",
+                "evidence": "桃園捷運棕線BRM01標機電系統統包工程今天簽約，包括與綠線共享北機廠大修維修與...",
+                "title_only": ("資源",),
+            },
+            {
+                "candidate_id": 6,
+                "title": "桃捷綠線延伸中壢機電標暴增160億 議員憂財務",
+                "evidence": "工程歷經九次流標終於在本月五日決標，預算從九十七．一億元飆升至...",
+                "title_only": ("160億", "議員憂財務", "2026年8月5日"),
+            },
+            {
+                "candidate_id": 8,
+                "title": "LTA humanoid robot trial at Little India MRT",
+                "evidence": "Commuters will encounter a digital assistant, a humanoid robot named Olly, at Little India MRT on the Downtown Line.",
+                "title_only": ("旅客導引服務試辦",),
+            },
+            {
+                "candidate_id": 2,
+                "title": "Siemens and Rostocker Straßenbahn trial Signaling X",
+                "evidence": "They have started trial operations in Rostock, marking the first deployment in German urban public transport.",
+                "required": ("trial operations", "first deployment"),
+            },
+            {
+                "candidate_id": 7,
+                "title": "Singapore tests robot guide at MRT station",
+                "evidence": "A humanoid robot is being tested as a guide for commuters at Little India MRT station.",
+                "required": ("guide for commuters",),
+            },
+        ]
+        context = dataclasses.replace(
+            _context(),
+            include_research_supplement=False,
+        )
+        for case in cases:
+            payload = json.loads(
+                report_prompt_service.format_report_candidate(
+                    {
+                        "candidate_id": case["candidate_id"],
+                        "title": case["title"],
+                        "date": "2026-07-22",
+                        "source": "Fixture News",
+                        "source_display": "Fixture News",
+                        "source_tier": "B",
+                        "classification": "技術新知",
+                        "snippet": case["evidence"],
+                        "url": "https://news.example/fixture",
+                        "evidence": {
+                            "feed_snippet": case["evidence"],
+                            "article_excerpt": "",
+                            "provenance": "feed",
+                            "richness": "feed_snippet",
+                        },
+                    },
+                    context=context,
+                )
+            )
+            self.assertEqual(payload["evidence"]["feed_snippet"], case["evidence"])
+            self.assertNotIn("title", payload["evidence"])
+            for title_only in case.get("title_only", ()):
+                self.assertNotIn(title_only, payload["evidence"]["feed_snippet"])
+            for required in case.get("required", ()):
+                self.assertIn(required, payload["evidence"]["feed_snippet"])
 
     def test_prompt_strings_match_pre_split_sha256(self):
         context = _context()

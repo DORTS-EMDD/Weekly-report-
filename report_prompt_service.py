@@ -652,6 +652,14 @@ def build_report_prompt(
 - 請勿輸出「本期統計」、「報告產出時間」、搜尋次數、候選數量或任何系統執行資訊；這些內容將由程式後續統一產生。
 - 未啟用國際學術期刊時，正式報告正文結束於最後一則新聞；啟用期刊時，正文結束於最後一篇期刊，不得輸出「學術期刊綜合結論」。
 
+## 候選欄位角色與事實證據邊界
+- `title` 僅供判斷主題、識別事件及產生或翻譯正式新聞標題。標題中的事實若不在目前候選的 `evidence.feed_snippet` 或 `evidence.article_excerpt`，不得寫入「事件摘要」。
+- `date` 僅填入「發布/事件日期」；`country`／`resolved_region` 僅填入「國家」；`core_systems` 僅填入「相關機電系統」；`report_source` 僅填入「資料來源」。這些 metadata 不得與 snippet 或「本月」等文字合成新的事件日期、地點、金額、目的、結果或因果；除非 authoritative evidence 明確支持，否則不得寫入摘要。
+- 「事件摘要」中的每一項 substantive factual claim，只能由目前候選自己的 `evidence.feed_snippet` 或 `evidence.article_excerpt` 直接支持。若 evidence 很短，請寫短但可證實的摘要；不得由 title 補事實、猜測目的／結果／因果／金額、補完截斷句，或使用常識補足缺漏。
+- 若 authoritative evidence 以 `...`、`…` 或不完整句尾截斷，只能使用截斷前明確完整支持的內容；不得利用 title、metadata 或其他候選補完。
+- 每個 candidate 必須獨立撰寫；不得使用其他候選的 purpose、system、location、action、operational role 或 trial description 補足目前候選的證據。
+- 「臺北捷運局啟示」可根據已由 evidence 支持的事件事實提出一般工程／管理分析，但不得新增事件事實、宣稱 evidence 未支持的成效，或補寫不存在的事故原因、採購細節或部署成果。
+
 ## 已入選新聞資料
 {candidate_block}
 {journal_input_text}
