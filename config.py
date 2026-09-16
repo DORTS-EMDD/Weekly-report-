@@ -15,7 +15,7 @@ REPORT_TYPES = (
     "機電標案",
 )
 NEWS_SCOPE_OPTIONS = ("international", "domestic", "both")
-DEFAULT_NEWS_SCOPE = "international"
+DEFAULT_NEWS_SCOPE = "both"
 
 # Streamlit V19.4 non-sensitive configuration (moved verbatim).
 ADVANCED_TYPES = ["技術新知", "重大事故", "營運政策", "營運爭議", "規範更新"]

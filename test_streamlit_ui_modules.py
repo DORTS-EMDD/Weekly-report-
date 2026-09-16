@@ -320,7 +320,7 @@ class StreamlitUiModuleTests(unittest.TestCase):
             "is_global_scope": False,
             "region_filter_enabled": True,
             "report_scope_label": "美國、日本",
-            "news_scope": "international",
+            "news_scope": "both",
             "include_standards": False,
             "include_research_supplement": True,
             "research_supplement_period": {

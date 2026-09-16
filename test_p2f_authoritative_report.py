@@ -10,6 +10,7 @@ from report_postprocessor import (
 )
 from report_workflow_service import (
     ReportIntegrityError,
+    ReportGenerationOutcome,
     WorkflowConfig,
     WorkflowDependencies,
     make_runtime,
@@ -176,9 +177,6 @@ class AuthoritativeReportTests(unittest.TestCase):
         self.assertTrue(result.report_id_validation["report_validation_passed"])
 
     def test_shared_workflow_blocks_initial_and_retry_validation_failure(self):
-        runtime = self._workflow_runtime_for_delivery({
-            "report_validation_passed": True,
-        })
         initial_failure = {
             "report_validation_passed": False,
             "semantic_validation_blocked": True,
@@ -188,20 +186,87 @@ class AuthoritativeReportTests(unittest.TestCase):
             call_maiagent=Mock(return_value="fixture report"),
             call_semantic_judge=Mock(),
         )
-        with (
-            patch("report_workflow_service.make_runtime", return_value=runtime),
-            patch(
-                "report_workflow_service.validate_authoritative_report",
-                return_value=initial_failure,
-            ),
-        ):
+        runtime = Mock()
+        runtime.search.return_value = ("", "", [], [], 0)
+        runtime.prepare_candidate_pool.return_value = {"model_candidates": []}
+        runtime.select_candidates.return_value = []
+        runtime.run_report_lifecycle.return_value = ReportGenerationOutcome(
+            report_prompt="fixture report prompt",
+            initial_validation=initial_failure,
+            pre_postprocess_validation=initial_failure,
+            failure_stage="provider_validation",
+            failure_validation=initial_failure,
+        )
+        with patch("report_workflow_service.make_runtime", return_value=runtime):
             with self.assertRaises(ReportIntegrityError):
                 run_report_workflow(config=_config(), dependencies=dependencies)
-        runtime.postprocess_report.assert_not_called()
+        runtime.run_report_lifecycle.assert_called_once()
 
-        runtime = self._workflow_runtime_for_delivery({
-            "report_validation_passed": True,
-        })
+    def test_shared_lifecycle_preserves_initial_and_retry_canonicalization_order(self):
+        candidate = _candidate(1, TECHNICAL)
+        events = []
+        validations = [
+            {"report_validation_passed": False, "report_retry_allowed": True},
+            {"report_validation_passed": True, "semantic_validation_by_id": {}},
+        ]
+        dependencies = WorkflowDependencies(
+            call_maiagent=Mock(side_effect=["initial report", "retry report"]),
+            call_semantic_judge=Mock(),
+        )
+        runtime = make_runtime(_config(), dependencies)
+        runtime.build_report_prompt = Mock(return_value="fixture report prompt")
+
+        def mark(event_name):
+            def transform(value, *args, **kwargs):
+                events.append(event_name)
+                return value
+
+            return transform
+
+        postprocess_result = {
+            "validated_report": "validated report",
+            "clean_report": "clean report",
+            "id_validation": {"report_validation_passed": True},
+            "dropped_candidates": [],
+        }
+        with (
+            patch(
+                "report_workflow_service.canonicalize_authoritative_source_fields",
+                side_effect=mark("source"),
+            ),
+            patch(
+                "report_workflow_service.canonicalize_authoritative_electromechanical_fields",
+                side_effect=mark("electromechanical"),
+            ),
+            patch(
+                "report_workflow_service.validate_authoritative_report",
+                side_effect=lambda *args, **kwargs: (
+                    events.append("validate") or validations.pop(0)
+                ),
+            ),
+            patch.object(
+                runtime,
+                "postprocess_report_with_diagnostics",
+                return_value=postprocess_result,
+            ) as postprocess,
+        ):
+            outcome = runtime.run_report_lifecycle([candidate], [], 0)
+
+        self.assertEqual(
+            events,
+            [
+                "source",
+                "electromechanical",
+                "validate",
+                "source",
+                "electromechanical",
+                "validate",
+            ],
+        )
+        postprocess.assert_called_once()
+        self.assertTrue(outcome.delivery_eligible)
+        self.assertTrue(outcome.retry_attempted)
+
         retry_failure = {
             "report_validation_passed": False,
             "report_retry_allowed": True,
@@ -215,17 +280,67 @@ class AuthoritativeReportTests(unittest.TestCase):
             call_maiagent=call_report,
             call_semantic_judge=Mock(),
         )
-        with (
-            patch("report_workflow_service.make_runtime", return_value=runtime),
-            patch(
-                "report_workflow_service.validate_authoritative_report",
-                side_effect=[retry_failure, final_failure],
-            ),
-        ):
+        runtime = Mock()
+        runtime.search.return_value = ("", "", [], [], 0)
+        runtime.prepare_candidate_pool.return_value = {"model_candidates": []}
+        runtime.select_candidates.return_value = []
+        runtime.run_report_lifecycle.return_value = ReportGenerationOutcome(
+            report_prompt="fixture report prompt",
+            initial_validation=retry_failure,
+            pre_postprocess_validation=final_failure,
+            retry_attempted=True,
+            failure_stage="provider_validation",
+            failure_validation=final_failure,
+        )
+        with patch("report_workflow_service.make_runtime", return_value=runtime):
             with self.assertRaises(ReportIntegrityError):
                 run_report_workflow(config=_config(), dependencies=dependencies)
-        self.assertEqual(call_report.call_count, 2)
-        runtime.postprocess_report.assert_not_called()
+        runtime.run_report_lifecycle.assert_called_once()
+
+    def test_shared_lifecycle_reuses_validation_when_report_is_unchanged(self):
+        candidate = _candidate(1, TECHNICAL)
+        validation = {
+            "report_validation_passed": True,
+            "report_retry_allowed": False,
+            "semantic_validation_by_id": {
+                "1": {
+                    "candidate_id": 1,
+                    "semantic_state": "SUPPORTED",
+                    "grounding_passed": True,
+                },
+            },
+        }
+        dependencies = WorkflowDependencies(
+            call_maiagent=Mock(return_value="initial report"),
+            call_semantic_judge=Mock(),
+        )
+        runtime = make_runtime(_config(), dependencies)
+        runtime.build_report_prompt = Mock(return_value="fixture report prompt")
+        postprocess_result = {
+            "validated_report": "validated report",
+            "clean_report": "clean report",
+            "id_validation": {"report_validation_passed": True},
+            "dropped_candidates": [],
+        }
+
+        with (
+            patch(
+                "report_workflow_service.validate_authoritative_report",
+                return_value=validation,
+            ) as validate_report,
+            patch.object(
+                runtime,
+                "postprocess_report_with_diagnostics",
+                return_value=postprocess_result,
+            ) as postprocess,
+        ):
+            outcome = runtime.run_report_lifecycle([candidate], [], 0)
+
+        validate_report.assert_called_once()
+        postprocess.assert_called_once()
+        self.assertIs(outcome.pre_postprocess_validation, validation)
+        self.assertFalse(outcome.retry_attempted)
+        self.assertTrue(outcome.delivery_eligible)
 
     def test_main_delivery_is_reached_only_after_shared_workflow_success(self):
         import main

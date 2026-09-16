@@ -135,7 +135,7 @@ class ServiceOpeningGateTests(unittest.TestCase):
         international = ddgs_search_service.DdgsSearchContext(
             selected_types=["營運政策"], active_regions=[], lookback_days=7,
             lookback_int=7, is_global_scope=True, today=FIXED_DATE,
-            ddgs_client_factory=None,
+            ddgs_client_factory=None, news_scope="international",
         )
         queries, _news_indices = ddgs_search_service.build_search_queries(context=international)
         service_queries = [

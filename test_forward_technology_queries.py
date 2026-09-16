@@ -16,6 +16,7 @@ class ForwardTechnologyQueryTests(unittest.TestCase):
             is_global_scope=True,
             today=datetime.date(2026, 8, 11),
             ddgs_client_factory=None,
+            news_scope="international",
         )
 
     def test_forward_family_is_separate_from_known_technology(self):

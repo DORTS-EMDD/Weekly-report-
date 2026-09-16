@@ -1258,9 +1258,7 @@ class WorkflowRuntime:
                 context=self.postprocess_context({}),
             )
             outcome.final_canonical_report = raw_report
-        if initial_validation.get("semantic_validation_blocked") and not retry_attempted:
-            final_validation = initial_validation
-        else:
+        if retry_attempted:
             final_validation = validate_authoritative_report(
                 raw_report,
                 selected_candidates,
@@ -1268,6 +1266,11 @@ class WorkflowRuntime:
                 semantic_judge=self.dependencies.call_semantic_judge,
                 semantic_validation_required=True,
             )
+        else:
+            # The report and authoritative evidence are unchanged, so the
+            # initial result is already the final validation result.  Reusing
+            # it keeps one semantic judgment per candidate/report input.
+            final_validation = initial_validation
         outcome.retry_attempted = retry_attempted
         outcome.pre_postprocess_validation = final_validation
         if not final_validation.get("report_validation_passed"):
