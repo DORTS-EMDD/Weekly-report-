@@ -137,6 +137,17 @@ def streamlit_markdown_to_pdf_bytes(
         splitLongWords=1,
     ))
     styles.add(ParagraphStyle(
+        name="ReportSourceBullet",
+        parent=styles["ReportBullet"],
+        fontName=cjk_font,
+        fontSize=9,
+        leading=11,
+        spaceBefore=0,
+        spaceAfter=0,
+        wordWrap="CJK",
+        splitLongWords=1,
+    ))
+    styles.add(ParagraphStyle(
         name="CompactReportTitle",
         parent=styles["Title"],
         fontName=cjk_font,
@@ -184,7 +195,12 @@ def streamlit_markdown_to_pdf_bytes(
             story.append(Paragraph(rich_text_renderer(line[4:], cjk_font, latin_font), styles["Heading3"]))
         elif line.startswith(("- ", "• ")):
             line = line_compactor(line)
-            story.append(Paragraph(rich_text_renderer(token_wrapper(line, 48), cjk_font, latin_font), styles["ReportBullet"]))
+            bullet_style = (
+                styles["ReportSourceBullet"]
+                if re.match(r"^(?:[•*-]\s*)?資料來源\s*[：:]", line)
+                else styles["ReportBullet"]
+            )
+            story.append(Paragraph(rich_text_renderer(token_wrapper(line, 48), cjk_font, latin_font), bullet_style))
         else:
             line = line_compactor(line)
             story.append(Paragraph(rich_text_renderer(token_wrapper(line, 56), cjk_font, latin_font), styles["BodyText"]))
