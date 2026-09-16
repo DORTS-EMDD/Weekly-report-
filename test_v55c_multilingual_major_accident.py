@@ -71,6 +71,27 @@ def _html(title: str, body: str) -> str:
 
 
 class V55CMajorAccidentTests(unittest.TestCase):
+    def test_japanese_overhead_line_break_and_long_suspension_is_technical_incident(self):
+        candidate = _candidate(
+            "東京メトロ東西線 架線断線で約8時間運転見合わせ",
+            "東京メトロ東西線で架線断線が発生し、約8時間運転見合わせ。",
+            country="日本",
+        )
+        api = _selector()
+        self.assertTrue(api["_passes_technical_operation_incident"](candidate))
+        payload = api["evaluate_category_gates"](candidate)
+        self.assertTrue(payload["technical_operation_incident"])
+        self.assertTrue(payload["category_gates"]["operational_policy"])
+
+    def test_german_multiple_serious_injuries_are_major_accident_severity(self):
+        candidate = _candidate(
+            "Schwerer Tram-Unfall: Drei Schwerverletzte nach Zusammenstoß",
+            "Schwerer Tram-Unfall in Berlin: Drei Schwerverletzte nach Zusammenstoß.",
+        )
+        api = _selector()
+        self.assertTrue(api["_passes_major_accident_gate"](candidate))
+        self.assertTrue(api["evaluate_category_gates"](candidate)["category_gates"]["major_accident"])
+
     def test_german_entgleisung_satisfies_severity_evidence(self):
         candidate = _candidate(
             "Tram-Unfall nach Entgleisung",

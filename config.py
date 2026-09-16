@@ -72,6 +72,8 @@ SERVICE_OPENING_ACTUAL_TERMS = [
     "inaugurated and opened to passengers",
     "正式通車", "正式啟用", "正式營運", "正式投入營運", "正式載客",
     "開始載客", "開始營運", "通車啟用", "投入載客服務",
+    "新路段啟用", "新路軌段啟用", "路段投入服務", "新路段投入服務",
+    "新路軌段投入服務", "路段正式啟用", "路段正式通車",
     "service launched", "launched passenger service", "began operation", "began operations",
     "entered operation", "entered service operation", "運行開始", "営業運転開始",
     "운행 개시", "영업 운전 개시", "正式運行開始",

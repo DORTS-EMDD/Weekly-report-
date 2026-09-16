@@ -89,7 +89,8 @@ ACCIDENT_SIGNAL_TERMS = [
     "通訊異常", "月臺門", "車門異常", "死亡", "受傷", "撞擊", "營運中斷",
     "月臺屏障", "設備損壞",
     "脱線", "脱軌", "衝突", "火災", "運休", "運転見合わせ", "障害",
-    "탈선", "충돌", "화재", "운행중단", "운행 중단", "장애", "부상",
+    "架線断線", "架線故障", "停電",
+    "탈선", "충돌", "화재", "운행중단", "운행 중단", "장애", "부상", "단전", "정전",
 ]
 
 SAFETY_INCIDENT_DETAIL_TERMS = [
@@ -98,7 +99,8 @@ SAFETY_INCIDENT_DETAIL_TERMS = [
     "damage", "platform barrier", "entgleist", "Verletzte", "Unfall",
     "Zusammenstoß", "死亡", "受傷", "撞擊", "出軌", "脫軌", "營運中斷",
     "停駛", "月臺屏障", "設備損壞",
-    "脱線", "運休", "運転見合わせ", "障害", "탈선", "충돌", "화재", "운행중단", "장애",
+    "脱線", "運休", "運転見合わせ", "障害", "架線断線", "架線故障", "停電",
+    "탈선", "충돌", "화재", "운행중단", "운행 중단", "단전", "정전", "장애",
 ]
 
 LOW_VALUE_OFFICIAL_NOTICE_TERMS = [
@@ -191,6 +193,7 @@ SYSTEM_DISRUPTION_TERMS = [
     "pipe broke", "pipe burst", "signals impacted", "signals affected", "signal impact",
     "control room affected", "control centre flooded", "control center flooded",
     "系統中斷", "控制室淹水", "號誌受影響", "信號受影響", "供電中斷", "通訊中斷",
+    "架線断線", "架線故障", "停電", "電力障害", "단전", "정전", "전력 중단",
 ]
 
 SYSTEM_DISRUPTION_IMPACT_TERMS = [
@@ -198,6 +201,8 @@ SYSTEM_DISRUPTION_IMPACT_TERMS = [
     "severe delays", "service suspension", "service suspended", "line disruption",
     "stations affected", "operations interrupted", "service disruption", "major disruption",
     "大幅延誤", "嚴重延誤", "停駛", "營運中斷", "路線中斷", "車站受影響",
+    "運転見合わせ", "運休", "運行停止", "運行中断", "운행중단", "운행 중단",
+    "운행 정지", "서비스 중단",
 ]
 
 URBAN_RAIL_INCIDENT_CONTEXT_TERMS = [
@@ -205,7 +210,7 @@ URBAN_RAIL_INCIDENT_CONTEXT_TERMS = [
     "urban rail", "funicular", "station", "platform", "train", "track", "railcar",
     "metro train", "subway train", "捷運", "地鐵", "都市軌道", "輕軌",
     "車站", "月臺", "月台", "列車", "軌道", "軌道車輛",
-    "駅", "地下鉄", "전철", "지하철", "도시철도",
+    "駅", "地下鉄", "u-bahn", "전철", "지하철", "도시철도",
 ]
 
 GENERAL_RAIL_EXCLUDE_TERMS = [
@@ -462,8 +467,8 @@ EQUIPMENT_FAILURE_TERMS = [
     "號誌故障", "號誌異常", "信號故障", "信號異常", "供電故障", "供電異常",
     "通訊故障", "通訊異常", "月臺門故障", "月台門故障", "車門故障",
     "轉轍器故障", "道岔故障", "票務系統故障", "自動收費故障", "設備故障",
-    "信号障害", "信号故障", "電力障害", "通信障害", "ホームドア故障",
-    "장애", "신호 장애", "신호 고장", "전력 장애", "통신 장애", "스크린도어 고장",
+    "信号障害", "信号故障", "電力障害", "通信障害", "ホームドア故障", "架線断線", "架線故障", "停電",
+    "장애", "신호 장애", "신호 고장", "전력 장애", "통신 장애", "스크린도어 고장", "단전", "정전", "전력 중단",
 ]
 
 ENVIRONMENTAL_OPERATION_ABNORMALITY_TERMS = [
@@ -936,9 +941,10 @@ MAJOR_ACCIDENT_SEVERITY_TERMS = [
     "死亡", "多人重傷", "多人受傷", "多人送醫", "重傷", "送醫", "出軌", "脫軌",
     "列車碰撞", "列車相撞", "重大火災", "大量疏散", "長時間停駛", "大範圍停駛",
     "正式調查", "事故調查", "安全調查", "制度檢討", "系統性故障", "反覆發生",
-    "entgleist", "entgleisung", "verletzte", "déraillement", "blessés",
+    "entgleist", "entgleisung", "verletzte", "schwer verletzt", "schwerverletzte", "schwerverletzter", "mehrere verletzte",
+    "déraillement", "blessés",
     "descarrilamiento", "heridos", "сход с рельсов", "пострадал",
-    "脱線", "負傷", "탈선", "부상", "脱轨", "受伤",
+    "脱線", "負傷", "負傷者", "重傷者", "탈선", "부상", "중상", "중상자", "複数人負傷", "脱轨", "受伤",
 ]
 
 MAJOR_ACCIDENT_DIRECT_TERMS = [
@@ -947,7 +953,7 @@ MAJOR_ACCIDENT_DIRECT_TERMS = [
     "mass evacuation", "死亡", "重傷", "多人受傷",
     "多人重傷", "出軌", "脫軌", "列車碰撞", "列車相撞", "重大火災", "大量疏散",
     "脱線", "脱軌", "列車衝突", "列車相撞", "火災", "避難",
-    "탈선", "충돌", "화재", "대피",
+    "schwerer unfall", "탈선", "충돌", "화재", "대피",
 ]
 
 POST_INCIDENT_POLICY_TERMS = [

@@ -187,6 +187,96 @@ class P2K3CategoryGoldenTests(unittest.TestCase):
         )
         self.assertTrue(candidate["category_gates"][SERVICE_OPENING_CATEGORY_KEY])
 
+    def test_multilingual_korean_power_interruption_is_technical_incident(self):
+        candidate = _evaluate(
+            _selector(),
+            _candidate(
+                "KO",
+                "서울 지하철 2호선 단전으로 운행 중단",
+                "서울 지하철 2호선 단전으로 약 30분간 운행이 중단됐다.",
+            ),
+        )
+        self.assertTrue(candidate["technical_operation_incident"])
+        self.assertTrue(candidate["category_gates"]["operational_policy"])
+
+    def test_multilingual_chinese_new_section_activation_is_service_opening(self):
+        candidate = _evaluate(
+            _selector(),
+            _candidate(
+                "ZH",
+                "港鐵東涌線新路軌段啟用",
+                "新路軌段啟用並正式投入旅客服務，服務大致暢順。",
+            ),
+        )
+        self.assertTrue(candidate["category_gates"][SERVICE_OPENING_CATEGORY_KEY])
+
+    def test_generic_power_outage_without_urban_rail_is_rejected(self):
+        candidate = _evaluate(
+            _selector(),
+            _candidate(
+                "NEG-POWER",
+                "Citywide power outage disrupts homes",
+                "A generic power outage affected residential customers across the city.",
+            ),
+        )
+        self.assertFalse(candidate["technical_operation_incident"])
+        self.assertFalse(candidate["category_gates"]["operational_policy"])
+
+    def test_planned_maintenance_is_not_technical_incident(self):
+        candidate = _evaluate(
+            _selector(),
+            _candidate(
+                "NEG-MAINT",
+                "Tokyo Metro scheduled maintenance causes overnight closure",
+                "Scheduled maintenance will suspend service overnight with no equipment failure or safety incident.",
+            ),
+        )
+        self.assertFalse(candidate["technical_operation_incident"])
+
+    def test_non_urban_rail_overhead_line_failure_is_rejected(self):
+        candidate = _evaluate(
+            _selector(),
+            _candidate(
+                "NEG-JR",
+                "JR東海道線 架線断線で運転見合わせ",
+                "JR東海道線で架線断線が発生し、運転見合わせとなった。",
+            ),
+        )
+        self.assertFalse(candidate["technical_operation_incident"])
+
+    def test_testing_only_new_section_is_not_service_opening(self):
+        candidate = _evaluate(
+            _selector(),
+            _candidate(
+                "NEG-TEST",
+                "Metro line testing before opening",
+                "The line is undergoing testing and trial operation before opening next year.",
+            ),
+        )
+        self.assertFalse(candidate["category_gates"][SERVICE_OPENING_CATEGORY_KEY])
+
+    def test_non_urban_rail_collision_is_not_major_accident(self):
+        candidate = _evaluate(
+            _selector(),
+            _candidate(
+                "NEG-COLLISION",
+                "Two cars collide, multiple injured",
+                "A road traffic collision injured several people.",
+            ),
+        )
+        self.assertFalse(candidate["category_gates"]["major_accident"])
+
+    def test_civil_only_project_is_not_service_opening(self):
+        candidate = _evaluate(
+            _selector(),
+            _candidate(
+                "NEG-CIVIL",
+                "Metro civil works complete",
+                "Civil construction of a metro tunnel is complete; no service opening occurred.",
+            ),
+        )
+        self.assertFalse(candidate["category_gates"][SERVICE_OPENING_CATEGORY_KEY])
+
     def test_o_future_opening_is_not_formal_opening(self):
         candidate = _evaluate(
             _selector(),
