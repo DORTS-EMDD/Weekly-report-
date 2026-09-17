@@ -29,7 +29,9 @@ ALLOWED_SEMANTIC_STATES = frozenset({"SUPPORTED", "SEMANTIC_FAIL"})
 
 SEMANTIC_VALIDATION_UNAVAILABLE = "SEMANTIC_VALIDATION_UNAVAILABLE"
 SEMANTIC_VALIDATION_INVALID_RESPONSE = "SEMANTIC_VALIDATION_INVALID_RESPONSE"
-
+ALLOWED_FACTUAL_SUMMARY_STATUSES = frozenset(
+    {"EVIDENCE_SUPPORTED", "INSUFFICIENT_EVIDENCE"}
+)
 
 class SemanticValidationInvalidResponse(ValueError):
     """Raised when a judge response cannot satisfy the V1 response contract."""
@@ -52,13 +54,19 @@ def build_semantic_validation_payload(
     *,
     title: str = "",
 ) -> dict:
-    """Build the immutable V1 judge payload without any evidence fallback."""
+    """Build the title-blind factual-support payload.
+
+    ``title`` remains a compatibility argument for callers that still pass the
+    report title, but it is intentionally not copied into the provider-facing
+    payload.  Title-copy and title-paraphrase exclusions are owned by the
+    local report validator before this function is called.
+    """
+    del title
     evidence = candidate.get("evidence")
     if not isinstance(evidence, dict):
         evidence = {}
     return {
         "candidate_id": _candidate_id(candidate),
-        "title": str(title or candidate.get("title") or ""),
         "event_summary": str(summary or ""),
         "evidence": {
             "feed_snippet": str(evidence.get("feed_snippet") or ""),
@@ -80,18 +88,18 @@ def build_semantic_validation_prompt(payload: dict) -> str:
     }
     request = {
         "candidate_id": payload.get("candidate_id", 0),
-        "title": payload.get("title", ""),
         "event_summary": payload.get("event_summary", ""),
         "evidence": factual_evidence,
     }
     return (
         "你是獨立的摘要事實支持判定器，不是報告撰寫器。只能判斷下列 "
         "authoritative evidence 是否支持摘要中的每一項 substantive factual claim。"
-        "不得搜尋、補充、改寫或使用標題以外的外部知識。請只回傳 JSON，不要 markdown。\n"
+        "不得搜尋、補充、改寫或使用輸入 evidence 以外的外部知識，也不得使用 source title。"
+        "請只回傳 JSON，不要 markdown。\n"
         "輸出 schema：{candidate_id, summary_status, semantic_state, failure_reason, "
         "claims:[{claim_text, support_status, evidence_mappings:[{evidence_field, evidence_quote}]}]}。"
-        "summary_status 只能是 TITLE_COPY、TITLE_PARAPHRASE、TITLE_ONLY、"
-        "EVIDENCE_SUPPORTED 或 INSUFFICIENT_EVIDENCE。"
+        "title-copy、title-paraphrase 與 title-only 已由 local validator 處理；"
+        "本 factual-support path 的 summary_status 只能是 EVIDENCE_SUPPORTED 或 INSUFFICIENT_EVIDENCE。"
         "support_status 只能是 SUPPORTED、UNSUPPORTED 或 UNCERTAIN；"
         "semantic_state 只能是 SUPPORTED 或 SEMANTIC_FAIL。"
         "每一 claim 必須有至少一個 mapping，mapping 欄位只能是 feed_snippet 或 article_excerpt，"
@@ -140,7 +148,7 @@ def ground_semantic_validation(response: dict, payload: dict) -> dict:
         raise SemanticValidationInvalidResponse("candidate_id mismatch")
     summary_status = str(response.get("summary_status") or "").strip().upper()
     semantic_state = str(response.get("semantic_state") or "").strip().upper()
-    if summary_status not in ALLOWED_SUMMARY_STATUSES:
+    if summary_status not in ALLOWED_FACTUAL_SUMMARY_STATUSES:
         raise SemanticValidationInvalidResponse("summary_status is invalid")
     if semantic_state not in ALLOWED_SEMANTIC_STATES:
         raise SemanticValidationInvalidResponse("semantic_state is invalid")

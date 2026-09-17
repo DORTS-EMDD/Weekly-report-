@@ -84,13 +84,29 @@ class RC3DSemanticValidationTests(unittest.TestCase):
     def test_payload_preserves_layered_evidence_and_never_uses_legacy_snippet(self):
         item = candidate()
         item["snippet"] = "legacy merged fallback must not be read"
+        item["title"] = "UNIQUE_SOURCE_TITLE_SENTINEL"
         payload = build_semantic_validation_payload(
             item,
             "The metro completed a signalling test.",
         )
         self.assertEqual(payload["evidence"]["feed_snippet"], FEED)
         self.assertEqual(payload["evidence"]["article_excerpt"], ARTICLE)
+        self.assertNotIn("title", payload)
+        self.assertNotIn("UNIQUE_SOURCE_TITLE_SENTINEL", json.dumps(payload))
         self.assertNotIn("legacy merged fallback must not be read", json.dumps(payload))
+
+    def test_factual_provider_prompt_is_title_blind_but_keeps_summary_and_evidence(self):
+        item = candidate(title="UNIQUE_SOURCE_TITLE_SENTINEL")
+        payload = build_semantic_validation_payload(
+            item,
+            "The metro completed a signalling test.",
+            title=item["title"],
+        )
+        prompt = build_semantic_validation_prompt(payload)
+        self.assertNotIn("UNIQUE_SOURCE_TITLE_SENTINEL", prompt)
+        self.assertIn("The metro completed a signalling test.", prompt)
+        self.assertIn(FEED, prompt)
+        self.assertIn('"candidate_id": 1', prompt)
 
     def test_grounding_requires_contiguous_quote_and_allowed_field(self):
         item = candidate()
@@ -154,14 +170,10 @@ class RC3DSemanticValidationTests(unittest.TestCase):
             "The operator announced a signalling deployment.",
         )
         prompt = build_semantic_validation_prompt(payload)
-        for status in (
-            "TITLE_COPY",
-            "TITLE_PARAPHRASE",
-            "TITLE_ONLY",
-            "EVIDENCE_SUPPORTED",
-            "INSUFFICIENT_EVIDENCE",
-        ):
+        for status in ("EVIDENCE_SUPPORTED", "INSUFFICIENT_EVIDENCE"):
             self.assertIn(status, prompt)
+        self.assertIn("title-copy", prompt)
+        self.assertNotIn('"title":', prompt)
         self.assertIn("UNSUPPORTED 或 UNCERTAIN", prompt)
         self.assertIn("semantic_state 設為 SEMANTIC_FAIL", prompt)
 

@@ -244,6 +244,52 @@ class MaiAgentTimeoutTests(unittest.TestCase):
         self.assertNotIn("語意修正指示（僅限 UNSUPPORTED/UNCERTAIN claims）", prompt)
         self.assertNotIn("malformed provider response", prompt)
 
+    def test_retry_prompt_excludes_title_and_metadata_diagnostics(self):
+        prompt = maiagent_service.build_report_retry_prompt(
+            "original prompt",
+            "previous response",
+            {
+                "missing_ids": [],
+                "unknown_ids": [],
+                "duplicate_ids": [],
+                "multi_candidate_model_blocks": [],
+                "content_quality_issues": [
+                    {
+                        "candidate_id": 4,
+                        "code": "summary_title_copy",
+                        "detail": "UNIQUE_TITLE_DIAGNOSTIC_SENTINEL",
+                    },
+                    {
+                        "candidate_id": 5,
+                        "code": "source_metadata_mismatch",
+                        "expected": {
+                            "display_name": "UNIQUE_METADATA_SENTINEL",
+                            "display_url": "https://metadata.invalid",
+                        },
+                        "actual": "UNIQUE_METADATA_SENTINEL",
+                    },
+                    {
+                        "candidate_id": 6,
+                        "code": "unsupported_summary_claims",
+                        "detail": "factual issue prose is not copied",
+                    },
+                ],
+                "category_mismatches": [
+                    {
+                        "candidate_id": 7,
+                        "expected_category": "技術新知",
+                        "actual_category": "機電標案",
+                        "section_heading": "UNIQUE_METADATA_SENTINEL",
+                    }
+                ],
+                "semantic_validation_by_id": {},
+            },
+        )
+
+        self.assertNotIn("UNIQUE_TITLE_DIAGNOSTIC_SENTINEL", prompt)
+        self.assertNotIn("UNIQUE_METADATA_SENTINEL", prompt)
+        self.assertIn("unsupported_summary_claims", prompt)
+
     def test_retry_prompt_includes_uncertain_claims_but_not_supported_claims(self):
         prompt = maiagent_service.build_report_retry_prompt(
             "original prompt",

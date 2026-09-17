@@ -308,6 +308,72 @@ _SEMANTIC_RETRY_CORRECTION_ACTION = (
     "REMOVE_OR_REWRITE_FROM_SAME_CANDIDATE_AUTHORITATIVE_EVIDENCE_ONLY"
 )
 
+_NON_RETRYABLE_QUALITY_ISSUE_CODES = frozenset(
+    {
+        "summary_title_copy",
+        "summary_title_paraphrase",
+        "insufficient_summary_evidence",
+        "source_metadata_mismatch",
+        "unknown_country_in_formal_report",
+        "source_prefixed_summary",
+        "untranslated_common_english_phrase",
+    }
+)
+
+
+def _retry_quality_issue_codes(validation: dict) -> list[dict]:
+    """Project structural quality diagnostics without copying their prose.
+
+    Title-aware and metadata diagnostics remain available to acceptance/debug,
+    but they are not factual retry input.  A small code-only projection keeps
+    the existing report-completeness routing without creating a second
+    semantic feedback channel.
+    """
+    projected: list[dict] = []
+    issues = validation.get("content_quality_issues")
+    if not isinstance(issues, list):
+        return projected
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        code = str(issue.get("code") or "").strip()
+        if not code or code in _NON_RETRYABLE_QUALITY_ISSUE_CODES:
+            continue
+        item = {"code": code}
+        try:
+            candidate_id = int(issue.get("candidate_id"))
+        except (TypeError, ValueError):
+            candidate_id = 0
+        if candidate_id > 0:
+            item["candidate_id"] = candidate_id
+        projected.append(item)
+    return projected
+
+
+def _retry_category_mismatches(validation: dict) -> list[dict]:
+    """Keep only bounded category-routing fields; omit diagnostic prose."""
+    mismatches = validation.get("category_mismatches")
+    if not isinstance(mismatches, list):
+        return []
+    projected: list[dict] = []
+    for mismatch in mismatches:
+        if not isinstance(mismatch, dict):
+            continue
+        try:
+            candidate_id = int(mismatch.get("candidate_id"))
+        except (TypeError, ValueError):
+            continue
+        if candidate_id <= 0:
+            continue
+        projected.append(
+            {
+                "candidate_id": candidate_id,
+                "expected_category": str(mismatch.get("expected_category") or "").strip(),
+                "actual_category": str(mismatch.get("actual_category") or "").strip(),
+            }
+        )
+    return projected
+
 
 def _semantic_retry_corrections(validation: dict) -> list[dict]:
     """Project semantic failures into a small, candidate-scoped retry contract.
@@ -379,10 +445,10 @@ def build_report_retry_prompt(
     # appending it after the correction contract re-exposes invalid claims and
     # gives those claims the highest recency in the provider prompt.
     del previous_response
-    quality_issues = validation.get("content_quality_issues", [])
+    quality_issues = _retry_quality_issue_codes(validation)
     multi_candidate_blocks = validation.get("multi_candidate_model_blocks", [])
     duplicate_ids = validation.get("duplicate_ids", [])
-    category_mismatches = validation.get("category_mismatches", [])
+    category_mismatches = _retry_category_mismatches(validation)
     semantic_retry_corrections = _semantic_retry_corrections(validation)
     category_map = _retry_category_map(selected_candidates)
     category_map_text = json.dumps(category_map, ensure_ascii=False, sort_keys=True)
