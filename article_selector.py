@@ -1213,6 +1213,17 @@ def build_selector_api(**dependencies) -> dict[str, object]:
     create_requests_session = dependencies["create_requests_session"]
     _profile_timing_add = dependencies["_profile_timing_add"]
     news_scope = dependencies.get("news_scope", DEFAULT_NEWS_SCOPE)
+    formal_report_evidence_eligibility = dependencies.get(
+        "formal_report_evidence_eligibility"
+    )
+    formal_report_mode = dependencies.get(
+        "formal_report_mode",
+        callable(formal_report_evidence_eligibility),
+    )
+    if formal_report_mode and not callable(formal_report_evidence_eligibility):
+        raise ValueError(
+            "formal_report_mode requires formal_report_evidence_eligibility"
+        )
     if news_scope not in NEWS_SCOPE_OPTIONS:
         news_scope = DEFAULT_NEWS_SCOPE
 
@@ -1620,6 +1631,38 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         )
 
 
+    def _formal_evidence_rescue_candidate(candidate: dict) -> bool:
+        """Admit viable category-pass evidence deficits to the existing pool.
+
+        Formal evidence sufficiency remains owned by the workflow callback.
+        The selector only applies that result at the prefetch boundary and
+        reuses its own preliminary hard checks on a copy, with the current
+        evidence-quality rejection explicitly deferred until after fetch.
+        """
+        checker = formal_report_evidence_eligibility
+        if not formal_report_mode:
+            return False
+        if not callable(checker):
+            raise RuntimeError(
+                "formal prefetch requires formal_report_evidence_eligibility"
+            )
+        gates = candidate.get("category_gates") or {}
+        if (
+            candidate.get("primary_category") in {None, "", "excluded"}
+            or not any(gates.values())
+        ):
+            return False
+        evidence_eligible, _ = checker(candidate)
+        if evidence_eligible:
+            return False
+        probe = dict(candidate)
+        keep, _ = preliminary_filter_candidate(
+            probe,
+            allow_formal_evidence_insufficient=True,
+        )
+        return bool(keep)
+
+
     def _candidate_prefetch_signal(candidate: dict) -> bool:
         if candidate.get("source_tier") not in {"A_official", "B_professional", "C_media"}:
             return False
@@ -1636,6 +1679,8 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             # not let the weekly/monthly high-priority heuristics bypass
             # annual coverage ownership.
             return _is_annual_quality_rescue_candidate(candidate)
+        if _formal_evidence_rescue_candidate(candidate):
+            return True
         if _is_high_priority_rescue_candidate(candidate) or _is_procurement_rescue_candidate(candidate):
             return True
         source = candidate.get("source", "")
@@ -1948,6 +1993,10 @@ def build_selector_api(**dependencies) -> dict[str, object]:
 
 
     def prefetch_candidates_before_filter(candidates: list[dict]) -> dict:
+        if formal_report_mode and not callable(formal_report_evidence_eligibility):
+            raise RuntimeError(
+                "formal prefetch requires formal_report_evidence_eligibility"
+            )
         limit = _prefetch_limit_for_period(lookback_days)
         forward_budget = _forward_enrichment_budget_for_period(lookback_days)
         general_budget = _general_rescue_budget_for_period(lookback_days)
@@ -2238,7 +2287,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
         return stats
 
 
-    def preliminary_filter_candidate(candidate: dict) -> tuple[bool, str]:
+    def preliminary_filter_candidate(
+        candidate: dict,
+        *,
+        allow_formal_evidence_insufficient: bool = False,
+    ) -> tuple[bool, str]:
         url = candidate.get("url", "")
         source_href = candidate.get("source_href", "")
         source = candidate.get("source", "")
@@ -2340,7 +2393,11 @@ def build_selector_api(**dependencies) -> dict[str, object]:
             return _reject("旅遊/SEO/內容農場")
 
         information_issue = _information_quality_issue(candidate)
-        if information_issue:
+        defer_repairable_insufficiency = (
+            allow_formal_evidence_insufficient
+            and information_issue == "摘要資訊不足"
+        )
+        if information_issue and not defer_repairable_insufficiency:
             return _reject(information_issue)
         if _is_low_value_long_term_candidate(candidate):
             return _reject("長期回顧低價值或錯分類候選")

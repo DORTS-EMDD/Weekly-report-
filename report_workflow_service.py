@@ -432,6 +432,8 @@ class WorkflowRuntime:
             is_global_scope=config.is_global_scope,
             today=config.today,
             news_scope=config.news_scope,
+            formal_report_evidence_eligibility=_formal_report_evidence_eligibility,
+            formal_report_mode=True,
             _search_family_from_query=self._search_family_from_query,
             _search_language_from_query=self._search_language_from_query,
             create_requests_session=dependencies.http_session_factory,
